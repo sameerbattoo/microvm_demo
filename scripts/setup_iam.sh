@@ -58,4 +58,4 @@ aws iam put-role-policy \
 
 echo ""
 echo "✅ Setup complete. Wait ~10 seconds for IAM propagation, then run:"
-echo "   bash scripts/build_image.sh"
+echo "   bash scripts/build_all_images.sh"

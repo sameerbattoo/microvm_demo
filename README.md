@@ -274,12 +274,9 @@ Subsequent runs skip the build and launch in seconds.
 ├── scripts/
 │   ├── config.sh             # AWS config (region, image sizes, roles)
 │   ├── setup_iam.sh          # Create IAM roles + S3 bucket
-│   ├── build_image.sh        # Package and create a single MicroVM image
 │   ├── build_all_images.sh   # Build all size-tier images (2/4/8 GB)
 │   ├── setup_sample_data.sh  # Provision DynamoDB + S3 sample data
-│   ├── run_microvm.sh        # Launch a single MicroVM (CLI)
-│   ├── trigger.sh            # CLI-based code execution
-│   └── teardown.sh           # Terminate MicroVM
+│   └── teardown.sh           # Terminate all MicroVMs + delete images
 ├── iam/                 # IAM trust and permission policies
 ├── Dockerfile           # MicroVM image (al2023-minimal, Python 3.11, pre-baked packages)
 ├── requirements.txt     # Python deps: server + data science + file format support
