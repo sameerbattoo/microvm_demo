@@ -1,0 +1,22 @@
+# Sandbox server
+fastapi==0.115.12
+uvicorn==0.34.2
+
+# Pre-baked data science packages (available immediately on launch)
+pandas
+numpy
+polars
+matplotlib
+requests
+psutil
+
+# File format support
+openpyxl        # Excel (.xlsx) read/write
+xlrd            # Legacy Excel (.xls) read
+pyarrow         # Parquet read/write
+
+# Statistical analysis
+scipy
+
+# AWS SDK (for DynamoDB, S3 access from within the MicroVM)
+boto3

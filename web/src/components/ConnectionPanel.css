@@ -1,0 +1,352 @@
+.connection-panel {
+  padding: 16px;
+  background: #181825;
+  border-bottom: 1px solid #313244;
+}
+
+.connection-card {
+  max-width: 600px;
+  margin: 0 auto;
+  background: #1e1e2e;
+  border: 1px solid #313244;
+  border-radius: 10px;
+  padding: 20px;
+}
+
+.connection-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: #cdd6f4;
+  margin-bottom: 4px;
+}
+
+.connection-desc {
+  font-size: 12px;
+  color: #6c7086;
+  margin-bottom: 16px;
+}
+
+.connection-modes {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.mode-btn {
+  flex: 1;
+  padding: 8px 16px;
+  border: 1px solid #313244;
+  border-radius: 6px;
+  background: #11111b;
+  color: #6c7086;
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.mode-btn:hover {
+  border-color: #45475a;
+  color: #cdd6f4;
+}
+
+.mode-btn-active {
+  border-color: #89b4fa;
+  color: #cdd6f4;
+  background: rgba(137, 180, 250, 0.1);
+}
+
+.connection-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.connection-error {
+  margin-top: 12px;
+  padding: 10px 12px;
+  background: rgba(243, 139, 168, 0.05);
+  border: 1px solid rgba(243, 139, 168, 0.3);
+  border-radius: 6px;
+  font-size: 12px;
+  color: #f38ba8;
+}
+
+.connection-launching {
+  margin-top: 8px;
+  padding: 10px 12px;
+  background: rgba(137, 180, 250, 0.05);
+  border: 1px solid rgba(137, 180, 250, 0.2);
+  border-radius: 6px;
+  font-size: 12px;
+  color: #89b4fa;
+  animation: pulse 1.5s infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
+}
+
+.connection-id {
+  font-family: monospace;
+  font-size: 11px;
+  color: #585b70;
+}
+
+.form-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.form-label {
+  font-size: 12px;
+  font-weight: 500;
+  color: #a6adc8;
+}
+
+.form-input {
+  background: #11111b;
+  border: 1px solid #313244;
+  border-radius: 6px;
+  padding: 8px 12px;
+  color: #cdd6f4;
+  font-size: 13px;
+  font-family: monospace;
+  outline: none;
+  transition: border-color 0.15s;
+}
+
+.form-input:focus {
+  border-color: #89b4fa;
+}
+
+.form-input::placeholder {
+  color: #45475a;
+}
+
+.form-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 4px;
+  justify-content: flex-end;
+}
+
+.connect-btn {
+  background: #89b4fa;
+  color: #1e1e2e;
+  border: none;
+  padding: 8px 20px;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.connect-btn:hover {
+  background: #b4d0fb;
+}
+
+.connect-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.dismiss-btn {
+  background: none;
+  border: none;
+  color: #6c7086;
+  padding: 8px 12px;
+  border-radius: 6px;
+  font-size: 13px;
+  cursor: pointer;
+  margin-left: auto;
+}
+
+.dismiss-btn:hover {
+  color: #cdd6f4;
+}
+
+.connection-info {
+  margin-top: 12px;
+  padding: 10px 12px;
+  background: rgba(166, 227, 161, 0.05);
+  border: 1px solid rgba(166, 227, 161, 0.2);
+  border-radius: 6px;
+  font-size: 12px;
+  color: #a6e3a1;
+}
+
+.connection-hint {
+  margin-top: 12px;
+  padding: 10px 12px;
+  background: rgba(137, 180, 250, 0.05);
+  border: 1px solid rgba(137, 180, 250, 0.15);
+  border-radius: 6px;
+  font-size: 12px;
+  color: #89b4fa;
+  line-height: 1.5;
+}
+
+.available-instances {
+  margin-top: 12px;
+  border: 1px solid #313244;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.available-title {
+  font-size: 12px;
+  font-weight: 500;
+  color: #a6adc8;
+  padding: 8px 12px;
+  background: #11111b;
+  border-bottom: 1px solid #313244;
+}
+
+.available-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  border-bottom: 1px solid #313244;
+}
+
+.available-row:last-child {
+  border-bottom: none;
+}
+
+.available-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.available-id {
+  font-family: monospace;
+  font-size: 11px;
+  color: #a6adc8;
+  word-break: break-all;
+}
+
+.available-name {
+  font-size: 11px;
+  color: #585b70;
+}
+
+.available-attach-btn {
+  background: rgba(137, 180, 250, 0.1);
+  border: 1px solid #89b4fa;
+  color: #89b4fa;
+  padding: 4px 12px;
+  border-radius: 5px;
+  font-size: 11px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.available-attach-btn:hover {
+  background: rgba(137, 180, 250, 0.2);
+}
+
+.available-empty {
+  margin-top: 8px;
+  font-size: 12px;
+  color: #585b70;
+  font-style: italic;
+}
+
+/* Launch Configuration */
+.launch-config {
+  margin: 12px 0;
+  background: #11111b;
+  border: 1px solid #313244;
+  border-radius: 8px;
+  padding: 14px;
+}
+
+.launch-config-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: #a6adc8;
+  margin-bottom: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.launch-config-specs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.launch-spec-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 10px;
+  background: rgba(49, 50, 68, 0.5);
+  border-radius: 6px;
+  border: 1px solid rgba(69, 71, 90, 0.3);
+}
+
+.launch-spec-editable {
+  border-color: rgba(137, 180, 250, 0.3);
+  background: rgba(137, 180, 250, 0.05);
+}
+
+.launch-spec-select {
+  background: #181825;
+  border: 1px solid #45475a;
+  border-radius: 4px;
+  color: #cdd6f4;
+  font-size: 13px;
+  font-weight: 500;
+  padding: 4px 6px;
+  outline: none;
+  cursor: pointer;
+  transition: border-color 0.15s;
+}
+
+.launch-spec-select:hover {
+  border-color: #89b4fa;
+}
+
+.launch-spec-select:focus {
+  border-color: #89b4fa;
+  box-shadow: 0 0 0 2px rgba(137, 180, 250, 0.15);
+}
+
+.launch-spec-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  color: #585b70;
+}
+
+.launch-spec-value {
+  font-size: 13px;
+  color: #cdd6f4;
+  font-weight: 500;
+}
+
+.launch-config-note {
+  margin-top: 10px;
+  font-size: 11px;
+  color: #6c7086;
+  line-height: 1.5;
+  padding-top: 10px;
+  border-top: 1px solid #313244;
+}
+
+.launch-config-note strong {
+  color: #89b4fa;
+}
+
+.connection-detecting {
+  font-size: 12px;
+  color: #6c7086;
+  padding: 8px 0;
+}

@@ -1,0 +1,228 @@
+.cell {
+  display: flex;
+  gap: 0;
+  margin-bottom: 8px;
+  border: 1px solid #313244;
+  border-radius: 8px;
+  overflow: hidden;
+  transition: border-color 0.2s;
+}
+
+.cell:focus-within {
+  border-color: #89b4fa;
+}
+
+.cell-running {
+  border-color: #f9e2af;
+}
+
+.cell-success {
+  border-left: 3px solid #a6e3a1;
+}
+
+.cell-error {
+  border-left: 3px solid #f38ba8;
+}
+
+.cell-gutter {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 10px 8px;
+  background: #11111b;
+  min-width: 52px;
+  gap: 6px;
+}
+
+.cell-number {
+  font-family: monospace;
+  font-size: 11px;
+  color: #585b70;
+  white-space: nowrap;
+}
+
+.cell-spinner {
+  width: 12px;
+  height: 12px;
+  border: 2px solid #45475a;
+  border-top-color: #f9e2af;
+  border-radius: 50%;
+  animation: spin 0.6s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.cell-content {
+  flex: 1;
+  min-width: 0;
+}
+
+.cell-input {
+  display: flex;
+  align-items: flex-start;
+}
+
+.cell-editor {
+  flex: 1;
+  background: #1e1e2e;
+  color: #cdd6f4;
+  border: none;
+  padding: 12px;
+  font-family: 'JetBrains Mono', 'Fira Code', 'SF Mono', Consolas, monospace;
+  font-size: 13px;
+  line-height: 1.5;
+  resize: none;
+  outline: none;
+  min-height: 38px;
+  overflow: hidden;
+}
+
+.cell-editor::placeholder {
+  color: #45475a;
+}
+
+.cell-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.cell:hover .cell-actions,
+.cell:focus-within .cell-actions {
+  opacity: 1;
+}
+
+.cell-run-btn {
+  background: #89b4fa;
+  color: #1e1e2e;
+  border: none;
+  width: 26px;
+  height: 26px;
+  border-radius: 5px;
+  cursor: pointer;
+  font-size: 11px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.cell-run-btn:hover:not(:disabled) {
+  background: #b4d0fb;
+}
+
+.cell-run-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.cell-action-btn {
+  background: none;
+  border: none;
+  color: #6c7086;
+  width: 26px;
+  height: 26px;
+  border-radius: 5px;
+  cursor: pointer;
+  font-size: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.cell-action-btn:hover {
+  background: #313244;
+  color: #cdd6f4;
+}
+
+.cell-delete-btn:hover {
+  color: #f38ba8;
+}
+
+.cell-output {
+  border-top: 1px solid #313244;
+  padding: 10px 12px;
+  background: #11111b;
+}
+
+.cell-output-error {
+  background: rgba(243, 139, 168, 0.05);
+}
+
+.output-text {
+  font-family: 'JetBrains Mono', 'Fira Code', 'SF Mono', Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  color: #a6adc8;
+  white-space: pre-wrap;
+  word-break: break-word;
+  margin: 0;
+}
+
+.output-error {
+  font-family: 'JetBrains Mono', 'Fira Code', 'SF Mono', Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  color: #f38ba8;
+  white-space: pre-wrap;
+  word-break: break-word;
+  margin: 0;
+}
+
+.output-meta {
+  margin-top: 6px;
+  font-size: 11px;
+  color: #585b70;
+}
+
+/* Rich output: images */
+.output-image {
+  margin-bottom: 8px;
+}
+
+.output-image img {
+  max-width: 100%;
+  border-radius: 4px;
+}
+
+/* Rich output: HTML tables (DataFrames) */
+.output-html {
+  overflow-x: auto;
+  margin-bottom: 8px;
+}
+
+.output-html table {
+  border-collapse: collapse;
+  font-family: 'JetBrains Mono', 'SF Mono', monospace;
+  font-size: 11px;
+  width: auto;
+}
+
+.output-html th {
+  background: #181825;
+  color: #89b4fa;
+  font-weight: 600;
+  padding: 6px 10px;
+  border: 1px solid #313244;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.output-html td {
+  padding: 4px 10px;
+  border: 1px solid #313244;
+  color: #a6adc8;
+  white-space: nowrap;
+}
+
+.output-html tr:nth-child(even) td {
+  background: rgba(17, 17, 27, 0.5);
+}
+
+.output-html tr:hover td {
+  background: rgba(137, 180, 250, 0.05);
+}

@@ -1,0 +1,466 @@
+import { useState, useCallback, useEffect } from 'react'
+import Notebook from './components/Notebook'
+import Sidebar from './components/Sidebar'
+import InstancesPanel from './components/InstancesPanel'
+import { ConfirmModal, InputModal } from './components/Modal'
+import './App.css'
+
+const PROXY_URL = 'http://localhost:8081'
+
+let nextTabId = parseInt(localStorage.getItem('microvm-next-tab-id') || '1')
+
+function createTab(name, description) {
+  const id = nextTabId++
+  localStorage.setItem('microvm-next-tab-id', String(nextTabId))
+  return {
+    id,
+    name: name || `Notebook ${id}`,
+    description: description || '',
+    microvmEndpoint: null,
+    microvmRealEndpoint: null,
+    microvmId: null,
+    status: 'disconnected',
+    mode: null,
+  }
+}
+
+export default function App() {
+  const [tabs, setTabs] = useState(() => {
+    try {
+      const saved = localStorage.getItem('microvm-notebooks')
+      if (saved) {
+        const parsed = JSON.parse(saved)
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          // Reset transient state — connection needs to be re-established
+          return parsed.map(t => ({ ...t, status: 'disconnected' }))
+        }
+      }
+    } catch {}
+    return []
+  })
+  const [activeTabId, setActiveTabId] = useState(() => {
+    try {
+      const saved = localStorage.getItem('microvm-active-tab')
+      return saved ? JSON.parse(saved) : null
+    } catch {}
+    return null
+  })
+  const [instances, setInstances] = useState({})
+  const [uploadedFiles, setUploadedFiles] = useState([])
+
+  // Persist tabs to localStorage
+  useEffect(() => {
+    localStorage.setItem('microvm-notebooks', JSON.stringify(tabs))
+  }, [tabs])
+
+  useEffect(() => {
+    localStorage.setItem('microvm-active-tab', JSON.stringify(activeTabId))
+  }, [activeTabId])
+
+  // Modal state
+  const [modal, setModal] = useState(null)
+  const [showInstances, setShowInstances] = useState(false)
+  const [newNotebookName, setNewNotebookName] = useState('')
+  const [newNotebookDesc, setNewNotebookDesc] = useState('')
+
+  // Fetch instances periodically
+  const fetchInstances = useCallback(async () => {
+    try {
+      const resp = await fetch(`${PROXY_URL}/instances`)
+      if (resp.ok) {
+        const data = await resp.json()
+        setInstances(data.instances || {})
+      }
+    } catch {
+      // Proxy not available
+    }
+  }, [])
+
+  // Fetch files from the active MicroVM
+  const fetchFiles = useCallback(async () => {
+    const activeTab = tabs.find(t => t.id === activeTabId)
+    if (!activeTab || activeTab.status !== 'connected') {
+      setUploadedFiles([])
+      return
+    }
+
+    const headers = {}
+    if (activeTab.microvmId) {
+      headers['X-MicroVM-Id'] = activeTab.microvmId
+      if (activeTab.microvmRealEndpoint) {
+        headers['X-MicroVM-Endpoint'] = activeTab.microvmRealEndpoint
+      }
+    }
+
+    try {
+      const resp = await fetch(`${activeTab.microvmEndpoint}/files`, { headers })
+      if (resp.ok) {
+        const data = await resp.json()
+        setUploadedFiles((data.files || []).map(f => ({
+          name: f.name,
+          size: f.size,
+          variable: f.name.replace(/\.[^.]+$/, '').replace(/[-\s.]/g, '_'),
+          status: 'ready',
+        })))
+      }
+    } catch {
+      // Ignore — might not be connected yet
+    }
+  }, [tabs, activeTabId])
+
+  useEffect(() => {
+    fetchInstances()
+    const interval = setInterval(fetchInstances, 15000) // Refresh every 15s
+    return () => clearInterval(interval)
+  }, [fetchInstances])
+
+  // Refresh files when active tab changes or connects
+  useEffect(() => {
+    fetchFiles()
+  }, [activeTabId, tabs.find(t => t.id === activeTabId)?.status])
+
+  const addTab = useCallback(() => {
+    setNewNotebookName(`Notebook ${nextTabId}`)
+    setNewNotebookDesc('')
+    setModal({ type: 'newNotebook' })
+  }, [])
+
+  const confirmNewNotebook = useCallback(() => {
+    const tab = createTab(newNotebookName || undefined, newNotebookDesc)
+    setTabs(prev => [...prev, tab])
+    setActiveTabId(tab.id)
+    setModal(null)
+  }, [newNotebookName, newNotebookDesc])
+
+  const closeTab = useCallback((tabId) => {
+    const closingTab = tabs.find(t => t.id === tabId)
+    if (!closingTab) return
+    // Show confirm modal with save option
+    setModal({ type: 'closeNotebook', tabId, tabName: closingTab.name })
+  }, [tabs])
+
+  const confirmCloseTab = useCallback((tabId, shouldSave) => {
+    if (shouldSave) {
+      // Trigger save on the notebook before closing (save handled by Notebook component via ref — simplified: just close)
+      // For simplicity, we dispatch a custom event
+      window.dispatchEvent(new CustomEvent('save-notebook', { detail: { tabId } }))
+    }
+
+    const closingTab = tabs.find(t => t.id === tabId)
+    if (closingTab?.microvmId && closingTab.mode === 'microvm') {
+      fetch(`${PROXY_URL}/terminate/${closingTab.microvmId}`, { method: 'POST' }).catch(() => {})
+    }
+
+    setTabs(prev => {
+      const remaining = prev.filter(t => t.id !== tabId)
+      return remaining
+    })
+    setActiveTabId(prev => {
+      if (prev === tabId) {
+        const remaining = tabs.filter(t => t.id !== tabId)
+        return remaining.length > 0 ? remaining[0].id : null
+      }
+      return prev
+    })
+    setModal(null)
+  }, [tabs])
+
+  const updateTab = useCallback((tabId, updates) => {
+    setTabs(prev => prev.map(t => t.id === tabId ? { ...t, ...updates } : t))
+  }, [])
+
+  const renameTab = useCallback((tabId, newName) => {
+    setTabs(prev => prev.map(t => t.id === tabId ? { ...t, name: newName } : t))
+  }, [])
+
+  const attachInstance = useCallback((microvmId, endpoint) => {
+    const tab = createTab(`VM-${microvmId.replace('microvm-', '').slice(0, 8)}`)
+    tab.microvmId = microvmId
+    tab.microvmEndpoint = `${PROXY_URL}/proxy`
+    tab.microvmRealEndpoint = endpoint
+    tab.status = 'connected'
+    tab.mode = 'microvm'
+    setTabs(prev => [...prev, tab])
+    setActiveTabId(tab.id)
+  }, [])
+
+  const resumeInstance = useCallback(async (microvmId) => {
+    try {
+      await fetch(`${PROXY_URL}/resume/${microvmId}`, { method: 'POST' })
+      fetchInstances()
+    } catch {}
+  }, [fetchInstances])
+
+  const terminateInstance = useCallback(async (microvmId) => {
+    // Check if attached to a notebook
+    const attachedTab = tabs.find(t => t.microvmId === microvmId)
+    if (attachedTab) {
+      setModal({
+        type: 'cannotTerminate',
+        microvmId,
+        notebookName: attachedTab.name,
+      })
+      return
+    }
+    setModal({ type: 'terminateInstance', microvmId })
+  }, [tabs])
+
+  const confirmTerminateInstance = useCallback(async (microvmId) => {
+    setModal(null)
+    try {
+      await fetch(`${PROXY_URL}/terminate/${microvmId}`, { method: 'POST' })
+      fetchInstances()
+    } catch {}
+  }, [fetchInstances])
+
+  const uploadFile = useCallback(async (file) => {
+    // Find the active tab's connection to upload to
+    const activeTab = tabs.find(t => t.id === activeTabId)
+    if (!activeTab || activeTab.status !== 'connected') {
+      alert('Connect to a MicroVM first before uploading files.')
+      return
+    }
+
+    const size = file.size < 1024 * 1024
+      ? `${(file.size / 1024).toFixed(1)} KB`
+      : `${(file.size / (1024 * 1024)).toFixed(1)} MB`
+
+    // Add to list immediately (uploading state)
+    setUploadedFiles(prev => [...prev, { name: file.name, size, variable: null, status: 'uploading' }])
+
+    // Read as base64
+    const reader = new FileReader()
+    reader.onload = async (ev) => {
+      const base64 = ev.target.result.split(',')[1]
+
+      const headers = { 'Content-Type': 'application/json' }
+      if (activeTab.microvmId) {
+        headers['X-MicroVM-Id'] = activeTab.microvmId
+        if (activeTab.microvmRealEndpoint) {
+          headers['X-MicroVM-Endpoint'] = activeTab.microvmRealEndpoint
+        }
+      }
+
+      try {
+        const response = await fetch(`${activeTab.microvmEndpoint}/upload`, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({ filename: file.name, data: base64 }),
+        })
+        const result = await response.json()
+
+        setUploadedFiles(prev => prev.map(f =>
+          f.name === file.name
+            ? { ...f, variable: result.variable_name || null, status: result.success ? 'ready' : 'error' }
+            : f
+        ))
+      } catch {
+        setUploadedFiles(prev => prev.map(f =>
+          f.name === file.name ? { ...f, status: 'error', variable: 'failed' } : f
+        ))
+      }
+    }
+    reader.readAsDataURL(file)
+  }, [tabs, activeTabId])
+
+  const deleteFile = useCallback((filename) => {
+    setUploadedFiles(prev => prev.filter(f => f.name !== filename))
+  }, [])
+
+  const uploadSampleData = useCallback(async (filename) => {
+    const activeTab = tabs.find(t => t.id === activeTabId)
+    if (!activeTab || activeTab.status !== 'connected') {
+      alert('Connect to a sandbox first before loading data files.')
+      return
+    }
+
+    // Fetch the sample file from public/samples/data/
+    try {
+      const resp = await fetch(`/samples/data/${filename}`)
+      const text = await resp.text()
+      const base64 = btoa(text)
+
+      const size = text.length < 1024 * 1024
+        ? `${(text.length / 1024).toFixed(1)} KB`
+        : `${(text.length / (1024 * 1024)).toFixed(1)} MB`
+
+      setUploadedFiles(prev => [...prev, { name: filename, size, variable: null, status: 'uploading' }])
+
+      const headers = { 'Content-Type': 'application/json' }
+      if (activeTab.microvmId) {
+        headers['X-MicroVM-Id'] = activeTab.microvmId
+        if (activeTab.microvmRealEndpoint) {
+          headers['X-MicroVM-Endpoint'] = activeTab.microvmRealEndpoint
+        }
+      }
+
+      const uploadResp = await fetch(`${activeTab.microvmEndpoint}/upload`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ filename, data: base64 }),
+      })
+      const result = await uploadResp.json()
+
+      setUploadedFiles(prev => prev.map(f =>
+        f.name === filename
+          ? { ...f, variable: result.variable_name || null, status: result.success ? 'ready' : 'error' }
+          : f
+      ))
+    } catch (err) {
+      setUploadedFiles(prev => prev.map(f =>
+        f.name === filename ? { ...f, status: 'error', variable: 'failed' } : f
+      ))
+    }
+  }, [tabs, activeTabId])
+
+  const loadSample = useCallback(async (sampleUrl, sampleName) => {
+    try {
+      const resp = await fetch(sampleUrl)
+      const notebook = await resp.json()
+
+      const tab = createTab(sampleName || notebook.name, notebook.description || '')
+      tab._loadedCells = notebook.cells
+      setTabs(prev => [...prev, { ...tab }])
+      setActiveTabId(tab.id)
+    } catch (err) {
+      alert(`Failed to load sample: ${err.message}`)
+    }
+  }, [])
+
+  const attachedIds = tabs.filter(t => t.microvmId).map(t => t.microvmId)
+
+  return (
+    <div className="app">
+      <header className="app-header">
+        <div className="app-brand">
+          <span className="brand-icon">⚡</span>
+          <span className="brand-text">MicroVM Notebook</span>
+          <span className="brand-sub">Lambda MicroVMs</span>
+        </div>
+      </header>
+      <div className="app-body">
+        <Sidebar
+          tabs={tabs}
+          activeTabId={activeTabId}
+          instances={instances}
+          attachedIds={attachedIds}
+          uploadedFiles={uploadedFiles}
+          onSelectTab={setActiveTabId}
+          onNewNotebook={addTab}
+          onCloseTab={closeTab}
+          onRenameTab={renameTab}
+          onAttachInstance={attachInstance}
+          onResumeInstance={resumeInstance}
+          onTerminateInstance={terminateInstance}
+          onRefreshInstances={fetchInstances}
+          onUploadFile={uploadFile}
+          onDeleteFile={deleteFile}
+          onLoadSample={loadSample}
+          onUploadSampleData={uploadSampleData}
+          onShowInstances={() => setShowInstances(true)}
+        />
+        <main className="app-main">
+          {tabs.length === 0 && (
+            <div className="app-empty">
+              <div className="app-empty-text">No notebooks open</div>
+              <button className="app-empty-btn" onClick={addTab}>+ Create Notebook</button>
+            </div>
+          )}
+          {tabs.filter(tab => tab.id === activeTabId).map(tab => (
+            <Notebook
+              key={tab.id}
+              tab={tab}
+              onUpdateTab={(updates) => updateTab(tab.id, updates)}
+              attachedIds={attachedIds}
+            />
+          ))}
+        </main>
+      </div>
+
+      {/* Modals */}
+      {showInstances && (
+        <InstancesPanel
+          onClose={() => setShowInstances(false)}
+          onAttach={attachInstance}
+          attachedIds={attachedIds}
+          tabs={tabs}
+        />
+      )}
+
+      {modal?.type === 'newNotebook' && (
+        <InputModal
+          title="New Notebook"
+          onSubmit={confirmNewNotebook}
+          onCancel={() => setModal(null)}
+          submitLabel="Create"
+          fields={<>
+            <div className="modal-input-group">
+              <label className="modal-label">Name</label>
+              <input
+                className="modal-input"
+                value={newNotebookName}
+                onChange={(e) => setNewNotebookName(e.target.value)}
+                placeholder="My Notebook"
+                autoFocus
+              />
+            </div>
+            <div className="modal-input-group">
+              <label className="modal-label">Description (optional)</label>
+              <input
+                className="modal-input"
+                value={newNotebookDesc}
+                onChange={(e) => setNewNotebookDesc(e.target.value)}
+                placeholder="What this notebook is about..."
+              />
+              <div className="modal-input-hint">Shown below the toolbar when the notebook is open.</div>
+            </div>
+          </>}
+        />
+      )}
+
+      {modal?.type === 'closeNotebook' && (
+        <div className="modal-overlay" onClick={() => setModal(null)}>
+          <div className="modal-card" onClick={e => e.stopPropagation()}>
+            <div className="modal-title">Close "{modal.tabName}"?</div>
+            <div className="modal-body">
+              <p className="modal-message">Would you like to save this notebook before closing?</p>
+            </div>
+            <div className="modal-actions">
+              <button className="modal-btn modal-btn-cancel" onClick={() => setModal(null)}>Cancel</button>
+              <button className="modal-btn modal-btn-confirm" onClick={() => confirmCloseTab(modal.tabId, true)}>Save & Close</button>
+              <button className="modal-btn modal-btn-danger" onClick={() => confirmCloseTab(modal.tabId, false)}>Close without saving</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {modal?.type === 'terminateInstance' && (
+        <ConfirmModal
+          title="Terminate MicroVM?"
+          message={`This will destroy ${modal.microvmId.replace('microvm-', '').slice(0, 8)}... and all its in-memory state. This cannot be undone.`}
+          onCancel={() => setModal(null)}
+          onConfirm={() => confirmTerminateInstance(modal.microvmId)}
+          confirmLabel="Terminate"
+          confirmDanger
+        />
+      )}
+
+      {modal?.type === 'cannotTerminate' && (
+        <ConfirmModal
+          title="Cannot Terminate"
+          onCancel={() => setModal(null)}
+          onConfirm={() => setModal(null)}
+          confirmLabel="OK"
+          cancelLabel=""
+        >
+          <p className="modal-message">
+            This MicroVM is attached to notebook <strong>"{modal.notebookName}"</strong>.
+          </p>
+          <div className="modal-warning">
+            Close the notebook first to detach the MicroVM, then terminate it.
+          </div>
+        </ConfirmModal>
+      )}
+    </div>
+  )
+}

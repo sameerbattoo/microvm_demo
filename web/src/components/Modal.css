@@ -1,0 +1,144 @@
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 200;
+  animation: fadeIn 0.12s ease;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.modal-card {
+  background: #1e1e2e;
+  border: 1px solid #313244;
+  border-radius: 12px;
+  width: 90%;
+  max-width: 440px;
+  padding: 20px;
+  animation: scaleIn 0.15s ease;
+}
+
+@keyframes scaleIn {
+  from { transform: scale(0.95); opacity: 0; }
+  to { transform: scale(1); opacity: 1; }
+}
+
+.modal-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: #cdd6f4;
+  margin-bottom: 12px;
+}
+
+.modal-body {
+  font-size: 13px;
+  color: #a6adc8;
+  line-height: 1.5;
+}
+
+.modal-message {
+  margin: 0 0 12px;
+}
+
+.modal-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-top: 16px;
+}
+
+.modal-btn {
+  padding: 7px 16px;
+  border-radius: 6px;
+  font-size: 13px;
+  cursor: pointer;
+  border: 1px solid;
+  transition: all 0.12s;
+}
+
+.modal-btn-cancel {
+  background: #313244;
+  border-color: #45475a;
+  color: #a6adc8;
+}
+
+.modal-btn-cancel:hover {
+  background: #45475a;
+  color: #cdd6f4;
+}
+
+.modal-btn-confirm {
+  background: #89b4fa;
+  border-color: #89b4fa;
+  color: #1e1e2e;
+  font-weight: 500;
+}
+
+.modal-btn-confirm:hover {
+  background: #b4d0fb;
+}
+
+.modal-btn-danger {
+  background: #f38ba8;
+  border-color: #f38ba8;
+  color: #1e1e2e;
+  font-weight: 500;
+}
+
+.modal-btn-danger:hover {
+  background: #f5a3b8;
+}
+
+.modal-input-group {
+  margin-bottom: 12px;
+}
+
+.modal-label {
+  display: block;
+  font-size: 12px;
+  font-weight: 500;
+  color: #a6adc8;
+  margin-bottom: 4px;
+}
+
+.modal-input {
+  width: 100%;
+  background: #11111b;
+  border: 1px solid #313244;
+  border-radius: 6px;
+  padding: 8px 12px;
+  color: #cdd6f4;
+  font-size: 13px;
+  outline: none;
+  transition: border-color 0.15s;
+}
+
+.modal-input:focus {
+  border-color: #89b4fa;
+}
+
+.modal-input::placeholder {
+  color: #45475a;
+}
+
+.modal-input-hint {
+  font-size: 11px;
+  color: #45475a;
+  margin-top: 3px;
+}
+
+.modal-warning {
+  background: rgba(249, 226, 175, 0.08);
+  border: 1px solid rgba(249, 226, 175, 0.3);
+  border-radius: 6px;
+  padding: 10px;
+  font-size: 12px;
+  color: #f9e2af;
+  margin-top: 8px;
+}

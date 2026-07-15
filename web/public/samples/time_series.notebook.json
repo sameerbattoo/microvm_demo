@@ -1,0 +1,47 @@
+{
+  "name": "Time Series Forecasting",
+  "description": "Generate time series data, decompose trends and seasonality, and build a simple forecast.",
+  "savedAt": "2026-07-14T00:00:00.000Z",
+  "cells": [
+    {
+      "code": "import numpy as np\nimport pandas as pd\nimport matplotlib.pyplot as plt\n\n# Generate synthetic daily metrics (e.g., website traffic)\nnp.random.seed(77)\ndays = 365 * 2  # 2 years of daily data\ndates = pd.date_range('2024-01-01', periods=days, freq='D')\n\n# Components: trend + seasonality + noise\ntrend = np.linspace(1000, 2500, days)\nweekly_seasonal = 200 * np.sin(2 * np.pi * np.arange(days) / 7)\nyearly_seasonal = 400 * np.sin(2 * np.pi * np.arange(days) / 365)\nnoise = np.random.normal(0, 100, days)\n\ntraffic = trend + weekly_seasonal + yearly_seasonal + noise\ntraffic = np.maximum(traffic, 0)  # No negative traffic\n\nts = pd.DataFrame({'date': dates, 'visitors': traffic.astype(int)})\nts = ts.set_index('date')\n\nprint(f\"Time series: {len(ts)} days, from {ts.index[0].date()} to {ts.index[-1].date()}\")\nts.describe()",
+      "output": null,
+      "error": null,
+      "html": null,
+      "image": null,
+      "executionNumber": null
+    },
+    {
+      "code": "# Plot the full time series\nplt.figure(figsize=(12, 4))\nplt.plot(ts.index, ts['visitors'], linewidth=0.5, color='#89b4fa', alpha=0.7)\nplt.title('Daily Website Visitors (2 years)', color='white', fontsize=14)\nplt.xlabel('Date', color='#a6adc8')\nplt.ylabel('Visitors', color='#a6adc8')\nplt.tick_params(colors='#a6adc8')\nplt.grid(alpha=0.15)\nplt.tight_layout()\nplt.show()",
+      "output": null,
+      "error": null,
+      "html": null,
+      "image": null,
+      "executionNumber": null
+    },
+    {
+      "code": "# Rolling averages to see trend\nts['ma_7'] = ts['visitors'].rolling(7).mean()\nts['ma_30'] = ts['visitors'].rolling(30).mean()\n\nplt.figure(figsize=(12, 4))\nplt.plot(ts.index, ts['visitors'], alpha=0.3, color='#585b70', linewidth=0.5, label='Daily')\nplt.plot(ts.index, ts['ma_7'], color='#89b4fa', linewidth=1.5, label='7-day MA')\nplt.plot(ts.index, ts['ma_30'], color='#f9e2af', linewidth=2, label='30-day MA')\nplt.title('Trend Analysis with Moving Averages', color='white', fontsize=14)\nplt.legend()\nplt.tick_params(colors='#a6adc8')\nplt.grid(alpha=0.15)\nplt.tight_layout()\nplt.show()",
+      "output": null,
+      "error": null,
+      "html": null,
+      "image": null,
+      "executionNumber": null
+    },
+    {
+      "code": "# Monthly summary with year-over-year comparison\nts_monthly = ts['visitors'].resample('MS').agg(['mean', 'sum', 'std']).round(0)\nts_monthly.columns = ['avg_daily', 'total', 'std_dev']\nts_monthly['month'] = ts_monthly.index.month\nts_monthly['year'] = ts_monthly.index.year\nts_monthly",
+      "output": null,
+      "error": null,
+      "html": null,
+      "image": null,
+      "executionNumber": null
+    },
+    {
+      "code": "# Simple forecast: last 30-day average projected forward\nlast_30 = ts['visitors'].tail(30).mean()\ngrowth_rate = (ts['ma_30'].iloc[-1] - ts['ma_30'].iloc[-90]) / 90  # daily growth\n\nforecast_days = 90\nforecast_dates = pd.date_range(ts.index[-1] + pd.Timedelta(days=1), periods=forecast_days)\nforecast_values = [last_30 + growth_rate * i + 200 * np.sin(2 * np.pi * i / 7) for i in range(forecast_days)]\n\nplt.figure(figsize=(12, 4))\nplt.plot(ts.index[-90:], ts['visitors'].tail(90), color='#89b4fa', linewidth=1, label='Actual')\nplt.plot(forecast_dates, forecast_values, color='#a6e3a1', linewidth=2, linestyle='--', label='Forecast (90d)')\nplt.axvline(ts.index[-1], color='#f9e2af', linestyle=':', alpha=0.7, label='Forecast start')\nplt.fill_between(forecast_dates, \n                 [v - 150 for v in forecast_values],\n                 [v + 150 for v in forecast_values],\n                 alpha=0.1, color='#a6e3a1')\nplt.title('90-Day Traffic Forecast', color='white', fontsize=14)\nplt.legend()\nplt.tick_params(colors='#a6adc8')\nplt.grid(alpha=0.15)\nplt.tight_layout()\nplt.show()",
+      "output": null,
+      "error": null,
+      "html": null,
+      "image": null,
+      "executionNumber": null
+    }
+  ]
+}

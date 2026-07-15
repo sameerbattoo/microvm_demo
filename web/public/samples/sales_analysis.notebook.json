@@ -1,0 +1,47 @@
+{
+  "name": "Sales Data Analysis",
+  "description": "Generate sales data, explore trends, and visualize revenue by product and month.",
+  "savedAt": "2026-07-14T00:00:00.000Z",
+  "cells": [
+    {
+      "code": "import pandas as pd\nimport numpy as np\nimport matplotlib.pyplot as plt\n\n# Generate sample sales data\nnp.random.seed(42)\nmonths = pd.date_range('2025-01-01', periods=12, freq='MS')\nproducts = ['Laptop', 'Phone', 'Tablet', 'Headphones', 'Monitor']\n\nrows = []\nfor month in months:\n    for product in products:\n        qty = np.random.randint(50, 500)\n        price = {'Laptop': 999, 'Phone': 699, 'Tablet': 449, 'Headphones': 149, 'Monitor': 349}[product]\n        rows.append({'date': month, 'product': product, 'quantity': qty, 'unit_price': price, 'revenue': qty * price})\n\nsales = pd.DataFrame(rows)\nprint(f\"Generated {len(sales)} rows of sales data\")\nsales.head(10)",
+      "output": null,
+      "error": null,
+      "html": null,
+      "image": null,
+      "executionNumber": null
+    },
+    {
+      "code": "# Summary statistics\nsales.describe()",
+      "output": null,
+      "error": null,
+      "html": null,
+      "image": null,
+      "executionNumber": null
+    },
+    {
+      "code": "# Revenue by product\nrevenue_by_product = sales.groupby('product')['revenue'].sum().sort_values(ascending=False)\nrevenue_by_product",
+      "output": null,
+      "error": null,
+      "html": null,
+      "image": null,
+      "executionNumber": null
+    },
+    {
+      "code": "# Plot: Monthly revenue trend\nmonthly_revenue = sales.groupby('date')['revenue'].sum()\n\nplt.figure(figsize=(10, 5))\nplt.plot(monthly_revenue.index, monthly_revenue.values, marker='o', linewidth=2, color='#89b4fa')\nplt.fill_between(monthly_revenue.index, monthly_revenue.values, alpha=0.1, color='#89b4fa')\nplt.title('Monthly Revenue Trend', color='white', fontsize=14)\nplt.xlabel('Month', color='#a6adc8')\nplt.ylabel('Revenue ($)', color='#a6adc8')\nplt.xticks(rotation=45, color='#a6adc8')\nplt.yticks(color='#a6adc8')\nplt.grid(alpha=0.2)\nplt.tight_layout()\nplt.show()",
+      "output": null,
+      "error": null,
+      "html": null,
+      "image": null,
+      "executionNumber": null
+    },
+    {
+      "code": "# Plot: Revenue by product (bar chart)\nplt.figure(figsize=(8, 5))\ncolors = ['#89b4fa', '#a6e3a1', '#f9e2af', '#f38ba8', '#cba6f7']\nplt.bar(revenue_by_product.index, revenue_by_product.values, color=colors)\nplt.title('Total Revenue by Product', color='white', fontsize=14)\nplt.xlabel('Product', color='#a6adc8')\nplt.ylabel('Revenue ($)', color='#a6adc8')\nplt.xticks(color='#a6adc8')\nplt.yticks(color='#a6adc8')\nplt.grid(axis='y', alpha=0.2)\nplt.tight_layout()\nplt.show()",
+      "output": null,
+      "error": null,
+      "html": null,
+      "image": null,
+      "executionNumber": null
+    }
+  ]
+}

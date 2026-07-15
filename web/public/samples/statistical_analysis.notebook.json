@@ -1,0 +1,39 @@
+{
+  "name": "Statistical Analysis",
+  "description": "Generate distributions, compute statistics, run hypothesis tests, and visualize results.",
+  "savedAt": "2026-07-14T00:00:00.000Z",
+  "cells": [
+    {
+      "code": "import numpy as np\nimport pandas as pd\nimport matplotlib.pyplot as plt\n\n# Generate two sample populations\nnp.random.seed(123)\ngroup_a = np.random.normal(loc=100, scale=15, size=200)  # Control\ngroup_b = np.random.normal(loc=108, scale=15, size=200)  # Treatment\n\ndf = pd.DataFrame({\n    'group': ['Control'] * 200 + ['Treatment'] * 200,\n    'value': np.concatenate([group_a, group_b])\n})\nprint(f\"Dataset: {len(df)} observations, 2 groups\")\ndf.groupby('group')['value'].describe()",
+      "output": null,
+      "error": null,
+      "html": null,
+      "image": null,
+      "executionNumber": null
+    },
+    {
+      "code": "# Visualize distributions\nfig, axes = plt.subplots(1, 2, figsize=(12, 4))\n\naxes[0].hist(group_a, bins=25, alpha=0.7, color='#89b4fa', label='Control')\naxes[0].hist(group_b, bins=25, alpha=0.7, color='#a6e3a1', label='Treatment')\naxes[0].set_title('Distribution Comparison', color='white')\naxes[0].legend()\naxes[0].set_xlabel('Value', color='#a6adc8')\naxes[0].tick_params(colors='#a6adc8')\n\naxes[1].boxplot([group_a, group_b], labels=['Control', 'Treatment'],\n               patch_artist=True,\n               boxprops=dict(facecolor='#313244'),\n               medianprops=dict(color='#f9e2af'))\naxes[1].set_title('Box Plot', color='white')\naxes[1].tick_params(colors='#a6adc8')\n\nplt.tight_layout()\nplt.show()",
+      "output": null,
+      "error": null,
+      "html": null,
+      "image": null,
+      "executionNumber": null
+    },
+    {
+      "code": "# Two-sample t-test\nfrom scipy import stats\n\nt_stat, p_value = stats.ttest_ind(group_a, group_b)\neffect_size = (np.mean(group_b) - np.mean(group_a)) / np.sqrt((np.std(group_a)**2 + np.std(group_b)**2) / 2)\n\nprint(f\"Two-sample t-test\")\nprint(f\"=\"*40)\nprint(f\"t-statistic: {t_stat:.4f}\")\nprint(f\"p-value:     {p_value:.6f}\")\nprint(f\"Effect size (Cohen's d): {effect_size:.4f}\")\nprint(f\"\")\nif p_value < 0.05:\n    print(\"✓ Result is statistically significant (p < 0.05)\")\n    print(f\"  The treatment group mean ({np.mean(group_b):.1f}) is significantly\")\n    print(f\"  different from the control group mean ({np.mean(group_a):.1f})\")\nelse:\n    print(\"✗ Result is NOT statistically significant\")",
+      "output": null,
+      "error": null,
+      "html": null,
+      "image": null,
+      "executionNumber": null
+    },
+    {
+      "code": "# Confidence intervals\nfrom scipy.stats import sem, t\n\ndef confidence_interval(data, confidence=0.95):\n    n = len(data)\n    mean = np.mean(data)\n    se = sem(data)\n    h = se * t.ppf((1 + confidence) / 2, n - 1)\n    return mean, mean - h, mean + h\n\nmean_a, ci_low_a, ci_high_a = confidence_interval(group_a)\nmean_b, ci_low_b, ci_high_b = confidence_interval(group_b)\n\nresults = pd.DataFrame({\n    'Group': ['Control', 'Treatment'],\n    'Mean': [mean_a, mean_b],\n    '95% CI Lower': [ci_low_a, ci_low_b],\n    '95% CI Upper': [ci_high_a, ci_high_b],\n    'Std Dev': [np.std(group_a), np.std(group_b)],\n    'N': [len(group_a), len(group_b)]\n}).round(3)\nresults",
+      "output": null,
+      "error": null,
+      "html": null,
+      "image": null,
+      "executionNumber": null
+    }
+  ]
+}

@@ -1,0 +1,47 @@
+{
+  "name": "Public API Data Analysis",
+  "description": "Fetch live data from free public APIs (no auth needed), transform, and visualize.",
+  "savedAt": "2026-07-14T00:00:00.000Z",
+  "cells": [
+    {
+      "code": "import requests\nimport pandas as pd\nimport matplotlib.pyplot as plt\n\n# Fetch world population data from World Bank API (no auth needed)\nresp = requests.get('https://api.worldbank.org/v2/country/all/indicator/SP.POP.TOTL?date=2022&format=json&per_page=300')\ndata = resp.json()[1]  # First element is metadata, second is data\n\ncountries = pd.DataFrame(data)\ncountries = countries[countries['value'].notna()].copy()\ncountries = countries[['country', 'value']].copy()\ncountries['country_name'] = countries['country'].apply(lambda x: x['value'])\ncountries['population'] = countries['value'].astype(float).astype(int)\ncountries = countries[['country_name', 'population']].copy()\ncountries = countries[countries['population'] > 1000000]  # Filter small territories\ncountries = countries.sort_values('population', ascending=False).reset_index(drop=True)\nprint(f\"Fetched {len(countries)} countries from World Bank API\")\ncountries.head(15)",
+      "output": null,
+      "error": null,
+      "html": null,
+      "image": null,
+      "executionNumber": null
+    },
+    {
+      "code": "# Visualize top 20 most populated countries\ntop20 = countries.head(20)\n\nplt.figure(figsize=(12, 6))\nplt.barh(top20['country_name'], top20['population'] / 1e6, color='#89b4fa')\nplt.xlabel('Population (millions)', color='#a6adc8')\nplt.title('Top 20 Countries by Population (World Bank API, 2022)', color='white', fontsize=14)\nplt.gca().invert_yaxis()\nplt.tick_params(colors='#a6adc8')\nplt.grid(axis='x', alpha=0.2)\nplt.tight_layout()\nplt.show()",
+      "output": null,
+      "error": null,
+      "html": null,
+      "image": null,
+      "executionNumber": null
+    },
+    {
+      "code": "# Fetch weather data from Open-Meteo API (no key needed)\n# Get current weather for major cities\ncities = [\n    {'name': 'New York', 'lat': 40.71, 'lon': -74.01},\n    {'name': 'London', 'lat': 51.51, 'lon': -0.13},\n    {'name': 'Tokyo', 'lat': 35.68, 'lon': 139.69},\n    {'name': 'Sydney', 'lat': -33.87, 'lon': 151.21},\n    {'name': 'Paris', 'lat': 48.86, 'lon': 2.35},\n    {'name': 'Berlin', 'lat': 52.52, 'lon': 13.40},\n    {'name': 'Mumbai', 'lat': 19.08, 'lon': 72.88},\n    {'name': 'São Paulo', 'lat': -23.55, 'lon': -46.63},\n]\n\nweather_data = []\nfor city in cities:\n    url = f\"https://api.open-meteo.com/v1/forecast?latitude={city['lat']}&longitude={city['lon']}&current=temperature_2m,wind_speed_10m,relative_humidity_2m\"\n    r = requests.get(url)\n    current = r.json()['current']\n    weather_data.append({\n        'city': city['name'],\n        'temperature_c': current['temperature_2m'],\n        'wind_speed_kmh': current['wind_speed_10m'],\n        'humidity_pct': current['relative_humidity_2m'],\n    })\n\nweather = pd.DataFrame(weather_data)\nprint(\"Live weather data from Open-Meteo API:\")\nweather",
+      "output": null,
+      "error": null,
+      "html": null,
+      "image": null,
+      "executionNumber": null
+    },
+    {
+      "code": "# Plot weather comparison\nfig, axes = plt.subplots(1, 3, figsize=(14, 4))\n\ncolors = ['#f38ba8' if t > 25 else '#89b4fa' if t < 10 else '#a6e3a1' for t in weather['temperature_c']]\naxes[0].barh(weather['city'], weather['temperature_c'], color=colors)\naxes[0].set_xlabel('°C', color='#a6adc8')\naxes[0].set_title('Temperature', color='white')\naxes[0].tick_params(colors='#a6adc8')\naxes[0].axvline(0, color='#585b70', linewidth=0.5)\n\naxes[1].barh(weather['city'], weather['wind_speed_kmh'], color='#cba6f7')\naxes[1].set_xlabel('km/h', color='#a6adc8')\naxes[1].set_title('Wind Speed', color='white')\naxes[1].tick_params(colors='#a6adc8')\n\naxes[2].barh(weather['city'], weather['humidity_pct'], color='#89dceb')\naxes[2].set_xlabel('%', color='#a6adc8')\naxes[2].set_title('Humidity', color='white')\naxes[2].tick_params(colors='#a6adc8')\n\nplt.suptitle('Live Weather Across Cities (Open-Meteo API)', color='white', fontsize=14, y=1.02)\nplt.tight_layout()\nplt.show()",
+      "output": null,
+      "error": null,
+      "html": null,
+      "image": null,
+      "executionNumber": null
+    },
+    {
+      "code": "# Fetch cryptocurrency prices from CoinGecko (no auth)\nresp = requests.get('https://api.coingecko.com/api/v3/coins/markets', params={\n    'vs_currency': 'usd',\n    'order': 'market_cap_desc',\n    'per_page': 20,\n    'sparkline': False\n})\ncrypto = pd.DataFrame(resp.json())[['name', 'symbol', 'current_price', 'market_cap', 'price_change_percentage_24h', 'total_volume']]\ncrypto.columns = ['name', 'symbol', 'price_usd', 'market_cap', 'change_24h_pct', 'volume_24h']\ncrypto['market_cap_B'] = (crypto['market_cap'] / 1e9).round(1)\nprint(\"Top 20 Cryptocurrencies by Market Cap (CoinGecko API):\")\ncrypto",
+      "output": null,
+      "error": null,
+      "html": null,
+      "image": null,
+      "executionNumber": null
+    }
+  ]
+}

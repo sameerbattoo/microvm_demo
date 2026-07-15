@@ -1,0 +1,71 @@
+{
+  "name": "AWS Data Sources",
+  "description": "Connect to DynamoDB, S3, and other AWS services from the MicroVM using IAM role credentials.",
+  "savedAt": "2026-07-14T00:00:00.000Z",
+  "cells": [
+    {
+      "code": "import boto3\nimport pandas as pd\nimport matplotlib.pyplot as plt\n\n# The MicroVM has an execution role with AWS credentials injected automatically.\n# No keys to manage — just use boto3 directly.\nsession = boto3.Session(region_name='us-west-2')\nsts = session.client('sts')\nidentity = sts.get_caller_identity()\nprint(f\"MicroVM is running as: {identity['Arn']}\")\nprint(f\"Account: {identity['Account']}\")",
+      "output": null,
+      "error": null,
+      "html": null,
+      "image": null,
+      "executionNumber": null
+    },
+    {
+      "code": "# Read sales data from S3\naccount = identity['Account']\nbucket = f'microvm-sandbox-artifacts-{account}-us-west-2'\n\ns3_client = session.client('s3')\nobj = s3_client.get_object(Bucket=bucket, Key='samples/sales_data.csv')\nsales = pd.read_csv(obj['Body'])\nprint(f\"Loaded {len(sales)} orders from S3\")\nsales.head()",
+      "output": null,
+      "error": null,
+      "html": null,
+      "image": null,
+      "executionNumber": null
+    },
+    {
+      "code": "# Read product catalog from DynamoDB\ndynamo = session.resource('dynamodb')\ntable = dynamo.Table('microvm-demo-data')\nresponse = table.scan()\nproducts = pd.DataFrame(response['Items'])\n\n# Fix Decimal types\nfor col in ['price', 'stock', 'rating']:\n    products[col] = products[col].astype(float)\n\nprint(f\"Loaded {len(products)} products from DynamoDB\")\nproducts.sort_values('price', ascending=False)",
+      "output": null,
+      "error": null,
+      "html": null,
+      "image": null,
+      "executionNumber": null
+    },
+    {
+      "code": "# Merge: enrich sales data with product details from DynamoDB\n# Sales has 'product' column, DynamoDB has 'name' column\n# Create a mapping from product name to category and rating\nproduct_map = products.set_index('name')[['category', 'rating', 'id']].to_dict('index')\n\n# Map product names in sales to categories\nsales['category'] = sales['product'].map(lambda p: product_map.get(p, {}).get('category', 'Unknown'))\nsales['product_rating'] = sales['product'].map(lambda p: product_map.get(p, {}).get('rating', 0))\n\nprint(\"Sales enriched with DynamoDB product metadata:\")\nsales[['order_id', 'product', 'category', 'product_rating', 'quantity', 'unit_price']].head(10)",
+      "output": null,
+      "error": null,
+      "html": null,
+      "image": null,
+      "executionNumber": null
+    },
+    {
+      "code": "# Analyze: Revenue by product with DynamoDB ratings\nsales['revenue'] = sales['quantity'] * sales['unit_price'] * (1 - sales['discount'])\n\nproduct_summary = sales.groupby('product').agg(\n    total_revenue=('revenue', 'sum'),\n    total_orders=('order_id', 'count'),\n    avg_quantity=('quantity', 'mean'),\n    avg_discount=('discount', 'mean'),\n    product_rating=('product_rating', 'first')\n).round(2).sort_values('total_revenue', ascending=False)\n\nprint(\"Product Performance (S3 sales + DynamoDB ratings):\")\nproduct_summary",
+      "output": null,
+      "error": null,
+      "html": null,
+      "image": null,
+      "executionNumber": null
+    },
+    {
+      "code": "# Visualize: Revenue vs Rating scatter\nfig, axes = plt.subplots(1, 2, figsize=(13, 5))\n\n# Revenue by product\ncolors = ['#89b4fa', '#a6e3a1', '#f9e2af', '#f38ba8', '#cba6f7']\naxes[0].barh(product_summary.index, product_summary['total_revenue'], color=colors[:len(product_summary)])\naxes[0].set_xlabel('Revenue ($)', color='#a6adc8')\naxes[0].set_title('Total Revenue by Product', color='white', fontsize=13)\naxes[0].tick_params(colors='#a6adc8')\naxes[0].grid(axis='x', alpha=0.15)\n\n# Revenue by region\nregion_rev = sales.groupby('region')['revenue'].sum().sort_values(ascending=False)\naxes[1].pie(region_rev.values, labels=region_rev.index, autopct='%1.0f%%',\n           colors=['#89b4fa', '#a6e3a1', '#f9e2af', '#f38ba8'],\n           textprops={'color': '#cdd6f4', 'fontsize': 11})\naxes[1].set_title('Revenue by Region', color='white', fontsize=13)\n\nplt.suptitle('Sales Analytics (S3 data + DynamoDB enrichment)', color='white', fontsize=14, y=1.02)\nplt.tight_layout()\nplt.show()",
+      "output": null,
+      "error": null,
+      "html": null,
+      "image": null,
+      "executionNumber": null
+    },
+    {
+      "code": "# Time series: Monthly revenue trend from S3 data\nsales['date'] = pd.to_datetime(sales['date'])\nsales['month'] = sales['date'].dt.to_period('M').astype(str)\n\nmonthly = sales.groupby('month').agg(\n    revenue=('revenue', 'sum'),\n    orders=('order_id', 'count'),\n    avg_order_value=('revenue', 'mean')\n).round(2)\n\nplt.figure(figsize=(12, 4))\nplt.plot(monthly.index, monthly['revenue'], marker='o', linewidth=2, color='#89b4fa')\nplt.fill_between(monthly.index, monthly['revenue'], alpha=0.1, color='#89b4fa')\nplt.title('Monthly Revenue (from S3 sales data)', color='white', fontsize=14)\nplt.xlabel('Month', color='#a6adc8')\nplt.ylabel('Revenue ($)', color='#a6adc8')\nplt.xticks(rotation=45, color='#a6adc8')\nplt.yticks(color='#a6adc8')\nplt.grid(alpha=0.15)\nplt.tight_layout()\nplt.show()",
+      "output": null,
+      "error": null,
+      "html": null,
+      "image": null,
+      "executionNumber": null
+    },
+    {
+      "code": "# Network connectivity demo\nimport socket\nimport requests\n\nresp = requests.get('https://httpbin.org/ip')\nprint(f\"MicroVM public IP: {resp.json()['origin']}\")\n\nprint(f\"\\nConnectivity verified:\")\nprint(f\"  ✓ S3 — read {len(sales)} rows\")\nprint(f\"  ✓ DynamoDB — read {len(products)} products\")\nprint(f\"  ✓ Internet — public IP confirmed\")\nprint(f\"  ✓ Data merged across sources\")\nprint(f\"\\nAll data sources accessible from this MicroVM sandbox.\")",
+      "output": null,
+      "error": null,
+      "html": null,
+      "image": null,
+      "executionNumber": null
+    }
+  ]
+}

@@ -1,0 +1,11 @@
+# MicroVM runtime state
+.microvm
+app.zip
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# OS
+.DS_Store

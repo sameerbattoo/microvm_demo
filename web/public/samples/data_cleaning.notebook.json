@@ -1,0 +1,47 @@
+{
+  "name": "Data Cleaning & Transform",
+  "description": "Load messy data, handle missing values, transform columns, and produce a clean dataset.",
+  "savedAt": "2026-07-14T00:00:00.000Z",
+  "cells": [
+    {
+      "code": "import pandas as pd\nimport numpy as np\n\n# Generate messy sample data (simulating a real-world CSV import)\nnp.random.seed(99)\nn = 200\n\ndf = pd.DataFrame({\n    'customer_id': range(1, n+1),\n    'name': [f'Customer {i}' if np.random.random() > 0.05 else None for i in range(1, n+1)],\n    'email': [f'user{i}@example.com' if np.random.random() > 0.1 else 'INVALID' for i in range(1, n+1)],\n    'age': [np.random.randint(18, 80) if np.random.random() > 0.08 else None for _ in range(n)],\n    'signup_date': pd.date_range('2023-01-01', periods=n, freq='2D').astype(str),\n    'revenue': [round(np.random.exponential(150), 2) if np.random.random() > 0.12 else None for _ in range(n)],\n    'country': np.random.choice(['US', 'UK', 'DE', 'FR', 'JP', 'AU', None], n),\n})\n\nprint(f\"Raw dataset: {df.shape[0]} rows, {df.shape[1]} columns\")\nprint(f\"\\nMissing values:\")\nprint(df.isnull().sum())\ndf.head()",
+      "output": null,
+      "error": null,
+      "html": null,
+      "image": null,
+      "executionNumber": null
+    },
+    {
+      "code": "# Step 1: Handle missing values\ndf_clean = df.copy()\n\n# Fill missing names\ndf_clean['name'] = df_clean['name'].fillna('Unknown')\n\n# Fill missing ages with median\ndf_clean['age'] = df_clean['age'].fillna(df_clean['age'].median())\n\n# Fill missing revenue with 0 (no purchase)\ndf_clean['revenue'] = df_clean['revenue'].fillna(0)\n\n# Fill missing country\ndf_clean['country'] = df_clean['country'].fillna('Unknown')\n\nprint(\"After filling missing values:\")\nprint(df_clean.isnull().sum())",
+      "output": null,
+      "error": null,
+      "html": null,
+      "image": null,
+      "executionNumber": null
+    },
+    {
+      "code": "# Step 2: Fix data types and invalid values\n\n# Fix invalid emails\ndf_clean['email_valid'] = df_clean['email'].str.contains('@') & (df_clean['email'] != 'INVALID')\ndf_clean.loc[df_clean['email'] == 'INVALID', 'email'] = None\n\n# Convert signup_date to datetime\ndf_clean['signup_date'] = pd.to_datetime(df_clean['signup_date'])\n\n# Add derived columns\ndf_clean['signup_year'] = df_clean['signup_date'].dt.year\ndf_clean['signup_month'] = df_clean['signup_date'].dt.month\ndf_clean['age_group'] = pd.cut(df_clean['age'], bins=[0, 25, 35, 50, 65, 100], labels=['18-25', '26-35', '36-50', '51-65', '65+'])\n\nprint(f\"Clean dataset: {df_clean.shape[0]} rows, {df_clean.shape[1]} columns\")\ndf_clean.dtypes",
+      "output": null,
+      "error": null,
+      "html": null,
+      "image": null,
+      "executionNumber": null
+    },
+    {
+      "code": "# Step 3: Aggregate and summarize\nsummary = df_clean.groupby('country').agg(\n    customers=('customer_id', 'count'),\n    avg_revenue=('revenue', 'mean'),\n    total_revenue=('revenue', 'sum'),\n    avg_age=('age', 'mean'),\n    valid_emails=('email_valid', 'sum')\n).round(2).sort_values('total_revenue', ascending=False)\n\nsummary",
+      "output": null,
+      "error": null,
+      "html": null,
+      "image": null,
+      "executionNumber": null
+    },
+    {
+      "code": "# Step 4: Visualize the clean data\nimport matplotlib.pyplot as plt\n\nfig, axes = plt.subplots(1, 2, figsize=(12, 4))\n\n# Revenue distribution\naxes[0].hist(df_clean[df_clean['revenue'] > 0]['revenue'], bins=30, color='#89b4fa', alpha=0.8)\naxes[0].set_title('Revenue Distribution (non-zero)', color='white')\naxes[0].set_xlabel('Revenue ($)', color='#a6adc8')\naxes[0].tick_params(colors='#a6adc8')\n\n# Customers by country\ncountry_counts = df_clean['country'].value_counts()\naxes[1].barh(country_counts.index, country_counts.values, color='#a6e3a1')\naxes[1].set_title('Customers by Country', color='white')\naxes[1].set_xlabel('Count', color='#a6adc8')\naxes[1].tick_params(colors='#a6adc8')\n\nplt.tight_layout()\nplt.show()",
+      "output": null,
+      "error": null,
+      "html": null,
+      "image": null,
+      "executionNumber": null
+    }
+  ]
+}
