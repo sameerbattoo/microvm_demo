@@ -15,9 +15,7 @@ interactions without losing context.
 """
 
 import logging
-import time
 import base64
-import tempfile
 import os
 from datetime import datetime, timezone
 
@@ -444,3 +442,4 @@ async def list_files():
     files.sort(key=lambda f: f["name"])
     
     return {"files": files}
+

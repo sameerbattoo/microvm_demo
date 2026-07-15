@@ -25,6 +25,7 @@ The proxy:
 
 import os
 import time
+import asyncio
 import logging
 import httpx
 import boto3
@@ -67,7 +68,7 @@ _lambda_client = None
 def get_lambda_client():
     global _lambda_client
     if _lambda_client is None:
-        _lambda_client = boto3.client("lambda-microvms", region_name="us-west-2")
+        _lambda_client = boto3.client("lambda-microvms", region_name=AWS_REGION)
     return _lambda_client
 
 
@@ -207,6 +208,7 @@ async def launch_microvm(request: Request):
             "endpoint": endpoint,
             "name": notebook_name,
             "launched_at": time.time(),
+            "memory_mib": memory_mib,
         }
 
         logger.info(f"MicroVM launched: {microvm_id} at {endpoint}")
@@ -217,7 +219,7 @@ async def launch_microvm(request: Request):
             state = state_resp.get("state", "PENDING")
             if state == "RUNNING":
                 break
-            time.sleep(5)
+            await asyncio.sleep(5)
 
         return {
             "microvmId": microvm_id,
@@ -275,19 +277,35 @@ async def list_instances():
             local_info = _active_microvms.get(microvm_id, {})
             endpoint = local_info.get("endpoint", "")
 
-            # If no endpoint cached, fetch it from get_microvm
-            if not endpoint and state in ("RUNNING", "SUSPENDED"):
+            # Fetch full detail from AWS if needed (endpoint or memory)
+            detail = None
+            if state in ("RUNNING", "SUSPENDED"):
                 try:
                     detail = client.get_microvm(microvmIdentifier=microvm_id)
-                    endpoint = detail.get("endpoint", "")
+                    if not endpoint:
+                        endpoint = detail.get("endpoint", "")
                 except Exception:
                     pass
+
+            # Determine memory from local cache or from imageArn
+            memory_mib = local_info.get("memory_mib")
+            if not memory_mib and detail:
+                image_arn = detail.get("imageArn", "")
+                if image_arn:
+                    # Parse trailing number from image name (e.g. agent-sandbox-4096)
+                    image_name = image_arn.split(":")[-1]
+                    parts = image_name.rsplit("-", 1)
+                    if len(parts) == 2 and parts[1].isdigit():
+                        memory_mib = int(parts[1])
+            if not memory_mib:
+                memory_mib = 4096  # fallback
 
             instances[microvm_id] = {
                 "endpoint": endpoint,
                 "name": local_info.get("name", ""),
                 "state": state,
                 "launched_at": local_info.get("launched_at"),
+                "memory_mib": memory_mib,
             }
 
         return {"instances": instances}
@@ -306,7 +324,7 @@ async def resume_microvm(microvm_id: str):
 
         # Poll until running (max 30s)
         for _ in range(6):
-            time.sleep(5)
+            await asyncio.sleep(5)
             state_resp = client.get_microvm(microvmIdentifier=microvm_id)
             state = state_resp.get("state", "PENDING")
             if state == "RUNNING":
@@ -331,3 +349,318 @@ async def health():
         "cached_tokens": len(_token_cache),
         "active_instances": len(_active_microvms),
     }
+
+
+@app.get("/packages")
+async def list_packages():
+    """
+    List installed packages on the proxy machine (fallback for local dev mode).
+    In MicroVM mode, the frontend fetches packages via /execute on the MicroVM directly.
+    """
+    import subprocess
+    import json as json_mod
+
+    try:
+        result = subprocess.run(
+            ["pip3", "list", "--format=json"],
+            capture_output=True, text=True, timeout=15
+        )
+        if result.returncode != 0:
+            result = subprocess.run(
+                ["pip", "list", "--format=json"],
+                capture_output=True, text=True, timeout=15
+            )
+        if result.returncode == 0:
+            packages = json_mod.loads(result.stdout)
+        else:
+            packages = []
+    except Exception:
+        packages = []
+
+    pkg_list = [{"name": p.get("name", ""), "version": p.get("version", "")} for p in packages]
+    pkg_list.sort(key=lambda p: p["name"].lower())
+
+    return {"packages": pkg_list, "count": len(pkg_list)}
+
+
+# ============================================================
+# DATA SOURCES (S3 + DynamoDB discovery)
+# ============================================================
+
+@app.get("/datasources")
+async def list_datasources():
+    """
+    List external data sources accessible from the MicroVM:
+    - S3 objects in the artifacts bucket (samples/ prefix)
+    - DynamoDB tables matching the demo pattern
+    """
+    s3_files = []
+    dynamodb_tables = []
+
+    try:
+        s3 = boto3.client("s3", region_name=AWS_REGION)
+        # Find the artifacts bucket
+        bucket_name = None
+        resp = s3.list_buckets()
+        for b in resp.get("Buckets", []):
+            if b["Name"].startswith("microvm-sandbox-artifacts-"):
+                bucket_name = b["Name"]
+                break
+
+        if bucket_name:
+            # List objects in samples/ prefix
+            paginator = s3.get_paginator("list_objects_v2")
+            for page in paginator.paginate(Bucket=bucket_name, Prefix="samples/", MaxKeys=50):
+                for obj in page.get("Contents", []):
+                    key = obj["Key"]
+                    if key.endswith("/"):
+                        continue
+                    size = obj["Size"]
+                    if size < 1024:
+                        size_str = f"{size} B"
+                    elif size < 1024 * 1024:
+                        size_str = f"{size / 1024:.1f} KB"
+                    else:
+                        size_str = f"{size / (1024 * 1024):.1f} MB"
+                    s3_files.append({
+                        "key": key,
+                        "bucket": bucket_name,
+                        "size": size_str,
+                        "size_bytes": size,
+                        "uri": f"s3://{bucket_name}/{key}",
+                    })
+    except Exception as e:
+        logger.warning(f"Failed to list S3 sources: {e}")
+
+    try:
+        ddb = boto3.client("dynamodb", region_name=AWS_REGION)
+        resp = ddb.list_tables()
+        for table_name in resp.get("TableNames", []):
+            if "microvm" in table_name or "demo" in table_name:
+                # Get item count
+                desc = ddb.describe_table(TableName=table_name)
+                item_count = desc["Table"].get("ItemCount", 0)
+                dynamodb_tables.append({
+                    "name": table_name,
+                    "item_count": item_count,
+                    "region": AWS_REGION,
+                })
+    except Exception as e:
+        logger.warning(f"Failed to list DynamoDB sources: {e}")
+
+    return {
+        "s3": s3_files,
+        "dynamodb": dynamodb_tables,
+    }
+
+
+# ============================================================
+# AI CODE GENERATION (runs locally on the proxy, calls Bedrock)
+# ============================================================
+
+AI_MODEL_ID = os.environ.get("BEDROCK_MODEL_ID", "us.anthropic.claude-sonnet-4-6")
+AI_REGION = os.environ.get("BEDROCK_REGION", AWS_REGION)
+
+_bedrock_client = None
+
+
+def get_bedrock_client():
+    global _bedrock_client
+    if _bedrock_client is None:
+        _bedrock_client = boto3.client("bedrock-runtime", region_name=AI_REGION)
+    return _bedrock_client
+
+
+@app.get("/ai/config")
+async def ai_config():
+    """Return AI configuration and availability (checks for valid AWS credentials)."""
+    ai_available = False
+    try:
+        session = boto3.Session(region_name=AI_REGION)
+        credentials = session.get_credentials()
+        if credentials and credentials.get_frozen_credentials().access_key:
+            ai_available = True
+    except Exception:
+        pass
+
+    return {
+        "model_id": AI_MODEL_ID,
+        "region": AI_REGION,
+        "ai_available": ai_available,
+    }
+
+
+@app.post("/ai/generate")
+async def ai_generate_code(request: Request):
+    """
+    Generate Python code from a natural language prompt using Amazon Bedrock.
+    Receives full notebook context for accurate code generation.
+    """
+    body = await request.json()
+
+    prompt = body.get("prompt", "").strip()
+    if not prompt:
+        return Response(
+            status_code=400,
+            content='{"error": "No prompt provided"}',
+            media_type="application/json",
+        )
+
+    notebook_context = body.get("notebook_context", [])
+    current_cell_code = body.get("current_cell_code", "")
+    cell_index = body.get("cell_index", 0)
+    variables = body.get("variables", [])
+
+    logger.info(f"--- /ai/generate request ---")
+    logger.info(f"  prompt: {prompt}")
+    logger.info(f"  cell_index: {cell_index}")
+    logger.info(f"  current_cell_code: {current_cell_code[:80]}...")
+    logger.info(f"  notebook_context cells: {len(notebook_context)}")
+    for i, ctx in enumerate(notebook_context):
+        code_preview = (ctx.get('code', '') or '')[:80].replace('\n', '\\n')
+        logger.info(f"    [{i}] code: {code_preview}...")
+    logger.info(f"  variables: {variables}")
+    logger.info(f"---")
+
+    system_prompt = _build_ai_system_prompt(notebook_context, cell_index, variables, current_cell_code)
+
+    try:
+        client = get_bedrock_client()
+
+        response = client.converse(
+            modelId=AI_MODEL_ID,
+            system=[{"text": system_prompt}],
+            messages=[
+                {
+                    "role": "user",
+                    "content": [{"text": prompt}],
+                }
+            ],
+            inferenceConfig={
+                "maxTokens": 2048,
+                "temperature": 0.2,
+            },
+        )
+
+        output_message = response["output"]["message"]
+        generated_text = ""
+        for block in output_message["content"]:
+            if "text" in block:
+                generated_text += block["text"]
+
+        code = _extract_code(generated_text)
+
+        logger.info(f"AI generated code (model={AI_MODEL_ID}, prompt_len={len(prompt)}, code_len={len(code)})")
+
+        return {
+            "success": True,
+            "code": code,
+            "model_id": AI_MODEL_ID,
+        }
+
+    except Exception as e:
+        logger.error(f"AI generation failed: {e}")
+        return Response(
+            status_code=500,
+            content=f'{{"error": "AI generation failed: {str(e)}"}}',
+            media_type="application/json",
+        )
+
+
+def _build_ai_system_prompt(notebook_context, cell_index, variables, current_cell_code=""):
+    lines = []
+    lines.append("You are a Python code generation assistant embedded in a data science notebook.")
+    lines.append("Generate ONLY executable Python code. No explanations, no markdown fences, no comments unless they clarify complex logic.")
+    lines.append("The code will be inserted directly into a notebook cell and executed.")
+    lines.append("")
+    lines.append("RULES:")
+    lines.append("- Output raw Python code only (no ```python fences)")
+    lines.append("- Use variables and imports from prior cells (they persist)")
+    lines.append("- For DataFrames, end with the expression (e.g. df.head()) so it renders as a table")
+    lines.append("- For plots, use matplotlib (plt.plot/plt.show) - they render inline")
+    lines.append("- For plots, ALWAYS use a dark style: plt.style.use('dark_background') at the top, or set facecolor='#1a1a2e' on the figure and use color='white' for titles, labels, and tick text")
+    lines.append("- Keep code concise and idiomatic")
+    lines.append("")
+
+    if current_cell_code.strip():
+        lines.append("IMPORTANT: This cell already contains code. The user wants to MODIFY the existing code based on their request.")
+        lines.append("Return the complete updated code for this cell (not just the changes).")
+        lines.append("")
+        lines.append("CURRENT CELL CODE:")
+        lines.append("```")
+        lines.append(current_cell_code.strip())
+        lines.append("```")
+        lines.append("")
+
+    if variables:
+        lines.append(f"AVAILABLE VARIABLES: {', '.join(variables)}")
+        lines.append("")
+
+    if notebook_context:
+        lines.append("NOTEBOOK CELLS ABOVE (executed in order):")
+        lines.append("---")
+        for cell in notebook_context:
+            idx = cell.get("index", "?")
+            code = cell.get("code", "").strip()
+            output = cell.get("output", "").strip()
+            html = cell.get("html", "").strip()
+            if code:
+                lines.append(f"Cell [{idx + 1}]:")
+                lines.append(code)
+                if output:
+                    lines.append(f"# Output: {output[:300]}")
+                if html:
+                    # Extract a text representation from HTML table for context
+                    table_text = _extract_table_text(html)
+                    if table_text:
+                        lines.append(f"# DataFrame output (columns and sample rows):")
+                        lines.append(f"# {table_text}")
+                lines.append("")
+        lines.append("---")
+        lines.append("")
+
+    lines.append(f"Generate code for Cell [{cell_index + 1}] based on the user's request.")
+    return "\n".join(lines)
+
+
+def _extract_code(text):
+    text = text.strip()
+    if "```python" in text:
+        parts = text.split("```python")
+        if len(parts) > 1:
+            return parts[1].split("```")[0].strip()
+    if text.startswith("```") and text.endswith("```"):
+        lines = text.split("\n")
+        return "\n".join(lines[1:-1]).strip()
+    return text
+
+
+def _extract_table_text(html):
+    """Extract column names and first few rows from an HTML table for AI context."""
+    import re
+    try:
+        # Extract header cells
+        headers = re.findall(r'<th[^>]*>(.*?)</th>', html, re.DOTALL)
+        if not headers:
+            return ""
+        # Clean HTML tags from headers
+        headers = [re.sub(r'<[^>]+>', '', h).strip() for h in headers]
+
+        # Extract first few data rows
+        rows = re.findall(r'<tr[^>]*>(.*?)</tr>', html, re.DOTALL)
+        data_rows = []
+        for row in rows[:4]:  # First 3-4 data rows
+            cells = re.findall(r'<td[^>]*>(.*?)</td>', row, re.DOTALL)
+            if cells:
+                cells = [re.sub(r'<[^>]+>', '', c).strip() for c in cells]
+                data_rows.append(cells)
+
+        # Build text summary
+        result = f"Columns: {headers}"
+        if data_rows:
+            result += f"\nFirst rows: {data_rows[:3]}"
+
+        # Limit to 500 chars
+        return result[:500]
+    except Exception:
+        return ""

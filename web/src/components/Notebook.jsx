@@ -1,9 +1,27 @@
 import { useState, useCallback, useRef, useEffect } from 'react'
 import Cell from './Cell'
 import ConnectionPanel from './ConnectionPanel'
+import PackageManager from './PackageManager'
+import { IconPlus, IconPlayAll, IconPlay, IconTrash, IconPackage, IconSave, IconFolderOpen, IconSettings } from './Icons'
 import './Notebook.css'
 
-let nextCellId = 1
+let nextCellId = (() => {
+  // Start above any existing cell IDs from persisted state
+  try {
+    const saved = localStorage.getItem('microvm-notebooks')
+    if (saved) {
+      const tabs = JSON.parse(saved)
+      let maxId = 0
+      for (const tab of tabs) {
+        for (const cell of (tab._cells || [])) {
+          if (cell.id > maxId) maxId = cell.id
+        }
+      }
+      return maxId + 1
+    }
+  } catch {}
+  return 1
+})()
 
 function createCell() {
   return {
@@ -21,6 +39,10 @@ function createCell() {
 
 export default function Notebook({ tab, onUpdateTab, attachedIds = [] }) {
   const [cells, setCells] = useState(() => {
+    // Restore cells from tab state (persists across tab switches)
+    if (tab._cells && Array.isArray(tab._cells) && tab._cells.length > 0) {
+      return tab._cells
+    }
     // If tab has pre-loaded cells (from sample), use them
     if (tab._loadedCells && Array.isArray(tab._loadedCells)) {
       return tab._loadedCells.map(c => ({
@@ -38,56 +60,78 @@ export default function Notebook({ tab, onUpdateTab, attachedIds = [] }) {
     return [createCell()]
   })
   const [showConnection, setShowConnection] = useState(tab.status !== 'connected')
-  const [showInstall, setShowInstall] = useState(false)
-  const [installPkg, setInstallPkg] = useState('')
-  const [installStatus, setInstallStatus] = useState(null) // null | 'installing' | 'success' | 'error'
-  const [installMessage, setInstallMessage] = useState('')
+  const [showPackageManager, setShowPackageManager] = useState(false)
   const [isExecuting, setIsExecuting] = useState(false)
+  const [activeCellId, setActiveCellId] = useState(null)
+  const [aiAvailable, setAiAvailable] = useState(false)
   const executionQueue = useRef([])
   const bottomRef = useRef(null)
-  const installInputRef = useRef(null)
 
   // Auto-scroll when cells are added
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [cells.length])
 
-  // Focus install input when shown
+  // Persist cells to tab state (survives tab switches)
+  const prevCellsRef = useRef(cells)
   useEffect(() => {
-    if (showInstall && installInputRef.current) {
-      installInputRef.current.focus()
+    // Only update if cells actually changed (avoid infinite loop)
+    if (prevCellsRef.current !== cells) {
+      prevCellsRef.current = cells
+      onUpdateTab({ _cells: cells })
     }
-  }, [showInstall])
+  }, [cells])
 
-  const installPackage = useCallback(async () => {
-    if (!installPkg.trim() || !tab.microvmEndpoint) return
+  // Sync cells from tab._cells when changed externally (e.g. insertCode from sidebar)
+  useEffect(() => {
+    if (tab._cells && tab._cells !== prevCellsRef.current) {
+      prevCellsRef.current = tab._cells
+      setCells(tab._cells)
+    }
+  }, [tab._cells])
 
-    setInstallStatus('installing')
-    setInstallMessage('')
-
-    try {
-      const response = await fetch(`${tab.microvmEndpoint}/install`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ package: installPkg.trim() }),
+  // Listen for code insertion events from sidebar (S3/DynamoDB clicks)
+  useEffect(() => {
+    const handler = (e) => {
+      const { code } = e.detail
+      if (!code) return
+      setCells(prev => {
+        const lastCell = prev[prev.length - 1]
+        if (lastCell && !lastCell.code.trim()) {
+          // Use the last empty cell
+          return prev.map((c, i) => i === prev.length - 1 ? { ...c, code } : c)
+        }
+        // Add a new cell
+        return [...prev, {
+          id: Date.now(),
+          code,
+          output: null,
+          error: null,
+          html: null,
+          image: null,
+          status: 'idle',
+          executionNumber: null,
+          executionTime: null,
+        }]
       })
-      const result = await response.json()
-
-      if (result.success) {
-        setInstallStatus('success')
-        setInstallMessage(result.output)
-        setInstallPkg('')
-      } else {
-        setInstallStatus('error')
-        setInstallMessage(result.error || 'Install failed')
-      }
-    } catch (err) {
-      setInstallStatus('error')
-      setInstallMessage(err.message)
     }
+    window.addEventListener('insert-code', handler)
+    return () => window.removeEventListener('insert-code', handler)
+  }, [])
 
-    setTimeout(() => setInstallStatus(null), 4000)
-  }, [installPkg, tab.microvmEndpoint])
+  // Check AI availability when connected
+  useEffect(() => {
+    if (tab.status === 'connected' && tab.microvmEndpoint) {
+      // AI endpoints live on the proxy (8081) or local backend (8080)
+      const aiBase = tab.microvmEndpoint.includes('8081')
+        ? 'http://localhost:8081'
+        : tab.microvmEndpoint
+      fetch(`${aiBase}/ai/config`)
+        .then(r => r.json())
+        .then(data => setAiAvailable(data.ai_available === true))
+        .catch(() => setAiAvailable(false))
+    }
+  }, [tab.status, tab.microvmEndpoint])
 
   const executeCell = useCallback(async (cellId) => {
     if (!tab.microvmEndpoint || tab.status !== 'connected') {
@@ -188,6 +232,36 @@ export default function Notebook({ tab, onUpdateTab, attachedIds = [] }) {
     }
   }, [tab.microvmEndpoint, tab.microvmId, tab.microvmRealEndpoint, tab.status, cells, isExecuting])
 
+  const executeAllCells = useCallback(async () => {
+    if (!tab.microvmEndpoint || tab.status !== 'connected') return
+
+    for (const cell of cells) {
+      if (cell.code.trim()) {
+        await executeCell(cell.id)
+      }
+    }
+  }, [cells, tab.microvmEndpoint, tab.status, executeCell])
+
+  const runActiveCell = useCallback(() => {
+    if (activeCellId) {
+      executeCell(activeCellId)
+    }
+  }, [activeCellId, executeCell])
+
+  const deleteActiveCell = useCallback(() => {
+    if (activeCellId) {
+      setCells(prev => {
+        if (prev.length <= 1) return prev
+        const idx = prev.findIndex(c => c.id === activeCellId)
+        const next = prev.filter(c => c.id !== activeCellId)
+        // Select the next cell (or previous if last)
+        const newActive = next[Math.min(idx, next.length - 1)]
+        if (newActive) setActiveCellId(newActive.id)
+        return next
+      })
+    }
+  }, [activeCellId])
+
   const updateCellCode = useCallback((cellId, code) => {
     setCells(prev => prev.map(c => c.id === cellId ? { ...c, code } : c))
   }, [])
@@ -284,84 +358,9 @@ export default function Notebook({ tab, onUpdateTab, attachedIds = [] }) {
     input.click()
   }, [onUpdateTab])
 
-  const uploadDataFile = useCallback(() => {
-    if (!tab.microvmEndpoint || tab.status !== 'connected') return
-
-    const input = document.createElement('input')
-    input.type = 'file'
-    input.accept = '.csv,.xlsx,.xls,.parquet,.json'
-    input.onchange = async (e) => {
-      const file = e.target.files?.[0]
-      if (!file) return
-
-      // Read file as base64
-      const reader = new FileReader()
-      reader.onload = async (ev) => {
-        const base64 = ev.target.result.split(',')[1]
-
-        // Build headers
-        const headers = { 'Content-Type': 'application/json' }
-        if (tab.microvmId) {
-          headers['X-MicroVM-Id'] = tab.microvmId
-          if (tab.microvmRealEndpoint) {
-            headers['X-MicroVM-Endpoint'] = tab.microvmRealEndpoint
-          }
-        }
-
-        // Add a cell showing the upload
-        const newCell = createCell()
-        newCell.code = `# Uploaded: ${file.name}`
-        newCell.status = 'running'
-        setCells(prev => [...prev, newCell])
-
-        try {
-          const response = await fetch(`${tab.microvmEndpoint}/upload`, {
-            method: 'POST',
-            headers,
-            body: JSON.stringify({
-              filename: file.name,
-              data: base64,
-            }),
-          })
-
-          const text = await response.text()
-          let result
-          try { result = JSON.parse(text) } catch { result = { success: false, error: 'Upload failed' } }
-
-          if (result.success) {
-            setCells(prev => prev.map(c =>
-              c.id === newCell.id
-                ? {
-                    ...c,
-                    code: `# Uploaded: ${file.name} → ${result.variable_name}`,
-                    status: 'success',
-                    output: `${result.message}\n${result.shape || ''}`,
-                  }
-                : c
-            ))
-          } else {
-            setCells(prev => prev.map(c =>
-              c.id === newCell.id
-                ? { ...c, status: 'error', error: result.error || 'Upload failed' }
-                : c
-            ))
-          }
-        } catch (err) {
-          setCells(prev => prev.map(c =>
-            c.id === newCell.id
-              ? { ...c, status: 'error', error: `Upload error: ${err.message}` }
-              : c
-          ))
-        }
-      }
-      reader.readAsDataURL(file)
-    }
-    input.click()
-  }, [tab.microvmEndpoint, tab.microvmId, tab.microvmRealEndpoint, tab.status])
-
   return (
     <div className="notebook">
-      {showConnection || tab.status !== 'connected' ? (
+      {showConnection && (
         <ConnectionPanel
           tab={tab}
           onConnect={handleConnect}
@@ -369,55 +368,66 @@ export default function Notebook({ tab, onUpdateTab, attachedIds = [] }) {
           onDismiss={() => setShowConnection(false)}
           attachedIds={attachedIds}
         />
-      ) : (
+      )}
+      {!showConnection && (
         <>
         <div className="notebook-toolbar">
-          <button className="toolbar-btn" onClick={addCellAtEnd}>
-            + Cell
-          </button>
+          <div className="toolbar-group">
+            <button className="toolbar-btn" onClick={addCellAtEnd} title="Add cell">
+              <IconPlus width={14} height={14} /> Cell
+            </button>
+            <button
+              className="toolbar-btn toolbar-btn-run"
+              onClick={runActiveCell}
+              disabled={!activeCellId || isExecuting || tab.status !== 'connected'}
+              title="Run active cell (Shift+Enter)"
+            >
+              <IconPlay width={14} height={14} /> Run
+            </button>
+            <button
+              className="toolbar-btn toolbar-btn-run-all"
+              onClick={executeAllCells}
+              disabled={isExecuting || tab.status !== 'connected'}
+              title="Execute all cells sequentially"
+            >
+              <IconPlayAll width={14} height={14} /> Run All
+            </button>
+            <button
+              className="toolbar-btn toolbar-btn-delete"
+              onClick={deleteActiveCell}
+              disabled={!activeCellId}
+              title="Delete active cell"
+            >
+              <IconTrash width={14} height={14} /> Delete
+            </button>
+          </div>
+
+          <span className="toolbar-divider" />
+
+          <div className="toolbar-group">
+            <button className="toolbar-btn" onClick={saveNotebook} title="Save notebook">
+              <IconSave width={14} height={14} /> Save
+            </button>
+            <button className="toolbar-btn" onClick={loadNotebook} title="Open notebook">
+              <IconFolderOpen width={14} height={14} /> Open
+            </button>
+          </div>
+
+          <span className="toolbar-divider" />
+
           <button
-            className={`toolbar-btn ${showInstall ? 'toolbar-btn-active' : ''}`}
-            onClick={() => setShowInstall(!showInstall)}
+            className="toolbar-btn"
+            onClick={() => setShowPackageManager(true)}
+            title="Manage packages"
           >
-            📦 Install
-          </button>
-          <button className="toolbar-btn" onClick={saveNotebook}>
-            💾 Save
-          </button>
-          <button className="toolbar-btn" onClick={loadNotebook}>
-            📂 Open
-          </button>
-          <button className="toolbar-btn" onClick={() => setShowConnection(true)}>
-            ⚙ Connection
+            <IconPackage width={14} height={14} /> Packages
           </button>
 
-          {showInstall && (
-            <div className="toolbar-install">
-              <input
-                ref={installInputRef}
-                className="install-input"
-                type="text"
-                value={installPkg}
-                onChange={(e) => setInstallPkg(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && installPackage()}
-                placeholder="package name (e.g. pandas)"
-                disabled={installStatus === 'installing'}
-              />
-              <button
-                className="install-btn"
-                onClick={installPackage}
-                disabled={!installPkg.trim() || installStatus === 'installing'}
-              >
-                {installStatus === 'installing' ? '...' : 'Install'}
-              </button>
-              {installStatus === 'success' && (
-                <span className="install-msg install-msg-ok">✓ Installed</span>
-              )}
-              {installStatus === 'error' && (
-                <span className="install-msg install-msg-err" title={installMessage}>✗ Failed</span>
-              )}
-            </div>
-          )}
+          <span className="toolbar-divider" />
+
+          <button className="toolbar-btn" onClick={() => setShowConnection(true)} title="Connection settings">
+            <IconSettings width={14} height={14} /> Connection
+          </button>
 
           <div className="toolbar-status">
             <span className={`status-dot status-${tab.status}`} />
@@ -442,10 +452,15 @@ export default function Notebook({ tab, onUpdateTab, attachedIds = [] }) {
             cell={cell}
             index={index}
             isConnected={tab.status === 'connected'}
+            isActive={cell.id === activeCellId}
+            onFocus={() => setActiveCellId(cell.id)}
             onExecute={() => executeCell(cell.id)}
             onCodeChange={(code) => updateCellCode(cell.id, code)}
             onAddBelow={() => addCellBelow(cell.id)}
             onDelete={() => deleteCell(cell.id)}
+            notebookContext={cells}
+            microvmEndpoint={tab.microvmEndpoint}
+            aiAvailable={aiAvailable}
           />
         ))}
         <div className="add-cell-row">
@@ -455,6 +470,15 @@ export default function Notebook({ tab, onUpdateTab, attachedIds = [] }) {
         </div>
         <div ref={bottomRef} />
       </div>
+
+      {showPackageManager && (
+        <PackageManager
+          onClose={() => setShowPackageManager(false)}
+          microvmEndpoint={tab.microvmEndpoint}
+          microvmId={tab.microvmId}
+          microvmRealEndpoint={tab.microvmRealEndpoint}
+        />
+      )}
     </div>
   )
 }

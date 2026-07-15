@@ -1,0 +1,193 @@
+/* ============================================================
+   THEME SYSTEM — Centralized CSS Custom Properties
+   Light and Dark themes using Catppuccin-inspired palettes
+   ============================================================ */
+
+:root,
+[data-theme="dark"] {
+  /* Surface layers (darkest to lightest) */
+  --surface-0: #0f0f17;
+  --surface-1: #141420;
+  --surface-2: #1a1a2e;
+  --surface-3: #1e1e35;
+  --surface-4: #25253d;
+
+  /* Borders */
+  --border-subtle: rgba(255, 255, 255, 0.06);
+  --border-default: rgba(255, 255, 255, 0.1);
+  --border-strong: rgba(255, 255, 255, 0.15);
+  --border-focus: rgba(99, 144, 240, 0.5);
+
+  /* Text */
+  --text-primary: #e2e4f0;
+  --text-secondary: #a0a4b8;
+  --text-tertiary: #6b6f85;
+  --text-muted: #4a4e62;
+  --text-inverse: #0f0f17;
+
+  /* Accent colors */
+  --accent-primary: #6390f0;
+  --accent-primary-hover: #7da3f5;
+  --accent-primary-subtle: rgba(99, 144, 240, 0.1);
+  --accent-primary-muted: rgba(99, 144, 240, 0.2);
+
+  --accent-success: #7ec89f;
+  --accent-success-subtle: rgba(126, 200, 159, 0.1);
+  --accent-success-muted: rgba(126, 200, 159, 0.2);
+
+  --accent-warning: #e2b86b;
+  --accent-warning-subtle: rgba(226, 184, 107, 0.1);
+
+  --accent-danger: #e87272;
+  --accent-danger-subtle: rgba(232, 114, 114, 0.1);
+  --accent-danger-muted: rgba(232, 114, 114, 0.2);
+
+  --accent-purple: #b48ef0;
+  --accent-purple-subtle: rgba(180, 142, 240, 0.1);
+  --accent-purple-muted: rgba(180, 142, 240, 0.2);
+
+  /* Shadows */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-md: 0 2px 8px rgba(0, 0, 0, 0.3), 0 1px 3px rgba(0, 0, 0, 0.2);
+  --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.4), 0 2px 8px rgba(0, 0, 0, 0.3);
+  --shadow-glow-blue: 0 0 0 3px rgba(99, 144, 240, 0.15);
+  --shadow-glow-green: 0 0 0 3px rgba(126, 200, 159, 0.15);
+  --shadow-glow-purple: 0 0 0 3px rgba(180, 142, 240, 0.15);
+
+  /* Radii */
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-xl: 12px;
+  --radius-full: 9999px;
+
+  /* Spacing (4-point grid) */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+
+  /* Typography */
+  --font-sans: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', Roboto, sans-serif;
+  --font-mono: 'JetBrains Mono', 'Fira Code', 'SF Mono', Consolas, monospace;
+  --font-size-xs: 10px;
+  --font-size-sm: 12px;
+  --font-size-base: 13px;
+  --font-size-md: 14px;
+  --font-size-lg: 16px;
+  --line-height-tight: 1.3;
+  --line-height-normal: 1.5;
+  --line-height-relaxed: 1.6;
+
+  /* Transitions */
+  --transition-fast: 120ms ease;
+  --transition-normal: 200ms ease;
+  --transition-slow: 300ms ease;
+
+  /* Toolbar / specific */
+  --toolbar-bg: var(--surface-1);
+  --toolbar-border: var(--border-default);
+  --cell-bg: var(--surface-2);
+  --cell-border: var(--border-subtle);
+  --cell-gutter-bg: var(--surface-1);
+  --sidebar-bg: var(--surface-0);
+  --sidebar-border: var(--border-subtle);
+  --header-bg: var(--surface-1);
+  --header-border: var(--border-default);
+  --input-bg: var(--surface-1);
+  --input-border: var(--border-default);
+  --input-focus-border: var(--accent-primary);
+}
+
+[data-theme="light"] {
+  /* Surface layers (lightest to slightly darker) */
+  --surface-0: #f8f9fc;
+  --surface-1: #ffffff;
+  --surface-2: #f2f3f7;
+  --surface-3: #eaecf2;
+  --surface-4: #e0e3eb;
+
+  /* Borders */
+  --border-subtle: rgba(0, 0, 0, 0.06);
+  --border-default: rgba(0, 0, 0, 0.1);
+  --border-strong: rgba(0, 0, 0, 0.15);
+  --border-focus: rgba(56, 108, 214, 0.4);
+
+  /* Text */
+  --text-primary: #1a1d2e;
+  --text-secondary: #4a4f65;
+  --text-tertiary: #6b7085;
+  --text-muted: #9ca0b0;
+  --text-inverse: #ffffff;
+
+  /* Accent colors */
+  --accent-primary: #386cd6;
+  --accent-primary-hover: #4a7de2;
+  --accent-primary-subtle: rgba(56, 108, 214, 0.08);
+  --accent-primary-muted: rgba(56, 108, 214, 0.15);
+
+  --accent-success: #2d8a56;
+  --accent-success-subtle: rgba(45, 138, 86, 0.08);
+  --accent-success-muted: rgba(45, 138, 86, 0.15);
+
+  --accent-warning: #b5840f;
+  --accent-warning-subtle: rgba(181, 132, 15, 0.08);
+
+  --accent-danger: #c93c3c;
+  --accent-danger-subtle: rgba(201, 60, 60, 0.08);
+  --accent-danger-muted: rgba(201, 60, 60, 0.15);
+
+  --accent-purple: #7b4db5;
+  --accent-purple-subtle: rgba(123, 77, 181, 0.08);
+  --accent-purple-muted: rgba(123, 77, 181, 0.15);
+
+  /* Shadows */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
+  --shadow-md: 0 2px 8px rgba(0, 0, 0, 0.08), 0 1px 3px rgba(0, 0, 0, 0.06);
+  --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.1), 0 2px 8px rgba(0, 0, 0, 0.06);
+  --shadow-glow-blue: 0 0 0 3px rgba(56, 108, 214, 0.12);
+  --shadow-glow-green: 0 0 0 3px rgba(45, 138, 86, 0.12);
+  --shadow-glow-purple: 0 0 0 3px rgba(123, 77, 181, 0.12);
+
+  /* Toolbar / specific */
+  --toolbar-bg: var(--surface-1);
+  --toolbar-border: var(--border-default);
+  --cell-bg: var(--surface-1);
+  --cell-border: var(--border-subtle);
+  --cell-gutter-bg: var(--surface-2);
+  --sidebar-bg: var(--surface-0);
+  --sidebar-border: var(--border-default);
+  --header-bg: var(--surface-1);
+  --header-border: var(--border-default);
+  --input-bg: var(--surface-0);
+  --input-border: var(--border-default);
+  --input-focus-border: var(--accent-primary);
+}
+
+/* Global resets using theme */
+body {
+  font-family: var(--font-sans);
+  background: var(--surface-2);
+  color: var(--text-primary);
+}
+
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: var(--radius-full);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-muted);
+}

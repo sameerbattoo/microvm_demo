@@ -3,6 +3,7 @@ import Notebook from './components/Notebook'
 import Sidebar from './components/Sidebar'
 import InstancesPanel from './components/InstancesPanel'
 import { ConfirmModal, InputModal } from './components/Modal'
+import { IconZap, IconSun, IconMoon } from './components/Icons'
 import './App.css'
 
 const PROXY_URL = 'http://localhost:8081'
@@ -31,8 +32,15 @@ export default function App() {
       if (saved) {
         const parsed = JSON.parse(saved)
         if (Array.isArray(parsed) && parsed.length > 0) {
-          // Reset transient state — connection needs to be re-established
-          return parsed.map(t => ({ ...t, status: 'disconnected' }))
+          // Keep microvmId for reconnection, reset transient connection state
+          return parsed.map(t => ({
+            ...t,
+            status: 'disconnected',
+            microvmEndpoint: null,
+            microvmRealEndpoint: null,
+            // Keep microvmId so we can auto-reconnect
+            mode: null,
+          }))
         }
       }
     } catch {}
@@ -48,14 +56,54 @@ export default function App() {
   const [instances, setInstances] = useState({})
   const [uploadedFiles, setUploadedFiles] = useState([])
 
-  // Persist tabs to localStorage
+  // Persist tabs to localStorage (strip large binary data, keep cell code + text output)
   useEffect(() => {
-    localStorage.setItem('microvm-notebooks', JSON.stringify(tabs))
+    const toSave = tabs.map(({ _loadedCells, ...tab }) => {
+      // Persist cells with code and text outputs, but strip base64 images
+      const cells = (tab._cells || []).map(c => ({
+        id: c.id,
+        code: c.code || '',
+        output: c.output || null,
+        error: c.error || null,
+        html: c.html || null,
+        image: null, // Strip base64 images (too large for localStorage)
+        status: c.output || c.error || c.html ? 'success' : 'idle',
+        executionNumber: c.executionNumber || null,
+        executionTime: c.executionTime || null,
+      }))
+      return { ...tab, _cells: cells.length > 0 ? cells : undefined }
+    })
+    try {
+      localStorage.setItem('microvm-notebooks', JSON.stringify(toSave))
+    } catch (e) {
+      // If localStorage is full (quota exceeded), save without outputs
+      const minimal = tabs.map(({ _cells, _loadedCells, ...rest }) => ({
+        ...rest,
+        _cells: (_cells || []).map(c => ({ id: c.id, code: c.code || '', output: null, error: null, html: null, image: null, status: 'idle', executionNumber: null, executionTime: null })),
+      }))
+      try {
+        localStorage.setItem('microvm-notebooks', JSON.stringify(minimal))
+      } catch {}
+    }
   }, [tabs])
 
   useEffect(() => {
     localStorage.setItem('microvm-active-tab', JSON.stringify(activeTabId))
   }, [activeTabId])
+
+  // Theme state
+  const [theme, setTheme] = useState(() => {
+    return localStorage.getItem('microvm-theme') || 'dark'
+  })
+
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', theme)
+    localStorage.setItem('microvm-theme', theme)
+  }, [theme])
+
+  const toggleTheme = useCallback(() => {
+    setTheme(prev => prev === 'dark' ? 'light' : 'dark')
+  }, [])
 
   // Modal state
   const [modal, setModal] = useState(null)
@@ -113,6 +161,38 @@ export default function App() {
     const interval = setInterval(fetchInstances, 15000) // Refresh every 15s
     return () => clearInterval(interval)
   }, [fetchInstances])
+
+  // Auto-reconnect tabs that have a saved microvmId
+  useEffect(() => {
+    const reconnect = async () => {
+      try {
+        const resp = await fetch(`${PROXY_URL}/instances`)
+        if (!resp.ok) return
+        const data = await resp.json()
+        const runningInstances = data.instances || {}
+
+        setTabs(prev => prev.map(tab => {
+          if (tab.microvmId && tab.status === 'disconnected') {
+            const inst = runningInstances[tab.microvmId]
+            if (inst && inst.state === 'RUNNING' && inst.endpoint) {
+              // Auto-reconnect with memory spec from API
+              return {
+                ...tab,
+                microvmEndpoint: `${PROXY_URL}/proxy`,
+                microvmRealEndpoint: inst.endpoint,
+                microvmMemory: inst.memory_mib || tab.microvmMemory,
+                status: 'connected',
+                mode: 'microvm',
+              }
+            }
+            // VM not running — keep microvmId as hint but stay disconnected
+          }
+          return tab
+        }))
+      } catch {}
+    }
+    reconnect()
+  }, []) // Run once on mount
 
   // Refresh files when active tab changes or connects
   useEffect(() => {
@@ -173,11 +253,12 @@ export default function App() {
     setTabs(prev => prev.map(t => t.id === tabId ? { ...t, name: newName } : t))
   }, [])
 
-  const attachInstance = useCallback((microvmId, endpoint) => {
+  const attachInstance = useCallback((microvmId, endpoint, memoryMib) => {
     const tab = createTab(`VM-${microvmId.replace('microvm-', '').slice(0, 8)}`)
     tab.microvmId = microvmId
     tab.microvmEndpoint = `${PROXY_URL}/proxy`
     tab.microvmRealEndpoint = endpoint
+    tab.microvmMemory = memoryMib || 4096
     tab.status = 'connected'
     tab.mode = 'microvm'
     setTabs(prev => [...prev, tab])
@@ -327,15 +408,25 @@ export default function App() {
     }
   }, [])
 
+  const insertCode = useCallback((code) => {
+    // Dispatch event for the active notebook to pick up
+    window.dispatchEvent(new CustomEvent('insert-code', { detail: { code } }))
+  }, [])
+
   const attachedIds = tabs.filter(t => t.microvmId).map(t => t.microvmId)
 
   return (
     <div className="app">
       <header className="app-header">
         <div className="app-brand">
-          <span className="brand-icon">⚡</span>
+          <span className="brand-icon"><IconZap width={18} height={18} /></span>
           <span className="brand-text">MicroVM Notebook</span>
-          <span className="brand-sub">Lambda MicroVMs</span>
+          <span className="brand-sub">Python · Lambda MicroVMs</span>
+        </div>
+        <div className="app-header-actions">
+          <button className="theme-toggle-btn" onClick={toggleTheme} title={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}>
+            {theme === 'dark' ? <IconSun width={16} height={16} /> : <IconMoon width={16} height={16} />}
+          </button>
         </div>
       </header>
       <div className="app-body">
@@ -357,6 +448,7 @@ export default function App() {
           onDeleteFile={deleteFile}
           onLoadSample={loadSample}
           onUploadSampleData={uploadSampleData}
+          onInsertCode={insertCode}
           onShowInstances={() => setShowInstances(true)}
         />
         <main className="app-main">

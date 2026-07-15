@@ -80,6 +80,7 @@ export default function ConnectionPanel({ tab, onConnect, onUpdateTab, onDismiss
           microvmId: result.microvmId,
           microvmEndpoint: `${PROXY_URL}/proxy`,
           microvmRealEndpoint: result.endpoint,
+          microvmMemory: parseInt(launchMemory),
           status: 'connected',
           mode: 'microvm',
         })
@@ -100,6 +101,7 @@ export default function ConnectionPanel({ tab, onConnect, onUpdateTab, onDismiss
       microvmId: instance.id,
       microvmEndpoint: `${PROXY_URL}/proxy`,
       microvmRealEndpoint: instance.endpoint,
+      microvmMemory: instance.memory_mib || 4096,
       status: 'connected',
       mode: 'microvm',
     })
@@ -109,9 +111,43 @@ export default function ConnectionPanel({ tab, onConnect, onUpdateTab, onDismiss
   return (
     <div className="connection-panel">
       <div className="connection-card">
-        <div className="connection-title">Connect to Sandbox</div>
+        {/* Show connected status prominently at top when already connected */}
+        {tab.status === 'connected' && (
+          <>
+            <div className="connection-info connection-info-top">
+              <div className="connection-info-content">
+                <div className="connection-info-status">✓ Connected</div>
+                {tab.microvmId && (
+                  <div className="connection-info-details">
+                    <div className="connection-info-row">
+                      <span className="connection-info-label">MicroVM</span>
+                      <code className="connection-info-id">{tab.microvmId}</code>
+                    </div>
+                    <div className="connection-info-row">
+                      <span className="connection-info-label">Spec</span>
+                      <span className="connection-info-spec">
+                        {tab.microvmMemory
+                          ? `${tab.microvmMemory / 1024} GB · ${Math.max(1, tab.microvmMemory / 2048)} vCPU · ARM64`
+                          : 'Fetching...'}
+                      </span>
+                    </div>
+                  </div>
+                )}
+                <div className="connection-info-note">Variables persist across cell executions.</div>
+              </div>
+              <button className="dismiss-btn dismiss-btn-primary" onClick={onDismiss}>Dismiss</button>
+            </div>
+            <div className="connection-divider" />
+          </>
+        )}
+
+        <div className="connection-title">
+          {tab.status === 'connected' ? 'Switch Sandbox' : 'Connect to Sandbox'}
+        </div>
         <div className="connection-desc">
-          Each notebook connects to its own execution sandbox for isolated, stateful Python.
+          {tab.status === 'connected'
+            ? 'Launch a different MicroVM or reconnect to another instance.'
+            : 'Each notebook connects to its own execution sandbox for isolated, stateful Python.'}
         </div>
 
         <div className="connection-modes">
@@ -129,7 +165,7 @@ export default function ConnectionPanel({ tab, onConnect, onUpdateTab, onDismiss
                 disabled={tab.status === 'connecting'}>
                 {tab.status === 'connecting' ? 'Connecting...' : 'Connect to Local'}
               </button>
-              {tab.status === 'connected' && (
+              {tab.status !== 'connected' && (
                 <button className="dismiss-btn" onClick={onDismiss}>Dismiss</button>
               )}
             </div>
@@ -138,9 +174,13 @@ export default function ConnectionPanel({ tab, onConnect, onUpdateTab, onDismiss
 
         {mode === 'microvm' && (
           <div className="connection-form">
-            <div className="connection-hint">
-              Launch a new MicroVM or attach to an existing available instance.
-            </div>
+            {tab.status !== 'connected' && (
+              <div className="connection-hint">
+                {tab.microvmId
+                  ? <>Previously connected to <code>{tab.microvmId.replace('microvm-', '').slice(0, 12)}...</code> — launch a new MicroVM or re-attach below.</>
+                  : 'Launch a new MicroVM or attach to an existing available instance.'}
+              </div>
+            )}
 
             <div className="launch-config">
               <div className="launch-config-title">Instance Specification</div>
@@ -151,8 +191,6 @@ export default function ConnectionPanel({ tab, onConnect, onUpdateTab, onDismiss
                     <option value="2048">2 GB · 1 vCPU</option>
                     <option value="4096">4 GB · 2 vCPU</option>
                     <option value="8192">8 GB · 4 vCPU</option>
-                    <option value="16384">16 GB · 8 vCPU</option>
-                    <option value="32768">32 GB · 16 vCPU</option>
                   </select>
                 </div>
                 <div className="launch-spec-item">
@@ -181,7 +219,7 @@ export default function ConnectionPanel({ tab, onConnect, onUpdateTab, onDismiss
               >
                 {tab.status === 'launching' ? '⏳ Launching...' : '🚀 Launch New MicroVM'}
               </button>
-              {tab.status === 'connected' && (
+              {tab.status !== 'connected' && (
                 <button className="dismiss-btn" onClick={onDismiss}>Dismiss</button>
               )}
             </div>
@@ -220,13 +258,6 @@ export default function ConnectionPanel({ tab, onConnect, onUpdateTab, onDismiss
         {error && (
           <div className="connection-error">
             {error}
-          </div>
-        )}
-
-        {tab.status === 'connected' && (
-          <div className="connection-info">
-            ✓ Connected. Variables persist across cell executions.
-            {tab.microvmId && <span className="connection-id"> ({tab.microvmId})</span>}
           </div>
         )}
       </div>

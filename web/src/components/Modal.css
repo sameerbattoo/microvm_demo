@@ -2,29 +2,31 @@
   position: fixed;
   inset: 0;
   background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(4px);
   display: flex;
   align-items: center;
   justify-content: center;
   z-index: 200;
-  animation: fadeIn 0.12s ease;
+  animation: modalFadeIn 0.12s ease;
 }
 
-@keyframes fadeIn {
+@keyframes modalFadeIn {
   from { opacity: 0; }
   to { opacity: 1; }
 }
 
 .modal-card {
-  background: #1e1e2e;
-  border: 1px solid #313244;
-  border-radius: 12px;
+  background: var(--surface-2);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-xl);
   width: 90%;
   max-width: 440px;
-  padding: 20px;
-  animation: scaleIn 0.15s ease;
+  padding: var(--space-5);
+  box-shadow: var(--shadow-lg);
+  animation: modalScaleIn 0.15s ease;
 }
 
-@keyframes scaleIn {
+@keyframes modalScaleIn {
   from { transform: scale(0.95); opacity: 0; }
   to { transform: scale(1); opacity: 1; }
 }
@@ -32,113 +34,115 @@
 .modal-title {
   font-size: 15px;
   font-weight: 600;
-  color: #cdd6f4;
-  margin-bottom: 12px;
+  color: var(--text-primary);
+  margin-bottom: var(--space-3);
 }
 
 .modal-body {
-  font-size: 13px;
-  color: #a6adc8;
-  line-height: 1.5;
+  font-size: var(--font-size-base);
+  color: var(--text-secondary);
+  line-height: var(--line-height-normal);
 }
 
 .modal-message {
-  margin: 0 0 12px;
+  margin: 0 0 var(--space-3);
 }
 
 .modal-actions {
   display: flex;
-  gap: 8px;
+  gap: var(--space-2);
   justify-content: flex-end;
-  margin-top: 16px;
+  margin-top: var(--space-4);
 }
 
 .modal-btn {
   padding: 7px 16px;
-  border-radius: 6px;
-  font-size: 13px;
+  border-radius: var(--radius-md);
+  font-size: var(--font-size-base);
   cursor: pointer;
   border: 1px solid;
-  transition: all 0.12s;
+  transition: all var(--transition-fast);
+  font-weight: 500;
 }
 
 .modal-btn-cancel {
-  background: #313244;
-  border-color: #45475a;
-  color: #a6adc8;
+  background: var(--surface-4);
+  border-color: var(--border-default);
+  color: var(--text-secondary);
 }
 
 .modal-btn-cancel:hover {
-  background: #45475a;
-  color: #cdd6f4;
+  background: var(--surface-3);
+  color: var(--text-primary);
 }
 
 .modal-btn-confirm {
-  background: #89b4fa;
-  border-color: #89b4fa;
-  color: #1e1e2e;
-  font-weight: 500;
+  background: var(--accent-primary);
+  border-color: var(--accent-primary);
+  color: var(--text-inverse);
+  font-weight: 600;
 }
 
 .modal-btn-confirm:hover {
-  background: #b4d0fb;
+  filter: brightness(1.1);
 }
 
 .modal-btn-danger {
-  background: #f38ba8;
-  border-color: #f38ba8;
-  color: #1e1e2e;
-  font-weight: 500;
+  background: var(--accent-danger);
+  border-color: var(--accent-danger);
+  color: var(--text-inverse);
+  font-weight: 600;
 }
 
 .modal-btn-danger:hover {
-  background: #f5a3b8;
+  filter: brightness(1.1);
 }
 
 .modal-input-group {
-  margin-bottom: 12px;
+  margin-bottom: var(--space-3);
 }
 
 .modal-label {
   display: block;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   font-weight: 500;
-  color: #a6adc8;
-  margin-bottom: 4px;
+  color: var(--text-secondary);
+  margin-bottom: var(--space-1);
 }
 
 .modal-input {
   width: 100%;
-  background: #11111b;
-  border: 1px solid #313244;
-  border-radius: 6px;
-  padding: 8px 12px;
-  color: #cdd6f4;
-  font-size: 13px;
+  background: var(--input-bg);
+  border: 1px solid var(--input-border);
+  border-radius: var(--radius-md);
+  padding: var(--space-2) var(--space-3);
+  color: var(--text-primary);
+  font-size: var(--font-size-base);
   outline: none;
-  transition: border-color 0.15s;
+  transition: border-color var(--transition-fast);
 }
 
 .modal-input:focus {
-  border-color: #89b4fa;
+  border-color: var(--input-focus-border);
+  box-shadow: var(--shadow-glow-blue);
 }
 
 .modal-input::placeholder {
-  color: #45475a;
+  color: var(--text-muted);
 }
 
 .modal-input-hint {
-  font-size: 11px;
-  color: #45475a;
+  font-size: var(--font-size-xs);
+  color: var(--text-muted);
   margin-top: 3px;
 }
 
 .modal-warning {
-  background: rgba(249, 226, 175, 0.08);
-  border: 1px solid rgba(249, 226, 175, 0.3);
-  border-radius: 6px;
-  padding: 10px;
-  font-size: 12px;
-  color: #f9e2af;
-  margin-top: 8px;
+  background: var(--accent-warning-subtle);
+  border: 1px solid var(--accent-warning);
+  border-radius: var(--radius-md);
+  padding: var(--space-3);
+  font-size: var(--font-size-sm);
+  color: var(--accent-warning);
+  margin-top: var(--space-2);
 }

@@ -1,5 +1,8 @@
-import { useState } from 'react'
+import { useState, useEffect, useCallback } from 'react'
+import { IconUpload, IconFile, IconDatabase, IconBucket, IconRefresh, IconPlus, IconX, IconChevronDown, IconChevronRight, IconNotebook, IconServer } from './Icons'
 import './Sidebar.css'
+
+const PROXY_URL = 'http://localhost:8081'
 
 export default function Sidebar({
   tabs,
@@ -19,13 +22,23 @@ export default function Sidebar({
   onDeleteFile,
   onLoadSample,
   onUploadSampleData,
+  onInsertCode,
   onShowInstances,
 }) {
   const [notebooksExpanded, setNotebooksExpanded] = useState(true)
-  const [filesExpanded, setFilesExpanded] = useState(false)
-  const [samplesExpanded, setSamplesExpanded] = useState(true)
+  const [dataSourcesExpanded, setDataSourcesExpanded] = useState(true)
+  const [sampleNotebooksExpanded, setSampleNotebooksExpanded] = useState(true)
+  const [sampleDataExpanded, setSampleDataExpanded] = useState(false)
+  const [s3Expanded, setS3Expanded] = useState(false)
+  const [dynamoExpanded, setDynamoExpanded] = useState(false)
   const [editingId, setEditingId] = useState(null)
   const [editValue, setEditValue] = useState('')
+
+  // External data sources state
+  const [s3Files, setS3Files] = useState([])
+  const [dynamoTables, setDynamoTables] = useState([])
+  const [dsLoading, setDsLoading] = useState(false)
+  const [dsFetched, setDsFetched] = useState(false)
 
   const startRename = (e, tab) => {
     e.stopPropagation()
@@ -40,6 +53,27 @@ export default function Sidebar({
     setEditingId(null)
   }
 
+  const fetchDataSources = useCallback(async () => {
+    setDsLoading(true)
+    try {
+      const resp = await fetch(`${PROXY_URL}/datasources`)
+      if (resp.ok) {
+        const data = await resp.json()
+        setS3Files(data.s3 || [])
+        setDynamoTables(data.dynamodb || [])
+      }
+    } catch {}
+    setDsLoading(false)
+    setDsFetched(true)
+  }, [])
+
+  // Lazy-load data sources when section is expanded
+  useEffect(() => {
+    if (dataSourcesExpanded && !dsFetched) {
+      fetchDataSources()
+    }
+  }, [dataSourcesExpanded, dsFetched, fetchDataSources])
+
   const instanceList = Object.entries(instances)
 
   const samples = [
@@ -49,6 +83,13 @@ export default function Sidebar({
     { id: 'statistical_analysis', name: 'Statistical Analysis', icon: '🔬', file: '/samples/statistical_analysis.notebook.json' },
     { id: 'public_apis', name: 'Public API Data Analysis', icon: '🌐', file: '/samples/public_apis.notebook.json' },
     { id: 'aws_data_sources', name: 'AWS Data Sources', icon: '☁️', file: '/samples/aws_data_sources.notebook.json' },
+  ]
+
+  const sampleDataFiles = [
+    { name: 'sales_data.csv', size: '500 rows', desc: 'Orders with products, regions, discounts' },
+    { name: 'customers.csv', size: '200 rows', desc: 'Customer data (some messy values)' },
+    { name: 'web_traffic.csv', size: '730 rows', desc: 'Daily visitors over 2 years' },
+    { name: 'ab_test_results.csv', size: '1000 rows', desc: 'A/B test conversion data' },
   ]
 
   const handleFileUpload = () => {
@@ -69,15 +110,17 @@ export default function Sidebar({
       {/* Notebooks Section */}
       <div className="sidebar-section">
         <div className="sidebar-section-header" onClick={() => setNotebooksExpanded(!notebooksExpanded)}>
-          <span className="sidebar-chevron">{notebooksExpanded ? '▾' : '▸'}</span>
-          <span className="sidebar-section-icon">📓</span>
+          <span className="sidebar-chevron">
+            {notebooksExpanded ? <IconChevronDown /> : <IconChevronRight />}
+          </span>
+          <span className="sidebar-section-icon sidebar-icon-notebooks"><IconNotebook width={14} height={14} /></span>
           <span className="sidebar-section-title">Notebooks</span>
           <button
             className="sidebar-section-action"
             onClick={(e) => { e.stopPropagation(); onNewNotebook() }}
             title="New notebook"
           >
-            +
+            <IconPlus width={14} height={14} />
           </button>
         </div>
         {notebooksExpanded && (
@@ -112,7 +155,7 @@ export default function Sidebar({
                   onClick={(e) => { e.stopPropagation(); onCloseTab(tab.id) }}
                   title="Close"
                 >
-                  ×
+                  <IconX width={12} height={12} />
                 </button>
               </div>
             ))}
@@ -123,89 +166,171 @@ export default function Sidebar({
         )}
       </div>
 
-      {/* Files Section */}
+      {/* Data Sources Section (unified: uploads + samples + S3 + DynamoDB) */}
       <div className="sidebar-section">
-        <div className="sidebar-section-header" onClick={() => setFilesExpanded(!filesExpanded)}>
-          <span className="sidebar-chevron">{filesExpanded ? '▾' : '▸'}</span>
-          <span className="sidebar-section-icon">📁</span>
-          <span className="sidebar-section-title">Files</span>
+        <div className="sidebar-section-header" onClick={() => setDataSourcesExpanded(!dataSourcesExpanded)}>
+          <span className="sidebar-chevron">
+            {dataSourcesExpanded ? <IconChevronDown /> : <IconChevronRight />}
+          </span>
+          <span className="sidebar-section-icon sidebar-icon-datasources"><IconDatabase width={14} height={14} /></span>
+          <span className="sidebar-section-title">Data Sources</span>
+          <button
+            className="sidebar-section-action"
+            onClick={(e) => { e.stopPropagation(); fetchDataSources() }}
+            title="Refresh data sources"
+          >
+            <IconRefresh width={14} height={14} />
+          </button>
           <button
             className="sidebar-section-action"
             onClick={(e) => { e.stopPropagation(); handleFileUpload() }}
             title="Upload file"
           >
-            ↑
+            <IconUpload width={14} height={14} />
           </button>
         </div>
-        {filesExpanded && (
+        {dataSourcesExpanded && (
           <div className="sidebar-section-body">
-            {uploadedFiles.map(file => (
-              <div key={file.name} className="sidebar-file-item">
-                <span className="sidebar-file-icon">
-                  {file.name.endsWith('.csv') ? '📄' :
-                   file.name.match(/\.xlsx?$/) ? '📊' :
-                   file.name.endsWith('.parquet') ? '🗂' :
-                   file.name.endsWith('.json') ? '{ }' : '📎'}
-                </span>
-                <div className="sidebar-file-info">
-                  <span className="sidebar-file-name" title={file.name}>{file.name}</span>
-                  <span className="sidebar-file-meta">
-                    {file.size} · {file.variable || 'uploading...'}
-                  </span>
-                </div>
-                <button
-                  className="sidebar-file-delete"
-                  onClick={() => onDeleteFile(file.name)}
-                  title="Remove"
-                >
-                  ×
-                </button>
-              </div>
-            ))}
-            {uploadedFiles.length === 0 && (
-              <div className="sidebar-empty">
-                No files uploaded.
-                <br />
-                <span className="sidebar-hint">Upload CSV, Excel, Parquet, or JSON files to use in your code.</span>
+            {/* Uploaded Files */}
+            <div className="sidebar-subheader sidebar-subheader-toggle">
+              <IconUpload width={11} height={11} className="sidebar-icon-file-csv" /> Uploaded Files
+            </div>
+            {uploadedFiles.length > 0 ? (
+              <>
+                {uploadedFiles.map(file => (
+                  <div
+                    key={file.name}
+                    className="sidebar-file-item sidebar-ds-clickable"
+                    onClick={() => onInsertCode && onInsertCode(`import pandas as pd\n\n${file.variable || 'df'} = pd.read_csv('/tmp/${file.name}')\n${file.variable || 'df'}.head()`)}
+                    title={`Click to insert: pd.read_csv('/tmp/${file.name}')`}
+                  >
+                    <span className="sidebar-file-icon sidebar-icon-file-csv">
+                      <IconFile width={13} height={13} />
+                    </span>
+                    <div className="sidebar-file-info">
+                      <span className="sidebar-file-name" title={file.name}>{file.name}</span>
+                      <span className="sidebar-file-meta">
+                        {file.size} · {file.variable || 'uploading...'}
+                      </span>
+                    </div>
+                    <button
+                      className="sidebar-file-delete"
+                      onClick={(e) => { e.stopPropagation(); onDeleteFile(file.name) }}
+                      title="Remove"
+                    >
+                      <IconX width={11} height={11} />
+                    </button>
+                  </div>
+                ))}
+              </>
+            ) : (
+              <div className="sidebar-empty-inline">
+                No files uploaded. Click ↑ to add files.
               </div>
             )}
-            {uploadedFiles.length > 0 && (
-              <div className="sidebar-file-hint">
-                Use in code: <code>df = pd.read_csv('/tmp/filename.csv')</code>
-              </div>
+
+            {/* Sample Data */}
+            <div className="sidebar-subheader sidebar-subheader-toggle" onClick={() => setSampleDataExpanded(!sampleDataExpanded)}>
+              <IconFile width={11} height={11} /> Sample Data
+              <span className="sidebar-subheader-chevron">{sampleDataExpanded ? '▾' : '▸'}</span>
+            </div>
+            {sampleDataExpanded && (
+              <>
+                {sampleDataFiles.map(sample => (
+                  <div
+                    key={sample.name}
+                    className="sidebar-file-item sidebar-sample-data"
+                    onClick={() => onUploadSampleData(sample.name)}
+                    title={sample.desc}
+                  >
+                    <span className="sidebar-file-icon sidebar-icon-file-csv">
+                      <IconFile width={13} height={13} />
+                    </span>
+                    <div className="sidebar-file-info">
+                      <span className="sidebar-file-name">{sample.name}</span>
+                      <span className="sidebar-file-meta">{sample.size}</span>
+                    </div>
+                  </div>
+                ))}
+              </>
             )}
-            <div className="sidebar-subheader">Sample Data</div>
-            {[
-              { name: 'sales_data.csv', size: '500 rows', desc: 'Orders with products, regions, discounts' },
-              { name: 'customers.csv', size: '200 rows', desc: 'Customer data (some messy values)' },
-              { name: 'web_traffic.csv', size: '730 rows', desc: 'Daily visitors over 2 years' },
-              { name: 'ab_test_results.csv', size: '1000 rows', desc: 'A/B test conversion data' },
-            ].map(sample => (
-              <div
-                key={sample.name}
-                className="sidebar-file-item sidebar-sample-data"
-                onClick={() => onUploadSampleData(sample.name)}
-                title={sample.desc}
-              >
-                <span className="sidebar-file-icon">📄</span>
-                <div className="sidebar-file-info">
-                  <span className="sidebar-file-name">{sample.name}</span>
-                  <span className="sidebar-file-meta">{sample.size}</span>
-                </div>
-              </div>
-            ))}
+
+            {/* S3 Bucket */}
+            <div className="sidebar-subheader sidebar-subheader-toggle" onClick={() => setS3Expanded(!s3Expanded)}>
+              <IconBucket width={11} height={11} className="sidebar-icon-s3" /> S3 Bucket
+              {s3Files.length > 0 && <span className="sidebar-subheader-count">{s3Files.length}</span>}
+              <span className="sidebar-subheader-chevron">{s3Expanded ? '▾' : '▸'}</span>
+            </div>
+            {s3Expanded && (
+              <>
+                {dsLoading && <div className="sidebar-empty-inline">Loading...</div>}
+                {!dsLoading && s3Files.length === 0 && (
+                  <div className="sidebar-empty-inline">No S3 files found.</div>
+                )}
+                {s3Files.map(file => (
+                  <div
+                    key={file.key}
+                    className="sidebar-file-item sidebar-ds-clickable"
+                    onClick={() => onInsertCode && onInsertCode(`import pandas as pd\nimport boto3\nfrom io import BytesIO\nimport warnings\nwarnings.filterwarnings('ignore', category=DeprecationWarning)\n\ns3 = boto3.client('s3')\nobj = s3.get_object(Bucket='${file.bucket}', Key='${file.key}')\ndf = pd.read_csv(BytesIO(obj['Body'].read()))\ndf.head()`)}
+                    title={`Click to insert code: read '${file.key}' from S3`}
+                  >
+                    <span className="sidebar-file-icon sidebar-icon-s3">
+                      <IconFile width={13} height={13} />
+                    </span>
+                    <div className="sidebar-file-info">
+                      <span className="sidebar-file-name">{file.key}</span>
+                      <span className="sidebar-file-meta">{file.size}</span>
+                    </div>
+                  </div>
+                ))}
+              </>
+            )}
+
+            {/* DynamoDB */}
+            <div className="sidebar-subheader sidebar-subheader-toggle" onClick={() => setDynamoExpanded(!dynamoExpanded)}>
+              <IconDatabase width={11} height={11} className="sidebar-icon-dynamodb" /> DynamoDB
+              {dynamoTables.length > 0 && <span className="sidebar-subheader-count">{dynamoTables.length}</span>}
+              <span className="sidebar-subheader-chevron">{dynamoExpanded ? '▾' : '▸'}</span>
+            </div>
+            {dynamoExpanded && (
+              <>
+                {dsLoading && <div className="sidebar-empty-inline">Loading...</div>}
+                {!dsLoading && dynamoTables.length === 0 && (
+                  <div className="sidebar-empty-inline">No DynamoDB tables found.</div>
+                )}
+                {dynamoTables.map(table => (
+                  <div
+                    key={table.name}
+                    className="sidebar-file-item sidebar-ds-clickable"
+                    onClick={() => onInsertCode && onInsertCode(`import boto3\nimport pandas as pd\nimport warnings\nwarnings.filterwarnings('ignore', category=DeprecationWarning)\n\ndynamodb = boto3.resource('dynamodb', region_name='${table.region}')\ntable = dynamodb.Table('${table.name}')\nresponse = table.scan()\ndf = pd.DataFrame(response['Items'])\ndf.head()`)}
+                    title={`Click to insert code for table '${table.name}'`}
+                  >
+                    <span className="sidebar-file-icon sidebar-icon-dynamodb">
+                      <IconDatabase width={13} height={13} />
+                    </span>
+                    <div className="sidebar-file-info">
+                      <span className="sidebar-file-name">{table.name}</span>
+                      <span className="sidebar-file-meta">{table.item_count} items · {table.region}</span>
+                    </div>
+                  </div>
+                ))}
+              </>
+            )}
+
           </div>
         )}
       </div>
 
-      {/* Samples Section */}
+      {/* Sample Notebooks Section */}
       <div className="sidebar-section">
-        <div className="sidebar-section-header" onClick={() => setSamplesExpanded(!samplesExpanded)}>
-          <span className="sidebar-chevron">{samplesExpanded ? '▾' : '▸'}</span>
+        <div className="sidebar-section-header" onClick={() => setSampleNotebooksExpanded(!sampleNotebooksExpanded)}>
+          <span className="sidebar-chevron">
+            {sampleNotebooksExpanded ? <IconChevronDown /> : <IconChevronRight />}
+          </span>
           <span className="sidebar-section-icon">💡</span>
-          <span className="sidebar-section-title">Samples</span>
+          <span className="sidebar-section-title">Sample Notebooks</span>
         </div>
-        {samplesExpanded && (
+        {sampleNotebooksExpanded && (
           <div className="sidebar-section-body">
             {samples.map(sample => (
               <div
@@ -223,7 +348,9 @@ export default function Sidebar({
 
       {/* MicroVM Footer */}
       <div className="sidebar-footer" onClick={onShowInstances}>
-        <span className="sidebar-footer-icon">☁️</span>
+        <span className="sidebar-footer-icon sidebar-icon-microvms">
+          <IconServer width={14} height={14} />
+        </span>
         <span className="sidebar-footer-text">MicroVMs</span>
         <span className="sidebar-footer-count">
           {instanceList.filter(([,i]) => i.state === 'RUNNING').length} running

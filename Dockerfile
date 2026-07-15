@@ -1,9 +1,9 @@
 FROM public.ecr.aws/lambda/microvms:al2023-minimal
 
-RUN dnf install -y python3 python3-pip git && dnf clean all
+RUN dnf install -y python3.11 python3.11-pip git && dnf clean all
 
 # Use a venv to keep packages isolated
-RUN python3 -m venv /app/venv
+RUN python3.11 -m venv /app/venv
 ENV PATH="/app/venv/bin:$PATH"
 
 # Install sandbox server dependencies

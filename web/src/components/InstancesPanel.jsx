@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
+import { IconRefresh, IconX } from './Icons'
 import './InstancesPanel.css'
 
 const PROXY_URL = 'http://localhost:8081'
@@ -72,8 +73,8 @@ export default function InstancesPanel({ onClose, onAttach, attachedIds, tabs = 
     })
   }
 
-  const handleAttach = (microvmId, endpoint) => {
-    onAttach(microvmId, endpoint)
+  const handleAttach = (microvmId, endpoint, memoryMib) => {
+    onAttach(microvmId, endpoint, memoryMib)
     onClose()
   }
 
@@ -103,8 +104,8 @@ export default function InstancesPanel({ onClose, onAttach, attachedIds, tabs = 
         <div className="instances-header">
           <h3>Lambda MicroVM Instances</h3>
           <div className="instances-header-actions">
-            <button className="instances-refresh-btn" onClick={fetchInstances}>↻ Refresh</button>
-            <button className="instances-close-btn" onClick={onClose}>✕</button>
+            <button className="instances-refresh-btn" onClick={fetchInstances}><IconRefresh width={14} height={14} /> Refresh</button>
+            <button className="instances-close-btn" onClick={onClose}><IconX width={16} height={16} /></button>
           </div>
         </div>
 
@@ -115,14 +116,22 @@ export default function InstancesPanel({ onClose, onAttach, attachedIds, tabs = 
           <div className="instances-empty">No MicroVM instances found.</div>
         )}
 
-        {!loading && instanceList.length > 0 && (
+        {!loading && instanceList.length > 0 && (() => {
+          // Check if any row has action buttons (not all attached)
+          const hasAnyActions = instanceList.some(([id, inst]) => {
+            const isAttached = attachedIds.includes(id)
+            const state = inst.state || 'UNKNOWN'
+            return (state === 'RUNNING' && !isAttached) || state === 'SUSPENDED'
+          })
+
+          return (
           <div className="instances-list">
-            <div className="instances-table-header">
+            <div className={`instances-table-header ${!hasAnyActions ? 'no-actions' : ''}`}>
               <span>MicroVM ID</span>
               <span>Notebook</span>
               <span>Spec</span>
               <span>State</span>
-              <span>Actions</span>
+              {hasAnyActions && <span>Actions</span>}
             </div>
             {instanceList.map(([id, inst]) => {
               const isAttached = attachedIds.includes(id)
@@ -131,17 +140,22 @@ export default function InstancesPanel({ onClose, onAttach, attachedIds, tabs = 
               const state = inst.state || 'UNKNOWN'
 
               return (
-                <div key={id} className={`instances-row ${isAttached ? 'instances-row-attached' : ''}`}>
+                <div key={id} className={`instances-row ${isAttached ? 'instances-row-attached' : ''} ${!hasAnyActions ? 'no-actions' : ''}`}>
                   <span className="inst-id-text">{id}</span>
                   <span>{attachedTab ? attachedTab.name : '—'}</span>
-                  <span className="inst-spec-text">4 GB · 2 vCPU</span>
+                  <span className="inst-spec-text">
+                    {inst.memory_mib
+                      ? `${inst.memory_mib / 1024} GB · ${Math.max(1, inst.memory_mib / 2048)} vCPU`
+                      : '4 GB · 2 vCPU'}
+                  </span>
                   <span>{getStatusBadge(id, state)}</span>
+                  {hasAnyActions && (
                   <span className="inst-col-actions">
                     {/* Attach: only if running and not already attached */}
                     {state === 'RUNNING' && !isAttached && (
                       <button
                         className="inst-action-btn inst-attach-btn"
-                        onClick={() => handleAttach(id, inst.endpoint)}
+                        onClick={() => handleAttach(id, inst.endpoint, inst.memory_mib)}
                         disabled={isActioning}
                       >
                         Attach
@@ -168,11 +182,13 @@ export default function InstancesPanel({ onClose, onAttach, attachedIds, tabs = 
                       </button>
                     )}
                   </span>
+                  )}
                 </div>
               )
             })}
           </div>
-        )}
+          )
+        })()}
 
         <div className="instances-footer">
           <span className="instances-count">{instanceList.length} instance(s)</span>

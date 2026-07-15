@@ -1,6 +1,7 @@
 # Sandbox server
 fastapi==0.115.12
 uvicorn==0.34.2
+httpx            # Async HTTP client (used by proxy for MicroVM forwarding)
 
 # Pre-baked data science packages (available immediately on launch)
 pandas
@@ -18,5 +19,5 @@ pyarrow         # Parquet read/write
 # Statistical analysis
 scipy
 
-# AWS SDK (for DynamoDB, S3 access from within the MicroVM)
+# AWS SDK (for DynamoDB, S3 access from within the MicroVM + Bedrock AI)
 boto3

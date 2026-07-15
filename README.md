@@ -1,7 +1,11 @@
 # Lambda MicroVM Notebook
 
-A full-featured notebook web application demonstrating **AWS Lambda MicroVMs** as isolated
+A **Python notebook** web application demonstrating **AWS Lambda MicroVMs** as isolated
 code execution sandboxes — the primary use case for this new serverless compute primitive.
+
+> **Note:** This is a proof-of-concept / demo application. It currently supports Python as the
+> execution language but the architecture is extensible to other runtimes (R, Node.js, Julia, etc.)
+> by swapping the executor and MicroVM image.
 
 ## What This Is
 
@@ -20,25 +24,45 @@ on Lambda MicroVMs. Each notebook session gets its own Firecracker VM providing:
 
 ### Notebook UI
 - Code cells with `Shift+Enter` execution
+- **AI-powered code generation** — Toggle cells to AI mode, describe what you want in plain English, and generate Python code using Amazon Bedrock (Claude Sonnet)
+- **Run All** — Execute all cells sequentially with one click
 - Sequential execution queue (prevents race conditions)
 - Inline DataFrame table rendering
 - Inline matplotlib/chart image display
 - Package installation from toolbar
 - Save/Open notebooks (preserves code, output, tables, and charts)
-- Tab support for multiple notebooks
+- Tab support for multiple notebooks (cells persist across tab switches)
+
+### AI Code Generation
+- Each cell has a **Code | ✨ AI** mode toggle
+- In AI mode, describe what you want in natural language and hit Enter (or click Generate)
+- The AI receives **full notebook context** — all prior cells, their outputs, and cell position — for accurate, contextual code generation
+- Generated code shows in a **preview panel** with Accept/Discard buttons
+- Accepting inserts the code and switches back to Code mode for execution
+- Uses **Amazon Bedrock Converse API** with Claude Sonnet (configurable model)
+- Auto-detects AWS credential availability — AI toggle hidden when no credentials are configured
+- Works in both local dev and MicroVM modes
 
 ### Sidebar (JupyterLab-style)
 - **📓 Notebooks** — Create, rename (double-click), switch, close
-- **📁 Files** — Upload data files (CSV, Excel, Parquet, JSON), auto-loaded as DataFrames
-- **☁️ MicroVMs** — Live instance state (Running/Suspended), Attach, Resume, Terminate
+- **📁 Data Sources** — Unified panel for uploaded files, sample data, S3 bucket files, DynamoDB tables. Click any item to insert read code into the active cell.
+- **💡 Sample Notebooks** — Pre-built analysis notebooks (Sales, Time Series, Statistical, APIs, AWS)
+- **☁️ MicroVMs** — Footer showing live instance count; click to manage (Attach, Resume, Terminate)
 
 ### MicroVM Management
 - Auto-detect proxy availability
-- Launch new MicroVMs from the UI
+- Launch new MicroVMs from the UI (2 GB / 4 GB / 8 GB tiers)
 - Attach existing running instances to notebooks
 - Resume suspended instances
 - Terminate instances
 - Live state refresh every 15 seconds
+- Auto-reconnect on page refresh (remembers which VM each notebook was connected to)
+
+### UI & Theming
+- **Light/Dark theme toggle** — persists across sessions
+- **Python syntax highlighting** — Prism.js-powered with One Dark-inspired colors
+- **SVG icons** throughout (Lucide-style, consistent stroke weight)
+- **Centralized CSS design tokens** — all colors, spacing, shadows via CSS custom properties
 
 ## Architecture
 
@@ -62,15 +86,18 @@ on Lambda MicroVMs. Each notebook session gets its own Firecracker VM providing:
 │                      │           │  POST /launch    — provision VM   │
 │  Sidebar + Cells     │           │  POST /terminate — destroy VM     │
 │                      │           │  POST /resume    — wake suspended │
-│                      │           │  GET  /instances — list all VMs   │
+│  AI Mode (per cell)  │           │  GET  /instances — list all VMs   │
 │                      │           │  */proxy/*       — auth + forward │
-└──────────────────────┘           └────────────┬──────────────────────┘
-                                                │ HTTPS + JWE token
-                                                ▼
+│                      │           │  POST /ai/generate — AI code gen  │
+│                      │           │  GET  /ai/config   — AI status    │
+└──────────────────────┘           └────────────┬──────────┬───────────┘
+                                                │          │
+                                   HTTPS + JWE  │          │ Bedrock
+                                                ▼          ▼
            ┌──────────────────┐  ┌──────────────────┐  ┌──────────────────┐
-           │  MicroVM (Tab 1) │  │  MicroVM (Tab 2) │  │  MicroVM (Tab 3) │
-           │  Firecracker VM  │  │  Firecracker VM  │  │  Firecracker VM  │
-           │  FastAPI+Executor│  │  FastAPI+Executor│  │  FastAPI+Executor│
+           │  MicroVM (Tab 1) │  │  MicroVM (Tab 2) │  │  Amazon Bedrock  │
+           │  Firecracker VM  │  │  Firecracker VM  │  │  Claude Sonnet   │
+           │  FastAPI+Executor│  │  FastAPI+Executor│  │  (Converse API)  │
            └──────────────────┘  └──────────────────┘  └──────────────────┘
 ```
 
@@ -159,22 +186,39 @@ Subsequent runs skip the build and launch in seconds.
 
 ### Cells
 - **Execute** — `Shift+Enter` or click ▶
+- **Run All** — `▶▶ Run All` in toolbar executes all cells sequentially
 - **Add cell** — `+ Cell` button or `+` on any cell
 - **Delete cell** — 🗑 button (appears on hover)
+
+### AI Code Generation
+- Click the **✨ AI** toggle on any cell to switch to AI mode
+- Type a natural language description (e.g. "Load the CSV and plot revenue by month")
+- Press `Enter` to generate, `Esc` to cancel
+- Review the generated code in the preview panel
+- Click **✓ Accept** to insert it into the cell, or **✗ Discard** to try again
+- The AI model is configurable via environment variable:
+  ```bash
+  export BEDROCK_MODEL_ID="us.anthropic.claude-sonnet-4-6"  # default
+  export BEDROCK_REGION="us-west-2"                          # default
+  ```
 
 ### Rich Output
 - **DataFrames** — Type `df` or `df.head()` as the last line → renders as a styled table
 - **Plots** — `plt.plot(...)` or `plt.show()` → renders inline as PNG
 - **Text** — `print(...)` → monospace text output
 
-### Files
-- Click `↑` in the Files sidebar section to upload
+### Files & Data Sources
+- Click `↑` in the Data Sources sidebar section to upload files
 - Supported: `.csv`, `.xlsx`, `.xls`, `.parquet`, `.json`
 - Files auto-load as pandas DataFrames (variable name derived from filename)
-- Also available at `/tmp/filename.ext` for manual loading
+- **Click any data source** (uploaded file, S3 object, DynamoDB table) to insert ready-to-run code into the active cell
+- S3 and DynamoDB sources are auto-discovered from your AWS account
 
 ### Packages
-- Click `📦 Install` in toolbar → type package name → Enter
+- Click **Packages** in the toolbar to open the Package Manager
+- View all installed packages with version numbers
+- Install new packages (supports version pinning: `scikit-learn==1.5.1`)
+- Package list reflects what's installed on the connected MicroVM
 - Pre-baked in image: `pandas`, `numpy`, `polars`, `matplotlib`, `requests`, `psutil`, `openpyxl`, `xlrd`, `pyarrow`
 - Runtime installs persist across suspend/resume
 
@@ -184,39 +228,60 @@ Subsequent runs skip the build and launch in seconds.
 - **Rename** — Double-click the notebook name in the sidebar
 
 ### MicroVM Instances
-- **Launch** — Click "🚀 Launch New MicroVM" in the connection panel
+- **Launch** — Click "🚀 Launch New MicroVM" in the connection panel (select 2/4/8 GB tier)
 - **Attach** — Click ⊕ on a running instance in the sidebar to open it in a new notebook
 - **Resume** — Click ▶ on a suspended instance to wake it
 - **Terminate** — Click ■ to destroy an instance
+- **Close notebook** — Automatically terminates the attached MicroVM
 
 ## Project Structure
 
 ```
 .
 ├── app/
-│   ├── server.py        # FastAPI server: lifecycle hooks, execute, upload, install
+│   ├── server.py        # FastAPI server: lifecycle hooks, execute, upload, install, AI generate
 │   └── executor.py      # Stateful Python executor with rich output (tables, plots)
 ├── web/
 │   └── src/
-│       ├── App.jsx              # Layout, state, instance management
+│       ├── main.jsx             # React entry point
+│       ├── App.jsx              # Layout, state, tab management, theme toggle
+│       ├── App.css              # App shell styles (header, layout, empty state)
+│       ├── index.css            # Global resets, imports theme + syntax CSS
+│       ├── theme.css            # Centralized design tokens (light + dark themes)
+│       ├── syntax-theme.css     # Python syntax highlighting colors (both themes)
 │       ├── components/
-│       │   ├── Sidebar.jsx      # Left panel: Notebooks, Files, MicroVMs
-│       │   ├── Notebook.jsx     # Cell list, execution queue, save/load/upload
-│       │   ├── Cell.jsx         # Code editor + rich output (text, HTML, images)
-│       │   └── ConnectionPanel.jsx  # Local/MicroVM connection + attach existing
+│       │   ├── Icons.jsx        # SVG icon components (Lucide-style, 25+ icons)
+│       │   ├── Cell.jsx         # Code editor + syntax highlighting + AI mode toggle
+│       │   ├── Cell.css
+│       │   ├── ConnectionPanel.jsx  # MicroVM connection + attach existing
+│       │   ├── ConnectionPanel.css
+│       │   ├── InstancesPanel.jsx   # Modal: list/attach/resume/terminate MicroVMs
+│       │   ├── InstancesPanel.css
+│       │   ├── Modal.jsx        # Reusable confirm/input modals
+│       │   ├── Modal.css
+│       │   ├── Notebook.jsx     # Cell list, execution queue, Run All, save/load
+│       │   ├── Notebook.css
+│       │   ├── PackageManager.jsx   # Package Manager modal (list + install)
+│       │   ├── PackageManager.css
+│       │   ├── Sidebar.jsx      # Left panel: Notebooks, Data Sources, Samples
+│       │   ├── Sidebar.css
+│       │   ├── TabBar.jsx       # Tab bar component
+│       │   └── TabBar.css
 │       └── services/
 │           └── microvm.js       # MicroVM client service
 ├── proxy/
-│   └── server.py        # Token proxy: launch, terminate, resume, auth, list
+│   └── server.py        # Token proxy: launch, terminate, resume, auth, AI, data sources
 ├── scripts/
-│   ├── config.sh        # AWS config (region: us-west-2, image name, roles)
-│   ├── setup_iam.sh     # Create IAM roles + S3 bucket
-│   ├── build_image.sh   # Package and create MicroVM image
-│   ├── run_microvm.sh   # Launch a single MicroVM (CLI)
-│   ├── trigger.sh       # CLI-based code execution
-│   └── teardown.sh      # Terminate MicroVM
+│   ├── config.sh             # AWS config (region, image sizes, roles)
+│   ├── setup_iam.sh          # Create IAM roles + S3 bucket
+│   ├── build_image.sh        # Package and create a single MicroVM image
+│   ├── build_all_images.sh   # Build all size-tier images (2/4/8 GB)
+│   ├── setup_sample_data.sh  # Provision DynamoDB + S3 sample data
+│   ├── run_microvm.sh        # Launch a single MicroVM (CLI)
+│   ├── trigger.sh            # CLI-based code execution
+│   └── teardown.sh           # Terminate MicroVM
 ├── iam/                 # IAM trust and permission policies
-├── Dockerfile           # MicroVM image (al2023-minimal, venv, pre-baked packages)
+├── Dockerfile           # MicroVM image (al2023-minimal, Python 3.11, pre-baked packages)
 ├── requirements.txt     # Python deps: server + data science + file format support
 ├── dev_run.sh           # One-command local dev
 ├── aws_microvm_run.sh   # One-command AWS mode (fully self-contained)
@@ -232,6 +297,17 @@ AWS_REGION="us-west-2"          # MicroVM region
 AWS_CLI_PROFILE="default"       # AWS CLI profile
 IMAGE_NAME="agent-sandbox"      # MicroVM image name
 ```
+
+### AI Code Generation
+
+The AI model is configurable via environment variables (set before running):
+
+```bash
+export BEDROCK_MODEL_ID="us.anthropic.claude-sonnet-4-6"  # default model
+export BEDROCK_REGION="us-west-2"                          # Bedrock region
+```
+
+AI mode auto-detects AWS credentials. If credentials are not configured, the AI toggle is hidden and cells operate in code-only mode.
 
 ## Key Technical Details
 
@@ -268,9 +344,18 @@ The executor automatically detects:
 
 ### MicroVM Image Build
 - Base: `public.ecr.aws/lambda/microvms:al2023-minimal`
+- Runtime: **Python 3.11** (installed via dnf, venv-isolated)
 - Base image version queried automatically (currently `"0"`)
 - All hooks enabled (run, suspend, resume, terminate, ready)
-- 4 GB minimum memory configured
+- Supported memory tiers: 2 GB (1 vCPU), 4 GB (2 vCPU), 8 GB (4 vCPU)
+
+### AI Code Generation (Bedrock Integration)
+- Uses **Amazon Bedrock Converse API** for code generation
+- Default model: `us.anthropic.claude-sonnet-4-6` (configurable)
+- AI runs on the **proxy server** (not inside the MicroVM) — no Bedrock access needed in the execution role
+- Full notebook context sent with each request: prior cell code, outputs, cell position
+- System prompt instructs the model to output only executable Python (no markdown, no explanations)
+- Auto-detects credential availability — gracefully hidden when no AWS credentials are present
 
 ### Pre-baked Packages
 ```

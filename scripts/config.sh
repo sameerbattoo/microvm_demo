@@ -18,7 +18,7 @@ export IMAGE_ARN="arn:aws:lambda:${AWS_REGION}:${ACCOUNT_ID}:microvm-image:${IMA
 export BASE_IMAGE_ARN="arn:aws:lambda:${AWS_REGION}:aws:microvm-image:al2023-1"
 
 # Size tiers (image name suffix → memory in MiB)
-export IMAGE_SIZES="2048 4096 8192 16384 32768"
+export IMAGE_SIZES="2048 4096 8192"
 
 # IAM role names
 export BUILD_ROLE_NAME="MicroVMSandboxBuildRole"
