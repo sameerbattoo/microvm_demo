@@ -333,21 +333,14 @@ export default function Notebook({ tab, onUpdateTab, attachedIds = [] }) {
         try {
           const notebook = JSON.parse(ev.target.result)
           if (notebook.cells && Array.isArray(notebook.cells)) {
-            const loadedCells = notebook.cells.map(c => ({
-              id: nextCellId++,
-              code: c.code || '',
-              output: c.output || null,
-              error: c.error || null,
-              html: c.html || null,
-              image: c.image || null,
-              status: c.output || c.error || c.html || c.image ? 'success' : 'idle',
-              executionNumber: c.executionNumber || null,
-              executionTime: null,
+            // Open as a new notebook tab (don't overwrite current)
+            window.dispatchEvent(new CustomEvent('open-notebook', {
+              detail: {
+                name: notebook.name || file.name.replace('.notebook.json', '').replace('.json', ''),
+                description: notebook.description || '',
+                cells: notebook.cells,
+              }
             }))
-            setCells(loadedCells.length > 0 ? loadedCells : [createCell()])
-            if (notebook.name) {
-              onUpdateTab({ name: notebook.name, description: notebook.description || '' })
-            }
           }
         } catch {
           alert('Invalid notebook file')

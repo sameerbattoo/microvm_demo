@@ -26,6 +26,7 @@ The proxy:
 import os
 import time
 import asyncio
+import json
 import logging
 import httpx
 import boto3
@@ -167,6 +168,11 @@ async def launch_microvm(request: Request):
     body = await request.json() if await request.body() else {}
     notebook_name = body.get("name", f"notebook-{int(time.time())}")
     memory_mib = body.get("memoryMiB", 4096)
+    idle_timeout_sec = body.get("idleTimeoutSeconds", 1800)       # Default: 30 min
+    max_duration_sec = body.get("maxDurationSeconds", 28800)      # Default: 8 hours
+    checkpoint_enabled = body.get("checkpointEnabled", False)     # Enable S3 checkpoint on terminate
+    restore_from = body.get("restoreFromSession")                 # Session ID to restore from
+    session_id = body.get("sessionId", f"{notebook_name}-{int(time.time())}")  # Client-provided or generated
 
     # Select the image ARN based on requested memory size
     image_arn = f"{IMAGE_ARN}-{memory_mib}" if IMAGE_ARN else ""
@@ -189,11 +195,16 @@ async def launch_microvm(request: Request):
             "egressNetworkConnectors": [EGRESS_CONNECTOR],
             "idlePolicy": {
                 "autoResumeEnabled": True,
-                "maxIdleDurationSeconds": 1800,
-                "suspendedDurationSeconds": 28800,
+                "maxIdleDurationSeconds": idle_timeout_sec,
+                "suspendedDurationSeconds": max_duration_sec,
             },
-            "maximumDurationInSeconds": 28800,
-            "runHookPayload": notebook_name,
+            "maximumDurationInSeconds": max_duration_sec,
+            "runHookPayload": json.dumps({
+                "notebook_name": notebook_name,
+                "session_id": session_id,
+                "checkpoint_enabled": checkpoint_enabled,
+                "restore_from": restore_from,
+            }),
         }
 
         if EXEC_ROLE_ARN:
@@ -225,6 +236,7 @@ async def launch_microvm(request: Request):
             "microvmId": microvm_id,
             "endpoint": endpoint,
             "name": notebook_name,
+            "sessionId": session_id,
             "status": "running",
         }
 
@@ -358,7 +370,6 @@ async def list_packages():
     In MicroVM mode, the frontend fetches packages via /execute on the MicroVM directly.
     """
     import subprocess
-    import json as json_mod
 
     try:
         result = subprocess.run(
@@ -371,7 +382,7 @@ async def list_packages():
                 capture_output=True, text=True, timeout=15
             )
         if result.returncode == 0:
-            packages = json_mod.loads(result.stdout)
+            packages = json.loads(result.stdout)
         else:
             packages = []
     except Exception:
@@ -381,6 +392,91 @@ async def list_packages():
     pkg_list.sort(key=lambda p: p["name"].lower())
 
     return {"packages": pkg_list, "count": len(pkg_list)}
+
+
+# ============================================================
+# SESSION MANAGEMENT (checkpoint/restore)
+# ============================================================
+
+@app.get("/sessions")
+async def list_sessions():
+    """List available session checkpoints from S3."""
+    try:
+        s3 = boto3.client("s3", region_name=AWS_REGION)
+
+        # Find artifacts bucket
+        bucket_name = None
+        resp = s3.list_buckets()
+        for b in resp.get("Buckets", []):
+            if b["Name"].startswith("microvm-sandbox-artifacts-"):
+                bucket_name = b["Name"]
+                break
+
+        if not bucket_name:
+            return {"sessions": []}
+
+        # List session checkpoints
+        sessions = []
+        paginator = s3.get_paginator("list_objects_v2")
+        for page in paginator.paginate(Bucket=bucket_name, Prefix="sessions/", Delimiter="/"):
+            for prefix_obj in page.get("CommonPrefixes", []):
+                session_prefix = prefix_obj["Prefix"]  # e.g. "sessions/abc123/"
+                session_id = session_prefix.replace("sessions/", "").rstrip("/")
+
+                # Try to load metadata
+                metadata = {}
+                try:
+                    meta_resp = s3.get_object(Bucket=bucket_name, Key=f"{session_prefix}metadata.json")
+                    metadata = json.loads(meta_resp["Body"].read())
+                except Exception:
+                    pass
+
+                sessions.append({
+                    "session_id": session_id,
+                    "checkpointed_at": metadata.get("checkpointed_at"),
+                    "execution_count": metadata.get("execution_count", 0),
+                    "variables_count": metadata.get("variables_count", 0),
+                    "files_count": metadata.get("files_count", 0),
+                })
+
+        # Sort by checkpoint time (most recent first)
+        sessions.sort(key=lambda s: s.get("checkpointed_at") or "", reverse=True)
+        return {"sessions": sessions}
+
+    except Exception as e:
+        logger.error(f"Failed to list sessions: {e}")
+        return {"sessions": []}
+
+
+@app.delete("/sessions/{session_id}")
+async def delete_session(session_id: str):
+    """Delete a session checkpoint from S3."""
+    try:
+        s3 = boto3.client("s3", region_name=AWS_REGION)
+
+        bucket_name = None
+        resp = s3.list_buckets()
+        for b in resp.get("Buckets", []):
+            if b["Name"].startswith("microvm-sandbox-artifacts-"):
+                bucket_name = b["Name"]
+                break
+
+        if not bucket_name:
+            return {"error": "Bucket not found"}
+
+        # Delete all objects under sessions/{session_id}/
+        prefix = f"sessions/{session_id}/"
+        resp = s3.list_objects_v2(Bucket=bucket_name, Prefix=prefix)
+        for obj in resp.get("Contents", []):
+            s3.delete_object(Bucket=bucket_name, Key=obj["Key"])
+
+        return {"status": "deleted", "session_id": session_id}
+    except Exception as e:
+        return Response(
+            content=f'{{"error": "Delete failed: {str(e)}"}}',
+            status_code=500,
+            media_type="application/json",
+        )
 
 
 # ============================================================

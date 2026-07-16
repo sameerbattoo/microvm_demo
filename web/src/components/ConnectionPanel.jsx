@@ -10,6 +10,9 @@ export default function ConnectionPanel({ tab, onConnect, onUpdateTab, onDismiss
   const [availableInstances, setAvailableInstances] = useState([])
   const [loadingInstances, setLoadingInstances] = useState(false)
   const [launchMemory, setLaunchMemory] = useState('4096')
+  const [launchIdleTimeout, setLaunchIdleTimeout] = useState('1800')
+  const [launchMaxDuration, setLaunchMaxDuration] = useState('28800')
+  const [checkpointEnabled, setCheckpointEnabled] = useState(true)
 
   // Auto-detect which mode we're in
   useEffect(() => {
@@ -63,7 +66,7 @@ export default function ConnectionPanel({ tab, onConnect, onUpdateTab, onDismiss
     }
   }
 
-  const handleLaunchMicroVM = async () => {
+  const handleRestoreSession = async () => {
     onUpdateTab({ status: 'launching' })
     setError(null)
 
@@ -71,7 +74,15 @@ export default function ConnectionPanel({ tab, onConnect, onUpdateTab, onDismiss
       const response = await fetch(`${PROXY_URL}/launch`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: tab.name, memoryMiB: parseInt(launchMemory) }),
+        body: JSON.stringify({
+          name: tab.name,
+          memoryMiB: parseInt(launchMemory),
+          idleTimeoutSeconds: parseInt(launchIdleTimeout),
+          maxDurationSeconds: parseInt(launchMaxDuration),
+          checkpointEnabled: true,
+          sessionId: `${tab.sessionId}-restored-${Date.now()}`,
+          restoreFromSession: tab.sessionId,
+        }),
       })
 
       if (response.ok) {
@@ -81,6 +92,51 @@ export default function ConnectionPanel({ tab, onConnect, onUpdateTab, onDismiss
           microvmEndpoint: `${PROXY_URL}/proxy`,
           microvmRealEndpoint: result.endpoint,
           microvmMemory: parseInt(launchMemory),
+          sessionId: result.sessionId,
+          checkpointEnabled: true,
+          sessionSaved: false,
+          status: 'connected',
+          mode: 'microvm',
+        })
+        onDismiss()
+      } else {
+        const body = await response.json().catch(() => ({}))
+        setError(body.error || `Restore failed: ${response.status}`)
+        onUpdateTab({ status: 'disconnected' })
+      }
+    } catch (err) {
+      setError(`Restore error: ${err.message}`)
+      onUpdateTab({ status: 'disconnected' })
+    }
+  }
+
+  const handleLaunchMicroVM = async () => {
+    onUpdateTab({ status: 'launching' })
+    setError(null)
+
+    try {
+      const response = await fetch(`${PROXY_URL}/launch`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: tab.name,
+          memoryMiB: parseInt(launchMemory),
+          idleTimeoutSeconds: parseInt(launchIdleTimeout),
+          maxDurationSeconds: parseInt(launchMaxDuration),
+          checkpointEnabled,
+          sessionId: `${tab.name.replace(/\s+/g, '-').toLowerCase()}-${Date.now()}`,
+        }),
+      })
+
+      if (response.ok) {
+        const result = await response.json()
+        onUpdateTab({
+          microvmId: result.microvmId,
+          microvmEndpoint: `${PROXY_URL}/proxy`,
+          microvmRealEndpoint: result.endpoint,
+          microvmMemory: parseInt(launchMemory),
+          sessionId: result.sessionId,
+          checkpointEnabled,
           status: 'connected',
           mode: 'microvm',
         })
@@ -102,6 +158,7 @@ export default function ConnectionPanel({ tab, onConnect, onUpdateTab, onDismiss
       microvmEndpoint: `${PROXY_URL}/proxy`,
       microvmRealEndpoint: instance.endpoint,
       microvmMemory: instance.memory_mib || 4096,
+      sessionSaved: false,
       status: 'connected',
       mode: 'microvm',
     })
@@ -131,6 +188,18 @@ export default function ConnectionPanel({ tab, onConnect, onUpdateTab, onDismiss
                           : 'Fetching...'}
                       </span>
                     </div>
+                    {tab.sessionId && (
+                      <div className="connection-info-row">
+                        <span className="connection-info-label">Session</span>
+                        <code className="connection-info-id">{tab.sessionId}</code>
+                      </div>
+                    )}
+                    {tab.checkpointEnabled && (
+                      <div className="connection-info-row">
+                        <span className="connection-info-label">Restore</span>
+                        <span className="connection-info-spec">Enabled — state saves to S3 on termination</span>
+                      </div>
+                    )}
                   </div>
                 )}
                 <div className="connection-info-note">Variables persist across cell executions.</div>
@@ -176,9 +245,45 @@ export default function ConnectionPanel({ tab, onConnect, onUpdateTab, onDismiss
           <div className="connection-form">
             {tab.status !== 'connected' && (
               <div className="connection-hint">
-                {tab.microvmId
-                  ? <>Previously connected to <code>{tab.microvmId.replace('microvm-', '').slice(0, 12)}...</code> — launch a new MicroVM or re-attach below.</>
-                  : 'Launch a new MicroVM or attach to an existing available instance.'}
+                {tab.sessionSaved
+                  ? <>Session <code>{tab.sessionId.slice(-12)}</code> was saved. You can restore it on a new MicroVM.</>
+                  : tab.microvmId
+                    ? <>Previously connected to <code>{tab.microvmId.replace('microvm-', '').slice(0, 12)}...</code> — launch a new MicroVM or re-attach below.</>
+                    : 'Launch a new MicroVM or attach to an existing available instance.'}
+              </div>
+            )}
+
+            {/* Restore Session button — shown when session was checkpointed to S3 */}
+            {tab.status !== 'connected' && tab.sessionSaved && (
+              <div className="form-actions" style={{ marginBottom: 'var(--space-3)' }}>
+                <button
+                  className="connect-btn"
+                  onClick={handleRestoreSession}
+                  disabled={tab.status === 'launching'}
+                >
+                  {tab.status === 'launching' ? '⏳ Restoring...' : '♻ Restore Session'}
+                </button>
+              </div>
+            )}
+
+            {/* Available instances to attach — shown first for quick access */}
+            {availableInstances.length > 0 && (
+              <div className="available-instances">
+                <div className="available-title">Available MicroVMs — click to attach:</div>
+                {availableInstances.map(inst => (
+                  <div key={inst.id} className="available-row">
+                    <div className="available-info">
+                      <span className="available-id">{inst.id}</span>
+                      {inst.name && <span className="available-name">{inst.name}</span>}
+                    </div>
+                    <button
+                      className="available-attach-btn"
+                      onClick={() => handleAttachInstance(inst)}
+                    >
+                      Attach
+                    </button>
+                  </div>
+                ))}
               </div>
             )}
 
@@ -201,19 +306,47 @@ export default function ConnectionPanel({ tab, onConnect, onUpdateTab, onDismiss
                   <span className="launch-spec-label">Architecture</span>
                   <span className="launch-spec-value">ARM64 (Graviton)</span>
                 </div>
-                <div className="launch-spec-item">
+                <div className="launch-spec-item launch-spec-editable">
+                  <span className="launch-spec-label">Idle suspend</span>
+                  <select className="launch-spec-select" value={launchIdleTimeout} onChange={(e) => setLaunchIdleTimeout(e.target.value)}>
+                    <option value="300">5 minutes</option>
+                    <option value="900">15 minutes</option>
+                    <option value="1800">30 minutes</option>
+                    <option value="3600">1 hour</option>
+                    <option value="7200">2 hours</option>
+                  </select>
+                </div>
+                <div className="launch-spec-item launch-spec-editable">
                   <span className="launch-spec-label">Max lifetime</span>
-                  <span className="launch-spec-value">8 hours</span>
+                  <select className="launch-spec-select" value={launchMaxDuration} onChange={(e) => setLaunchMaxDuration(e.target.value)}>
+                    <option value="3600">1 hour</option>
+                    <option value="7200">2 hours</option>
+                    <option value="14400">4 hours</option>
+                    <option value="28800">8 hours</option>
+                  </select>
                 </div>
               </div>
               <div className="launch-config-note">
-                Auto-scales up to <strong>4× baseline</strong> during peak load. Burst resources billed only when active. Suspends after 30 min idle.
+                Auto-scales up to <strong>4× baseline</strong> during peak load. Burst resources billed only when active. Auto-resumes on traffic (~1s).
               </div>
+              <label className="launch-checkpoint-toggle">
+                <input
+                  type="checkbox"
+                  checked={checkpointEnabled}
+                  onChange={(e) => setCheckpointEnabled(e.target.checked)}
+                />
+                <span className="launch-checkpoint-label">
+                  Enable session restore
+                </span>
+                <span className="launch-checkpoint-desc">
+                  Save state to S3 on termination. Allows restoring variables, files, and packages on a new MicroVM beyond the max lifetime.
+                </span>
+              </label>
             </div>
 
             <div className="form-actions">
               <button
-                className="connect-btn"
+                className={availableInstances.length > 0 ? "dismiss-btn" : "connect-btn"}
                 onClick={handleLaunchMicroVM}
                 disabled={tab.status === 'launching'}
               >
@@ -227,30 +360,6 @@ export default function ConnectionPanel({ tab, onConnect, onUpdateTab, onDismiss
               <div className="connection-launching">
                 Provisioning a new Firecracker VM... This takes a few seconds.
               </div>
-            )}
-
-            {/* Available instances to attach */}
-            {availableInstances.length > 0 && (
-              <div className="available-instances">
-                <div className="available-title">Available MicroVMs:</div>
-                {availableInstances.map(inst => (
-                  <div key={inst.id} className="available-row">
-                    <div className="available-info">
-                      <span className="available-id">{inst.id}</span>
-                      {inst.name && <span className="available-name">{inst.name}</span>}
-                    </div>
-                    <button
-                      className="available-attach-btn"
-                      onClick={() => handleAttachInstance(inst)}
-                    >
-                      Attach
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
-            {!loadingInstances && availableInstances.length === 0 && proxyAvailable && (
-              <div className="available-empty">No unattached MicroVMs available.</div>
             )}
           </div>
         )}

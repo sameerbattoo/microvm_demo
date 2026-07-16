@@ -21,3 +21,6 @@ scipy
 
 # AWS SDK (for DynamoDB, S3 access from within the MicroVM + Bedrock AI)
 boto3
+
+# Session checkpoint/restore (namespace serialization)
+dill

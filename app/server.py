@@ -108,22 +108,41 @@ async def hook_run(request: Request):
     """
     Called when this MicroVM starts from snapshot.
 
-    The runHookPayload (passed via run-microvm API) contains session
-    config — e.g., which user/tenant this sandbox belongs to, what
-    packages to pre-install, etc.
+    The runHookPayload contains a JSON string with session config:
+    - notebook_name: display name
+    - session_id: unique session ID for checkpoint/restore
+    - restore_from: session_id to restore state from (optional)
 
     IMPORTANT: No external traffic reaches the app until this returns 200.
     """
     body = await request.json() if await request.body() else {}
 
     session_state["microvm_id"] = body.get("microvmId", "unknown")
-    session_state["session_id"] = body.get("runHookPayload")
+    run_payload = body.get("runHookPayload", "")
     session_state["started_at"] = datetime.now(timezone.utc).isoformat()
     session_state["request_count"] = 0
+
+    # Parse the run hook payload (may be JSON or plain string)
+    restore_from = None
+    try:
+        import json
+        payload = json.loads(run_payload)
+        session_state["session_id"] = payload.get("session_id", run_payload)
+        session_state["checkpoint_enabled"] = payload.get("checkpoint_enabled", False)
+        restore_from = payload.get("restore_from")
+    except (json.JSONDecodeError, TypeError):
+        session_state["session_id"] = run_payload
+        session_state["checkpoint_enabled"] = False
 
     logger.info(f"🚀 HOOK /run — Sandbox started")
     logger.info(f"   MicroVM ID: {session_state['microvm_id']}")
     logger.info(f"   Session: {session_state['session_id']}")
+    logger.info(f"   Checkpoint enabled: {session_state['checkpoint_enabled']}")
+
+    # Restore from a previous session checkpoint if requested
+    if restore_from:
+        logger.info(f"   Restoring from session: {restore_from}")
+        _restore_from_s3(restore_from)
 
     return {"status": "ready"}
 
@@ -174,15 +193,11 @@ async def hook_resume():
 @app.post("/aws/lambda-microvms/runtime/v1/terminate")
 async def hook_terminate():
     """
-    Called BEFORE termination (8hr max hit, or explicit terminate call).
+    Called BEFORE termination (max lifetime hit, or explicit terminate call).
+    Timeout: 60 seconds to complete.
 
-    For the Hex checkpoint pattern: this is where you would serialize
-    the executor namespace to S3/EFS so a new MicroVM can restore it.
-
-    Example checkpoint flow:
-    1. pickle/dill the namespace → bytes
-    2. Upload to s3://sessions/{session_id}/checkpoint.pkl
-    3. New MicroVM loads it in /run hook via runHookPayload pointing to S3
+    If checkpoint is enabled, serializes the executor namespace and local files
+    to S3 so the session can be restored on a new MicroVM.
     """
     stats = executor.get_stats()
     logger.info(f"🔴 HOOK /terminate — Shutting down")
@@ -190,8 +205,14 @@ async def hook_terminate():
     logger.info(f"   Total suspends: {session_state['suspend_count']}")
     logger.info(f"   Total resumes: {session_state['resume_count']}")
 
-    # TODO: In production, checkpoint state to S3 here
-    # checkpoint_to_s3(executor, session_state["session_id"])
+    # Checkpoint state to S3 if enabled
+    if session_state.get("checkpoint_enabled") and session_state.get("session_id"):
+        logger.info(f"   📦 Checkpointing session to S3...")
+        try:
+            _checkpoint_to_s3(session_state["session_id"])
+            logger.info(f"   ✅ Checkpoint saved: sessions/{session_state['session_id']}/")
+        except Exception as e:
+            logger.error(f"   ❌ Checkpoint failed: {e}")
 
     return {"status": "terminated"}
 
@@ -443,3 +464,185 @@ async def list_files():
     
     return {"files": files}
 
+
+# ============================================================
+# SESSION CHECKPOINT / RESTORE
+# Saves executor state + local files to S3 on termination,
+# restores them on a new MicroVM launch.
+# ============================================================
+
+# Discover the artifacts bucket (same one used for images)
+_checkpoint_bucket = None
+
+
+def _get_checkpoint_bucket():
+    """Find the microvm-sandbox-artifacts bucket."""
+    global _checkpoint_bucket
+    if _checkpoint_bucket:
+        return _checkpoint_bucket
+
+    import boto3
+    s3 = boto3.client("s3")
+    resp = s3.list_buckets()
+    for b in resp.get("Buckets", []):
+        if b["Name"].startswith("microvm-sandbox-artifacts-"):
+            _checkpoint_bucket = b["Name"]
+            return _checkpoint_bucket
+
+    # Fallback: construct from environment if available
+    region = os.environ.get("AWS_REGION", "us-west-2")
+    import boto3
+    sts = boto3.client("sts")
+    account_id = sts.get_caller_identity()["Account"]
+    _checkpoint_bucket = f"microvm-sandbox-artifacts-{account_id}-{region}"
+    return _checkpoint_bucket
+
+
+def _checkpoint_to_s3(session_id: str):
+    """
+    Serialize executor namespace + local files and upload to S3.
+
+    S3 structure:
+      sessions/{session_id}/checkpoint.pkl   — dill-serialized namespace
+      sessions/{session_id}/files.tar.gz     — /tmp/ data files
+      sessions/{session_id}/requirements.txt — runtime-installed packages
+      sessions/{session_id}/metadata.json    — session info
+    """
+    import io
+    import tarfile
+    import glob
+    import json
+    import subprocess
+
+    import boto3
+    import dill
+
+    bucket = _get_checkpoint_bucket()
+    s3 = boto3.client("s3")
+    prefix = f"sessions/{session_id}"
+
+    # 1. Serialize the executor namespace
+    logger.info("   Serializing namespace...")
+    namespace_to_save = {}
+    for key, value in executor._namespace.items():
+        if key.startswith("__") and key.endswith("__"):
+            continue
+        try:
+            dill.dumps(value)  # Test if serializable
+            namespace_to_save[key] = value
+        except Exception:
+            logger.warning(f"   Skipping non-serializable: {key} ({type(value).__name__})")
+
+    checkpoint_bytes = dill.dumps(namespace_to_save)
+    s3.put_object(Bucket=bucket, Key=f"{prefix}/checkpoint.pkl", Body=checkpoint_bytes)
+    logger.info(f"   Namespace: {len(namespace_to_save)} vars, {len(checkpoint_bytes) / 1024:.1f} KB")
+
+    # 2. Archive local data files from /tmp/
+    logger.info("   Archiving local files...")
+    data_extensions = ['*.csv', '*.xlsx', '*.xls', '*.parquet', '*.json', '*.txt']
+    data_files = []
+    for ext in data_extensions:
+        data_files.extend(glob.glob(f'/tmp/{ext}'))
+
+    if data_files:
+        tar_buffer = io.BytesIO()
+        with tarfile.open(fileobj=tar_buffer, mode='w:gz') as tar:
+            for filepath in data_files:
+                tar.add(filepath, arcname=os.path.basename(filepath))
+        tar_buffer.seek(0)
+        s3.put_object(Bucket=bucket, Key=f"{prefix}/files.tar.gz", Body=tar_buffer.read())
+        logger.info(f"   Files: {len(data_files)} archived")
+
+    # 3. Save runtime package list
+    logger.info("   Saving package list...")
+    try:
+        import sys
+        result = subprocess.run(
+            [sys.executable, "-m", "pip", "freeze"],
+            capture_output=True, text=True, timeout=10
+        )
+        if result.returncode == 0:
+            s3.put_object(Bucket=bucket, Key=f"{prefix}/requirements.txt", Body=result.stdout)
+    except Exception:
+        pass
+
+    # 4. Save metadata
+    metadata = {
+        "session_id": session_id,
+        "microvm_id": session_state.get("microvm_id"),
+        "checkpointed_at": datetime.now(timezone.utc).isoformat(),
+        "execution_count": executor.get_stats()["execution_count"],
+        "variables_count": len(namespace_to_save),
+        "files_count": len(data_files),
+    }
+    s3.put_object(
+        Bucket=bucket,
+        Key=f"{prefix}/metadata.json",
+        Body=json.dumps(metadata, indent=2),
+        ContentType="application/json",
+    )
+    logger.info(f"   ✅ Checkpoint complete: s3://{bucket}/{prefix}/")
+
+
+def _restore_from_s3(session_id: str):
+    """
+    Restore executor namespace + local files from a previous S3 checkpoint.
+    """
+    import io
+    import tarfile
+    import json
+    import subprocess
+
+    import boto3
+    import dill
+
+    bucket = _get_checkpoint_bucket()
+    s3 = boto3.client("s3")
+    prefix = f"sessions/{session_id}"
+
+    # 1. Restore namespace
+    try:
+        logger.info("   Restoring namespace...")
+        resp = s3.get_object(Bucket=bucket, Key=f"{prefix}/checkpoint.pkl")
+        namespace = dill.loads(resp["Body"].read())
+        executor._namespace.update(namespace)
+        logger.info(f"   Restored {len(namespace)} variables")
+    except Exception as e:
+        logger.error(f"   Failed to restore namespace: {e}")
+
+    # 2. Restore local files
+    try:
+        logger.info("   Restoring files...")
+        resp = s3.get_object(Bucket=bucket, Key=f"{prefix}/files.tar.gz")
+        tar_buffer = io.BytesIO(resp["Body"].read())
+        with tarfile.open(fileobj=tar_buffer, mode='r:gz') as tar:
+            tar.extractall(path="/tmp/")
+        logger.info("   Files restored to /tmp/")
+    except s3.exceptions.NoSuchKey:
+        logger.info("   No files archive found (skipping)")
+    except Exception as e:
+        logger.error(f"   Failed to restore files: {e}")
+
+    # 3. Install runtime packages (if any were added beyond pre-baked)
+    try:
+        resp = s3.get_object(Bucket=bucket, Key=f"{prefix}/requirements.txt")
+        requirements = resp["Body"].read().decode("utf-8")
+        if requirements.strip():
+            logger.info("   Installing saved packages...")
+            import sys
+            import tempfile
+            req_file = tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False)
+            req_file.write(requirements)
+            req_file.close()
+            subprocess.run(
+                [sys.executable, "-m", "pip", "install", "--quiet", "-r", req_file.name],
+                timeout=45
+            )
+            os.unlink(req_file.name)
+            logger.info("   Packages restored")
+    except s3.exceptions.NoSuchKey:
+        pass
+    except Exception as e:
+        logger.warning(f"   Package restore warning: {e}")
+
+    logger.info(f"   ✅ Session restored from: {session_id}")

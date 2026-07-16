@@ -24,6 +24,15 @@
       ]
     },
     {
+      "Sid": "S3WriteSessionCheckpoints",
+      "Effect": "Allow",
+      "Action": [
+        "s3:PutObject",
+        "s3:DeleteObject"
+      ],
+      "Resource": "arn:aws:s3:::microvm-sandbox-artifacts-*/sessions/*"
+    },
+    {
       "Sid": "S3ListBuckets",
       "Effect": "Allow",
       "Action": "s3:ListAllMyBuckets",

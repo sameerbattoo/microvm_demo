@@ -57,7 +57,7 @@ for MEM in $IMAGE_SIZES; do
     --base-image-version "$BASE_IMAGE_VERSION" \
     --build-role-arn "$BUILD_ROLE_ARN" \
     --code-artifact "uri=s3://$ARTIFACT_BUCKET/$ARTIFACT_KEY" \
-    --hooks '{"port":8080,"microvmHooks":{"run":"ENABLED","runTimeoutInSeconds":30,"resume":"ENABLED","resumeTimeoutInSeconds":10,"suspend":"ENABLED","suspendTimeoutInSeconds":10,"terminate":"ENABLED","terminateTimeoutInSeconds":10},"microvmImageHooks":{"ready":"ENABLED","readyTimeoutInSeconds":60}}' \
+    --hooks '{"port":8080,"microvmHooks":{"run":"ENABLED","runTimeoutInSeconds":60,"resume":"ENABLED","resumeTimeoutInSeconds":10,"suspend":"ENABLED","suspendTimeoutInSeconds":10,"terminate":"ENABLED","terminateTimeoutInSeconds":60},"microvmImageHooks":{"ready":"ENABLED","readyTimeoutInSeconds":60}}' \
     --resources "[{\"minimumMemoryInMiB\":${MEM}}]" >/dev/null
 done
 

@@ -199,6 +199,38 @@ export default function App() {
     fetchFiles()
   }, [activeTabId, tabs.find(t => t.id === activeTabId)?.status])
 
+  // Auto-resume suspended MicroVM when user navigates to its notebook
+  useEffect(() => {
+    const activeTab = tabs.find(t => t.id === activeTabId)
+    if (!activeTab?.microvmId) return
+
+    const checkAndResume = async () => {
+      try {
+        const resp = await fetch(`${PROXY_URL}/instances`)
+        if (!resp.ok) return
+        const data = await resp.json()
+        const inst = data.instances?.[activeTab.microvmId]
+        if (inst?.state === 'SUSPENDED') {
+          // Auto-resume the suspended VM
+          await fetch(`${PROXY_URL}/resume/${activeTab.microvmId}`, { method: 'POST' })
+          // Update tab to connected once resumed
+          setTabs(prev => prev.map(t => {
+            if (t.id !== activeTabId) return t
+            return {
+              ...t,
+              microvmEndpoint: `${PROXY_URL}/proxy`,
+              microvmRealEndpoint: inst.endpoint,
+              status: 'connected',
+              mode: 'microvm',
+            }
+          }))
+          fetchInstances()
+        }
+      } catch {}
+    }
+    checkAndResume()
+  }, [activeTabId])
+
   const addTab = useCallback(() => {
     setNewNotebookName(`Notebook ${nextTabId}`)
     setNewNotebookDesc('')
@@ -293,6 +325,38 @@ export default function App() {
       fetchInstances()
     } catch {}
   }, [fetchInstances])
+
+  // Terminate & Save: terminates attached VM, detaches from notebook but preserves sessionId for restore
+  const terminateAndSave = useCallback(async (microvmId) => {
+    try {
+      await fetch(`${PROXY_URL}/terminate/${microvmId}`, { method: 'POST' })
+      // Detach from notebook tab but keep sessionId for restore
+      setTabs(prev => prev.map(t => {
+        if (t.microvmId !== microvmId) return t
+        return {
+          ...t,
+          microvmId: null,
+          microvmEndpoint: null,
+          microvmRealEndpoint: null,
+          status: 'disconnected',
+          mode: null,
+          sessionSaved: true, // Signal that checkpoint was saved — enables "Restore Session"
+        }
+      }))
+      fetchInstances()
+    } catch {}
+  }, [fetchInstances])
+
+  // Suspend: suspends an attached VM, detaches from notebook
+  const suspendInstance = useCallback(async (microvmId) => {
+    try {
+      // Detach the notebook from the VM — the VM stays running but will suspend on idle timeout.
+      setTabs(prev => prev.map(t => {
+        if (t.microvmId !== microvmId) return t
+        return { ...t, microvmId: null, status: 'disconnected', microvmEndpoint: null, microvmRealEndpoint: null, mode: null }
+      }))
+    } catch {}
+  }, [])
 
   const uploadFile = useCallback(async (file) => {
     // Find the active tab's connection to upload to
@@ -408,6 +472,19 @@ export default function App() {
     }
   }, [])
 
+  // Listen for "Open Notebook" events from Notebook toolbar (creates a new tab)
+  useEffect(() => {
+    const handler = (e) => {
+      const { name, description, cells } = e.detail
+      const tab = createTab(name, description)
+      tab._loadedCells = cells
+      setTabs(prev => [...prev, { ...tab }])
+      setActiveTabId(tab.id)
+    }
+    window.addEventListener('open-notebook', handler)
+    return () => window.removeEventListener('open-notebook', handler)
+  }, [])
+
   const insertCode = useCallback((code) => {
     // Dispatch event for the active notebook to pick up
     window.dispatchEvent(new CustomEvent('insert-code', { detail: { code } }))
@@ -474,6 +551,8 @@ export default function App() {
         <InstancesPanel
           onClose={() => setShowInstances(false)}
           onAttach={attachInstance}
+          onTerminateAndSave={terminateAndSave}
+          onSuspend={suspendInstance}
           attachedIds={attachedIds}
           tabs={tabs}
         />

@@ -4,12 +4,12 @@ import './InstancesPanel.css'
 
 const PROXY_URL = 'http://localhost:8081'
 
-export default function InstancesPanel({ onClose, onAttach, attachedIds, tabs = [] }) {
+export default function InstancesPanel({ onClose, onAttach, onTerminateAndSave, onSuspend, attachedIds, tabs = [] }) {
   const [instances, setInstances] = useState({})
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [actionInProgress, setActionInProgress] = useState(new Set())
-  const [confirmTerminate, setConfirmTerminate] = useState(null) // microvmId to confirm
+  const [confirmTerminate, setConfirmTerminate] = useState(null) // { id, type: 'terminate' | 'terminateAndSave', name }
 
   const fetchInstances = useCallback(async () => {
     setLoading(true)
@@ -33,22 +33,29 @@ export default function InstancesPanel({ onClose, onAttach, attachedIds, tabs = 
   }, [fetchInstances])
 
   const handleTerminate = async (microvmId) => {
-    setConfirmTerminate(microvmId)
+    setConfirmTerminate({ id: microvmId, type: 'terminate' })
   }
 
   const doTerminate = async () => {
-    const microvmId = confirmTerminate
+    const { id, type } = confirmTerminate
     setConfirmTerminate(null)
-    setActionInProgress(prev => new Set([...prev, microvmId]))
+
+    if (type === 'terminateAndSave') {
+      onTerminateAndSave(id)
+      onClose()
+      return
+    }
+
+    setActionInProgress(prev => new Set([...prev, id]))
     try {
-      await fetch(`${PROXY_URL}/terminate/${microvmId}`, { method: 'POST' })
+      await fetch(`${PROXY_URL}/terminate/${id}`, { method: 'POST' })
       await fetchInstances()
     } catch (err) {
       setError(`Terminate failed: ${err.message}`)
     }
     setActionInProgress(prev => {
       const next = new Set(prev)
-      next.delete(microvmId)
+      next.delete(id)
       return next
     })
   }
@@ -117,72 +124,105 @@ export default function InstancesPanel({ onClose, onAttach, attachedIds, tabs = 
         )}
 
         {!loading && instanceList.length > 0 && (() => {
-          // Check if any row has action buttons (not all attached)
-          const hasAnyActions = instanceList.some(([id, inst]) => {
-            const isAttached = attachedIds.includes(id)
-            const state = inst.state || 'UNKNOWN'
-            return (state === 'RUNNING' && !isAttached) || state === 'SUSPENDED'
-          })
-
           return (
           <div className="instances-list">
-            <div className={`instances-table-header ${!hasAnyActions ? 'no-actions' : ''}`}>
+            <div className="instances-table-header">
               <span>MicroVM ID</span>
               <span>Notebook</span>
+              <span>Session</span>
               <span>Spec</span>
               <span>State</span>
-              {hasAnyActions && <span>Actions</span>}
+              <span>Actions</span>
             </div>
             {instanceList.map(([id, inst]) => {
               const isAttached = attachedIds.includes(id)
               const attachedTab = tabs.find(t => t.microvmId === id)
               const isActioning = actionInProgress.has(id)
               const state = inst.state || 'UNKNOWN'
+              const hasCheckpoint = attachedTab?.checkpointEnabled
 
               return (
-                <div key={id} className={`instances-row ${isAttached ? 'instances-row-attached' : ''} ${!hasAnyActions ? 'no-actions' : ''}`}>
+                <div key={id} className={`instances-row ${isAttached ? 'instances-row-attached' : ''}`}>
                   <span className="inst-id-text">{id}</span>
                   <span>{attachedTab ? attachedTab.name : '—'}</span>
+                  <span className="inst-id-text">{attachedTab?.sessionId ? attachedTab.sessionId.slice(-12) : '—'}</span>
                   <span className="inst-spec-text">
                     {inst.memory_mib
                       ? `${inst.memory_mib / 1024} GB · ${Math.max(1, inst.memory_mib / 2048)} vCPU`
                       : '4 GB · 2 vCPU'}
                   </span>
                   <span>{getStatusBadge(id, state)}</span>
-                  {hasAnyActions && (
                   <span className="inst-col-actions">
-                    {/* Attach: only if running and not already attached */}
-                    {state === 'RUNNING' && !isAttached && (
-                      <button
-                        className="inst-action-btn inst-attach-btn"
-                        onClick={() => handleAttach(id, inst.endpoint, inst.memory_mib)}
-                        disabled={isActioning}
-                      >
-                        Attach
-                      </button>
+                    {/* Attached + Running: Suspend (detach) and Terminate & Save */}
+                    {state === 'RUNNING' && isAttached && (
+                      <>
+                        <button
+                          className="inst-action-btn inst-resume-btn"
+                          onClick={async () => { await onSuspend(id); onClose() }}
+                          disabled={isActioning}
+                          title="Detach from notebook (VM will suspend on idle)"
+                        >
+                          Detach
+                        </button>
+                        <button
+                          className="inst-action-btn inst-terminate-btn"
+                          onClick={() => setConfirmTerminate({ id, type: 'terminateAndSave', name: attachedTab?.name || id })}
+                          disabled={isActioning}
+                          title={hasCheckpoint ? "Terminate & save state to S3" : "Terminate VM"}
+                        >
+                          {hasCheckpoint ? 'Terminate & Save' : 'Terminate'}
+                        </button>
+                      </>
                     )}
-                    {/* Resume: only if suspended */}
+                    {/* Unattached + Running: Attach or Terminate */}
+                    {state === 'RUNNING' && !isAttached && (
+                      <>
+                        <button
+                          className="inst-action-btn inst-attach-btn"
+                          onClick={() => handleAttach(id, inst.endpoint, inst.memory_mib)}
+                          disabled={isActioning}
+                        >
+                          Attach
+                        </button>
+                        <button
+                          className="inst-action-btn inst-terminate-btn"
+                          onClick={() => handleTerminate(id)}
+                          disabled={isActioning}
+                        >
+                          {isActioning ? '...' : 'Terminate'}
+                        </button>
+                      </>
+                    )}
+                    {/* Suspended: Resume & Attach */}
                     {state === 'SUSPENDED' && (
                       <button
-                        className="inst-action-btn inst-resume-btn"
-                        onClick={() => handleResume(id)}
+                        className="inst-action-btn inst-attach-btn"
+                        onClick={async () => {
+                          setActionInProgress(prev => new Set([...prev, id]))
+                          await handleResume(id)
+                          // Fetch fresh instance data after resume to get updated endpoint
+                          try {
+                            const resp = await fetch(`${PROXY_URL}/instances`)
+                            if (resp.ok) {
+                              const data = await resp.json()
+                              const freshInst = data.instances?.[id]
+                              if (freshInst?.endpoint) {
+                                handleAttach(id, freshInst.endpoint, freshInst.memory_mib)
+                              }
+                            }
+                          } catch {}
+                          setActionInProgress(prev => {
+                            const next = new Set(prev)
+                            next.delete(id)
+                            return next
+                          })
+                        }}
                         disabled={isActioning}
                       >
-                        {isActioning ? '...' : 'Resume'}
-                      </button>
-                    )}
-                    {/* Terminate: only if NOT attached to a notebook */}
-                    {(state === 'RUNNING' || state === 'SUSPENDED') && !isAttached && (
-                      <button
-                        className="inst-action-btn inst-terminate-btn"
-                        onClick={() => handleTerminate(id)}
-                        disabled={isActioning}
-                      >
-                        {isActioning ? '...' : 'Terminate'}
+                        {isActioning ? '...' : 'Resume & Attach'}
                       </button>
                     )}
                   </span>
-                  )}
                 </div>
               )
             })}
@@ -204,13 +244,23 @@ export default function InstancesPanel({ onClose, onAttach, attachedIds, tabs = 
       {confirmTerminate && (
         <div className="instances-confirm-overlay" onClick={() => setConfirmTerminate(null)}>
           <div className="instances-confirm-card" onClick={e => e.stopPropagation()}>
-            <div className="instances-confirm-title">Terminate MicroVM?</div>
+            <div className="instances-confirm-title">
+              {confirmTerminate.type === 'terminateAndSave' ? 'Terminate & Save?' : 'Terminate MicroVM?'}
+            </div>
             <div className="instances-confirm-message">
-              This will destroy <code>{confirmTerminate.replace('microvm-', '').slice(0, 12)}...</code> and all its in-memory state. This cannot be undone.
+              {confirmTerminate.type === 'terminateAndSave'
+                ? <>Terminate <strong>{confirmTerminate.name}</strong>? State will be saved to S3 and can be restored later.</>
+                : <>This will destroy <code>{confirmTerminate.id.replace('microvm-', '').slice(0, 12)}...</code> and all its in-memory state. This cannot be undone.</>
+              }
             </div>
             <div className="instances-confirm-actions">
               <button className="modal-btn modal-btn-cancel" onClick={() => setConfirmTerminate(null)}>Cancel</button>
-              <button className="modal-btn modal-btn-danger" onClick={doTerminate}>Terminate</button>
+              <button
+                className={confirmTerminate.type === 'terminateAndSave' ? "modal-btn modal-btn-confirm" : "modal-btn modal-btn-danger"}
+                onClick={doTerminate}
+              >
+                {confirmTerminate.type === 'terminateAndSave' ? 'Terminate & Save' : 'Terminate'}
+              </button>
             </div>
           </div>
         </div>

@@ -223,15 +223,18 @@ Subsequent runs skip the build and launch in seconds.
 - Runtime installs persist across suspend/resume
 
 ### Notebooks
-- **Save** — `💾 Save` downloads a `.notebook.json` (includes code, output, tables, charts)
-- **Open** — `📂 Open` loads a saved notebook file
+- **Save** — Downloads a `.notebook.json` (includes code, output, tables, charts)
+- **Open** — Opens a saved notebook file as a **new tab** (doesn't overwrite the current notebook)
 - **Rename** — Double-click the notebook name in the sidebar
 
 ### MicroVM Instances
-- **Launch** — Click "🚀 Launch New MicroVM" in the connection panel (select 2/4/8 GB tier)
-- **Attach** — Click ⊕ on a running instance in the sidebar to open it in a new notebook
-- **Resume** — Click ▶ on a suspended instance to wake it
-- **Terminate** — Click ■ to destroy an instance
+- **Launch** — Click "Launch New MicroVM" in the connection panel (select 2/4/8 GB tier, idle timeout, max lifetime)
+- **Attach** — Click "Attach" on an available running instance to connect it to the current notebook
+- **Detach** — Detach a VM from a notebook (VM stays running, will suspend after idle timeout)
+- **Terminate & Save** — Terminate VM with state checkpointed to S3 (when session restore is enabled)
+- **Restore Session** — Launch a new VM and restore state from a previous S3 checkpoint
+- **Resume & Attach** — Resume a suspended instance and attach to a new notebook
+- **Terminate** — Destroy an unattached instance permanently
 - **Close notebook** — Automatically terminates the attached MicroVM
 
 ## Project Structure
@@ -353,6 +356,60 @@ The executor automatically detects:
 - Full notebook context sent with each request: prior cell code, outputs, cell position
 - System prompt instructs the model to output only executable Python (no markdown, no explanations)
 - Auto-detects credential availability — gracefully hidden when no AWS credentials are present
+
+### Session Checkpoint & Restore
+
+Extends MicroVM lifetime beyond the 8-hour maximum by checkpointing state to S3 on termination and restoring it on a new MicroVM.
+
+**How it works:**
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│ TERMINATION (automatic or manual)                                   │
+│                                                                     │
+│  /terminate hook fires (60s timeout):                               │
+│    1. dill.dumps(executor namespace) → checkpoint.pkl               │
+│    2. tar /tmp/*.csv,*.parquet → files.tar.gz                       │
+│    3. pip freeze → requirements.txt                                 │
+│    4. Upload all to s3://bucket/sessions/{session_id}/              │
+└─────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────┐
+│ RESTORE (user launches new MicroVM with "Restore Session")          │
+│                                                                     │
+│  /run hook fires (60s timeout):                                     │
+│    1. Download checkpoint.pkl → dill.loads() → restore namespace    │
+│    2. Download files.tar.gz → extract to /tmp/                      │
+│    3. pip install -r requirements.txt (runtime packages)            │
+│    4. MicroVM ready with full previous state                        │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+**What's checkpointed:**
+- All Python variables (DataFrames, models, dicts, lists, etc.)
+- Local data files in `/tmp/` (uploaded CSVs, generated outputs)
+- Runtime-installed packages (beyond the pre-baked set)
+
+**What's NOT checkpointed:**
+- Open network connections (DB handles, sockets)
+- Matplotlib figures (re-run cells to regenerate plots)
+- Non-serializable objects (file handles, C extensions with state)
+
+**Usage:**
+1. Check "Enable session restore" when launching a MicroVM
+2. Work normally — state is auto-saved when the VM terminates
+3. Launch a new MicroVM and select "Restore from session" to pick up where you left off
+
+**S3 structure:**
+```
+s3://microvm-sandbox-artifacts-{account}-{region}/
+  sessions/
+    {session_id}/
+      checkpoint.pkl      # Serialized namespace (dill)
+      files.tar.gz        # Local data files
+      requirements.txt    # pip freeze output
+      metadata.json       # Session info (timestamps, counts)
+```
 
 ### Pre-baked Packages
 ```
