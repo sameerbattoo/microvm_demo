@@ -165,11 +165,17 @@ Terminates all running/suspended MicroVMs and deletes all images. S3 bucket, IAM
 - **AI-powered code generation** — Toggle cells to AI mode, describe what you want in plain English, and generate Python code using Amazon Bedrock (Claude Sonnet)
 - **Run All** — Execute all cells sequentially with one click
 - Sequential execution queue (prevents race conditions)
-- Inline DataFrame table rendering (truncated at 50 rows with a note for larger results)
+- Inline DataFrame table rendering (truncated at 50 rows) with smart enhancements:
+  - URLs rendered as clickable links (opens in new tab)
+  - Image URLs rendered as inline thumbnails
+  - Email addresses as `mailto:` links
+  - Large numbers formatted with commas; negatives in red
+  - Booleans as color-coded badges; NaN/None styled as muted italic
+  - Long text truncated with hover tooltip
 - Inline matplotlib/chart image display
-- Package installation from toolbar
 - Save/Open notebooks (preserves code, output, tables, and charts)
 - Tab support for multiple notebooks (cells persist across tab switches)
+- **Notebook name pill** in toolbar — always shows which notebook is active
 - Delete any cell (including the last one — replaced with a fresh empty cell)
 
 ### 3.2 AI Code Generation
@@ -180,20 +186,34 @@ Terminates all running/suspended MicroVMs and deletes all images. S3 bucket, IAM
 - Uses **Amazon Bedrock Converse API** with Claude Sonnet (configurable model)
 - Auto-detects AWS credential availability — AI toggle hidden when no credentials are configured
 
-### 3.3 Data Sources Sidebar
-- **Uploaded Files** — Upload CSV/Excel/Parquet/JSON; click to insert read code
-- **Sample Data** — 4 built-in CSV datasets (sales, customers, traffic, A/B test)
-- **S3 Bucket** — Auto-discovered files in the artifacts bucket
-- **DynamoDB** — Auto-discovered tables matching the demo pattern
-- **Athena** — Auto-discovered tables from `microvm_demo_db` via Glue catalog; click to insert a full query snippet using the `microvm-demo` workgroup
+### 3.3 Activity Bar Sidebar
+A unified collapsible sidebar with VS Code-style icon activity bar:
+
+| Panel | Description |
+|-------|-------------|
+| **Notebooks** | Open tabs with connection status dots |
+| **Outline** | Searchable cell list with drag-to-reorder, execution status (✓/✗/●), click to scroll |
+| **Data Sources** | S3 files, DynamoDB tables, Athena tables, Public APIs (8 no-auth sources) — click to insert ready-to-run code |
+| **Variables** | Live variable explorer with smart previews (DataFrames as tables, dicts as key-value, colors as swatches) |
+| **Packages** | pip install + filter installed packages |
+| **Samples** | 6 prebuilt notebook templates |
+| **MicroVMs** | Instance cards with cost breakdown, lifecycle info, attach/terminate actions |
+
+- **Resizable** — drag right edge (180px–480px), width persists in localStorage
+- **Collapsible** — click active icon to collapse to just the 44px icon strip
+- **Public APIs** include: World Bank, World Countries, CoinGecko, Open-Meteo, USGS Earthquakes, NASA APOD, Open Library, Public Holidays
 
 ### 3.4 MicroVM Management
-- Launch new MicroVMs from the UI (2 GB / 4 GB / 8 GB tiers)
+- Launch new MicroVMs from the connection panel (5 memory tiers: 512MB–8GB)
+- **Idle suspend** configurable: 1 min, 2 min, 5 min, 15 min, 30 min, 1 hr, 2 hr
+- **Max lifetime** configurable: 1 hr, 2 hr, 4 hr, 8 hr
+- Instance cards in sidebar show: spec, session, lifecycle, real-time cost breakdown with rates
 - Attach existing running instances to notebooks
-- Resume suspended instances
+- Resume suspended instances (auto-resume on traffic ~1s)
 - Terminate instances (with optional S3 checkpoint)
-- Live state refresh every 15 seconds
+- Live state refresh every 10–15 seconds
 - Auto-reconnect on page refresh
+- Badge on activity bar icon shows running VM count
 
 ### 3.5 Cost Tracking
 - **Real-time estimated cost** per MicroVM displayed in the Instances panel
@@ -522,9 +542,10 @@ scipy (statistics), boto3 (AWS SDK)
 .
 ├── app/
 │   ├── server.py           # FastAPI: lifecycle hooks, execute (async), upload, install, interrupt
-│   └── executor.py         # Stateful Python executor with rich output, interrupt, variable inspection
+│   └── executor.py         # Stateful Python executor with rich output, interrupt, variable inspection,
+│                           # smart DataFrame enhancement (clickable URLs, number formatting, etc.)
 ├── proxy/
-│   ├── server.py           # Token proxy: launch, terminate, resume, auth, datasources
+│   ├── server.py           # Token proxy: launch, terminate, resume, auth, datasources, cost tracking
 │   ├── ai_utils.py         # AI code generation: system prompt builder, code extraction
 │   └── cost_tracker.py     # CostTracker class: per-MicroVM cost estimation
 ├── web/
@@ -539,20 +560,23 @@ scipy (statistics), boto3 (AWS SDK)
 │       │   ├── Cell.jsx         # Code cell: collapse, drag, timer, search highlight, staleness
 │       │   ├── Cell.css
 │       │   ├── MarkdownCell.jsx     # Markdown/text cell: edit/render modes
-│       │   ├── ConnectionPanel.jsx  # MicroVM connection + launch (dynamic tiers)
+│       │   ├── ConnectionPanel.jsx  # MicroVM connection + launch (dynamic tiers, idle/max config)
 │       │   ├── ConnectionPanel.css
-│       │   ├── InstancesPanel.jsx   # Instance list + cost display + expandable detail
-│       │   ├── InstancesPanel.css
 │       │   ├── Notebook.jsx     # Toolbar, cell management, search, drag-reorder, execution
 │       │   ├── Notebook.css
-│       │   ├── PackageManager.jsx   # Package list + install
-│       │   ├── VariableExplorer.jsx # Collapsible right panel: live variable state
-│       │   ├── VariableExplorer.css
-│       │   ├── VariablePreviewRenderer.jsx  # Smart type-aware variable preview
-│       │   ├── Sidebar.jsx      # Notebooks, Data Sources (S3/DDB/Athena), Samples
+│       │   ├── Sidebar.jsx      # Activity bar + collapsible panels:
+│       │   │                    #   • Notebooks — open tabs with status
+│       │   │                    #   • Outline — searchable cell list with drag-reorder
+│       │   │                    #   • Data Sources — S3, DynamoDB, Athena, Public APIs
+│       │   │                    #   • Variables — live variable explorer with smart previews
+│       │   │                    #   • Packages — pip install + package list
+│       │   │                    #   • Samples — prebuilt notebook templates
+│       │   │                    #   • MicroVMs — instance cards with cost breakdown
 │       │   ├── Sidebar.css
+│       │   ├── VariablePreviewRenderer.jsx  # Smart type-aware variable preview (colors, URLs, dicts, etc.)
 │       │   ├── Icons.jsx        # SVG icon components (35+)
-│       │   └── Modal.jsx        # Reusable confirm/input modals
+│       │   ├── Modal.jsx        # Reusable confirm/input modals
+│       │   └── Modal.css
 │       └── services/
 │           └── microvm.js       # MicroVM client service
 ├── tests/
@@ -568,8 +592,8 @@ scipy (statistics), boto3 (AWS SDK)
 ├── iam/                    # IAM trust and permission policies
 ├── Dockerfile              # MicroVM image (al2023-minimal, Python 3.11)
 ├── requirements.txt        # Python deps
-├── dev_run.sh              # One-command local dev
-├── aws_microvm_run.sh      # One-command AWS mode
+├── dev_run.sh              # One-command local dev (auto-detects python/python3)
+├── aws_microvm_run.sh      # One-command AWS mode (auto-detects python/python3)
 └── README.md
 ```
 

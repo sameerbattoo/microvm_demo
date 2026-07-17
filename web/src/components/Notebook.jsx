@@ -1,9 +1,7 @@
 import { useState, useCallback, useRef, useEffect, useMemo } from 'react'
 import Cell from './Cell'
 import ConnectionPanel from './ConnectionPanel'
-import PackageManager from './PackageManager'
-import VariableExplorer from './VariableExplorer'
-import { IconPlus, IconPlayAll, IconPlay, IconTrash, IconPackage, IconSave, IconFolderOpen, IconStop, IconFile, IconSearch, IconChevronUp, IconChevronDown, IconX, IconZap, IconSun, IconMoon, IconCode } from './Icons'
+import { IconPlus, IconPlayAll, IconPlay, IconTrash, IconSave, IconFolderOpen, IconStop, IconFile, IconSearch, IconChevronUp, IconChevronDown, IconX, IconZap, IconSun, IconMoon, IconCode, IconNotebook } from './Icons'
 import { PROXY_URL } from '../config'
 import './Notebook.css'
 
@@ -66,7 +64,6 @@ export default function Notebook({ tab, onUpdateTab, attachedIds = [], theme, on
     return [createCell()]
   })
   const [showConnection, setShowConnection] = useState(tab.status !== 'connected')
-  const [showPackageManager, setShowPackageManager] = useState(false)
   const [isExecuting, setIsExecuting] = useState(false)
   const [activeCellId, setActiveCellId] = useState(null)
   const [aiAvailable, setAiAvailable] = useState(false)
@@ -75,7 +72,6 @@ export default function Notebook({ tab, onUpdateTab, attachedIds = [], theme, on
   const [searchQuery, setSearchQuery] = useState('')
   const [searchMatches, setSearchMatches] = useState([]) // [{cellId, index}]
   const [searchActiveIdx, setSearchActiveIdx] = useState(0)
-  const [showVarExplorer, setShowVarExplorer] = useState(true)
   const [variables, setVariables] = useState({})
   const searchInputRef = useRef(null)
   const draggedCellRef = useRef(null)
@@ -234,6 +230,7 @@ export default function Notebook({ tab, onUpdateTab, attachedIds = [], theme, on
       if (resp.ok) {
         const data = await resp.json()
         setVariables(data.variables || {})
+        onUpdateTab({ _variables: data.variables || {} })
       }
     } catch {}
   }, [tab.microvmEndpoint, tab.microvmId, tab.microvmRealEndpoint, tab.status])
@@ -639,21 +636,6 @@ export default function Notebook({ tab, onUpdateTab, attachedIds = [], theme, on
 
           <span className="toolbar-divider" />
 
-          <button
-            className="toolbar-btn toolbar-btn-packages"
-            onClick={() => setShowPackageManager(true)}
-            title="Manage packages"
-          >
-            <IconPackage width={14} height={14} /> Packages
-          </button>
-          <button
-            className={`toolbar-btn toolbar-btn-variables ${showVarExplorer ? 'toolbar-btn-active' : ''}`}
-            onClick={() => { setShowVarExplorer(!showVarExplorer); if (!showVarExplorer) fetchVariables() }}
-            title="Variable explorer"
-          >
-            <IconCode width={14} height={14} /> Variables
-          </button>
-
           <div className="toolbar-status" onClick={() => setShowConnection(true)} title="Click to manage connection">
             <span className={`status-dot status-${tab.status}`} />
             <span className="status-text">
@@ -671,9 +653,10 @@ export default function Notebook({ tab, onUpdateTab, attachedIds = [], theme, on
             {theme === 'dark' ? <IconSun width={14} height={14} /> : <IconMoon width={14} height={14} />}
           </button>
         </div>
-        {tab.description && (
-          <div className="notebook-description">{tab.description}</div>
-        )}
+        <div className="notebook-identity">
+          <span className="notebook-name-pill"><IconNotebook width={13} height={13} /> {tab.name}</span>
+          {tab.description && <span className="notebook-description">{tab.description}</span>}
+        </div>
         </>
       )}
 
@@ -756,21 +739,7 @@ export default function Notebook({ tab, onUpdateTab, attachedIds = [], theme, on
         <div ref={bottomRef} />
       </div>
 
-      <VariableExplorer
-        variables={variables}
-        isOpen={showVarExplorer}
-        onClose={() => setShowVarExplorer(false)}
-      />
       </div>
-
-      {showPackageManager && (
-        <PackageManager
-          onClose={() => setShowPackageManager(false)}
-          microvmEndpoint={tab.microvmEndpoint}
-          microvmId={tab.microvmId}
-          microvmRealEndpoint={tab.microvmRealEndpoint}
-        />
-      )}
     </div>
   )
 }

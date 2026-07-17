@@ -396,6 +396,55 @@
   font-style: italic;
 }
 
+/* DataFrame cell enhancements */
+.output-html .df-cell-null {
+  color: var(--text-muted);
+  font-style: italic;
+  opacity: 0.6;
+}
+
+.output-html .df-cell-negative {
+  color: var(--accent-danger);
+}
+
+.output-html .df-cell-bool {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.output-html .df-bool-true {
+  background: rgba(166, 227, 161, 0.15);
+  color: var(--accent-success);
+}
+
+.output-html .df-bool-false {
+  background: rgba(243, 139, 168, 0.15);
+  color: var(--accent-danger);
+}
+
+.output-html .df-cell-img {
+  max-height: 40px;
+  max-width: 80px;
+  border-radius: 3px;
+  vertical-align: middle;
+}
+
+.output-html a {
+  color: var(--accent-primary);
+  text-decoration: none;
+}
+
+.output-html a:hover {
+  text-decoration: underline;
+}
+
+.output-html td[title] {
+  cursor: help;
+}
+
 /* ============================================================
    AI MODE STYLES
    ============================================================ */

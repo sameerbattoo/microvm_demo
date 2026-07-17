@@ -1,7 +1,6 @@
 import { useState, useCallback, useEffect, useRef } from 'react'
 import Notebook from './components/Notebook'
 import Sidebar from './components/Sidebar'
-import InstancesPanel from './components/InstancesPanel'
 import { ConfirmModal, InputModal } from './components/Modal'
 import { IconZap, IconSun, IconMoon } from './components/Icons'
 import { PROXY_URL } from './config'
@@ -114,7 +113,6 @@ export default function App() {
 
   // Modal state
   const [modal, setModal] = useState(null)
-  const [showInstances, setShowInstances] = useState(false)
   const [newNotebookName, setNewNotebookName] = useState('')
   const [newNotebookDesc, setNewNotebookDesc] = useState('')
 
@@ -517,23 +515,41 @@ export default function App() {
         <Sidebar
           tabs={tabs}
           activeTabId={activeTabId}
-          instances={instances}
           attachedIds={attachedIds}
           uploadedFiles={uploadedFiles}
           onSelectTab={setActiveTabId}
           onNewNotebook={addTab}
           onCloseTab={closeTab}
           onRenameTab={renameTab}
-          onAttachInstance={attachInstance}
-          onResumeInstance={resumeInstance}
-          onTerminateInstance={terminateInstance}
-          onRefreshInstances={fetchInstances}
           onUploadFile={uploadFile}
           onDeleteFile={deleteFile}
           onLoadSample={loadSample}
           onUploadSampleData={uploadSampleData}
           onInsertCode={insertCode}
-          onShowInstances={() => setShowInstances(true)}
+          cells={(tabs.find(t => t.id === activeTabId)?._cells) || []}
+          variables={(tabs.find(t => t.id === activeTabId)?._variables) || {}}
+          activeTab={tabs.find(t => t.id === activeTabId) || null}
+          onAttachInstance={attachInstance}
+          onTerminateAndSave={terminateAndSave}
+          onSuspendInstance={suspendInstance}
+          onScrollToCell={(idx) => {
+            const activeCells = tabs.find(t => t.id === activeTabId)?._cells || []
+            const cell = activeCells[idx]
+            if (cell) {
+              setTimeout(() => {
+                const el = document.querySelector(`[data-cell-id="${cell.id}"]`)
+                if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+              }, 50)
+            }
+          }}
+          onReorderCells={(fromIdx, toIdx) => {
+            const tab = tabs.find(t => t.id === activeTabId)
+            if (!tab || !tab._cells) return
+            const reordered = [...tab._cells]
+            const [moved] = reordered.splice(fromIdx, 1)
+            reordered.splice(toIdx, 0, moved)
+            updateTab(activeTabId, { _cells: reordered })
+          }}
         />
         <main className="app-main">
           {tabs.length === 0 && (
@@ -591,17 +607,6 @@ export default function App() {
       </div>
 
       {/* Modals */}
-      {showInstances && (
-        <InstancesPanel
-          onClose={() => setShowInstances(false)}
-          onAttach={attachInstance}
-          onTerminateAndSave={terminateAndSave}
-          onSuspend={suspendInstance}
-          attachedIds={attachedIds}
-          tabs={tabs}
-        />
-      )}
-
       {modal?.type === 'newNotebook' && (
         <InputModal
           title="New Notebook"

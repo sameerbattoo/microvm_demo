@@ -194,9 +194,9 @@ class SandboxExecutor:
                     display_val = val.head(MAX_DISPLAY_ROWS)
                     html = display_val.to_html(classes='df-table', max_rows=MAX_DISPLAY_ROWS, max_cols=20)
                     html += f'<div class="df-truncation-note">Showing {MAX_DISPLAY_ROWS} of {total_rows} rows</div>'
-                    return html
+                    return self._linkify_urls(html)
                 else:
-                    return val.to_html(classes='df-table', max_rows=MAX_DISPLAY_ROWS, max_cols=20)
+                    return self._linkify_urls(val.to_html(classes='df-table', max_rows=MAX_DISPLAY_ROWS, max_cols=20))
 
             # Check for polars DataFrame
             if 'polars' in module and type_name in ('DataFrame', 'LazyFrame'):
@@ -206,14 +206,76 @@ class SandboxExecutor:
                     display_val = val.head(MAX_DISPLAY_ROWS)
                     html = display_val.to_pandas().to_html(classes='df-table', max_rows=MAX_DISPLAY_ROWS, max_cols=20)
                     html += f'<div class="df-truncation-note">Showing {MAX_DISPLAY_ROWS} of {total_rows} rows</div>'
-                    return html
+                    return self._linkify_urls(html)
                 elif hasattr(val, 'head'):
                     display_val = val.head(MAX_DISPLAY_ROWS)
-                    return display_val.to_pandas().to_html(classes='df-table', max_rows=MAX_DISPLAY_ROWS, max_cols=20)
+                    return self._linkify_urls(display_val.to_pandas().to_html(classes='df-table', max_rows=MAX_DISPLAY_ROWS, max_cols=20))
 
         except Exception:
             pass
         return ""
+
+    @staticmethod
+    def _linkify_urls(html: str) -> str:
+        """Enhance table cells: clickable URLs, formatted numbers, truncated text, styled NaN/bools."""
+        import re
+
+        def enhance_cell(match):
+            content = match.group(1)
+
+            # Skip empty cells
+            if not content.strip():
+                return match.group(0)
+
+            # NaN / None — muted italic
+            if content.strip() in ('NaN', 'nan', 'None', 'NaT', ''):
+                return f'<td class="df-cell-null">{content.strip()}</td>'
+
+            # Booleans — colored badges
+            if content.strip() == 'True':
+                return '<td><span class="df-cell-bool df-bool-true">True</span></td>'
+            if content.strip() == 'False':
+                return '<td><span class="df-cell-bool df-bool-false">False</span></td>'
+
+            # Image URLs — render as thumbnail
+            if re.match(r'https?://\S+\.(png|jpg|jpeg|gif|svg|webp)(\?\S*)?$', content.strip(), re.IGNORECASE):
+                url = content.strip()
+                return f'<td><a href="{url}" target="_blank" rel="noopener"><img src="{url}" class="df-cell-img" alt="img"/></a></td>'
+
+            # URLs — clickable links
+            if re.match(r'https?://\S+$', content.strip()):
+                url = content.strip()
+                short = url if len(url) <= 60 else url[:57] + '...'
+                return f'<td><a href="{url}" target="_blank" rel="noopener">{short}</a></td>'
+
+            # Email addresses — mailto links
+            if re.match(r'^[\w.+-]+@[\w-]+\.[\w.-]+$', content.strip()):
+                email = content.strip()
+                return f'<td><a href="mailto:{email}">{email}</a></td>'
+
+            # Numbers — format with commas, color negatives red
+            num_match = re.match(r'^-?\d[\d,]*\.?\d*$', content.strip())
+            if num_match:
+                try:
+                    num = float(content.strip().replace(',', ''))
+                    if num < 0:
+                        formatted = f'{num:,.2f}' if '.' in content else f'{int(num):,}'
+                        return f'<td class="df-cell-negative">{formatted}</td>'
+                    elif abs(num) >= 1000:
+                        formatted = f'{num:,.2f}' if '.' in content else f'{int(num):,}'
+                        return f'<td>{formatted}</td>'
+                except (ValueError, OverflowError):
+                    pass
+
+            # Long text — truncate with title tooltip
+            if len(content) > 80:
+                escaped = content.replace('"', '&quot;')
+                truncated = content[:77] + '...'
+                return f'<td title="{escaped}">{truncated}</td>'
+
+            return match.group(0)
+
+        return re.sub(r'<td>([^<]*)</td>', enhance_cell, html)
 
     def _capture_plot(self) -> str:
         """If matplotlib has an active figure, capture it as base64 PNG and close it."""

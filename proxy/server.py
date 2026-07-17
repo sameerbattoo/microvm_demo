@@ -169,6 +169,10 @@ async def proxy_request(path: str, request: Request):
                 content=body,
             )
 
+        # Track last successful activity for this VM (used to detect auto-resume)
+        if response.status_code < 500 and microvm_id in _active_microvms:
+            _active_microvms[microvm_id]["last_active"] = time.time()
+
         return Response(
             content=response.content,
             status_code=response.status_code,
@@ -346,7 +350,7 @@ async def list_instances():
             instances[microvm_id] = {
                 "endpoint": endpoint,
                 "name": local_info.get("name", ""),
-                "state": state,
+                "state": state if not (state == "SUSPENDED" and local_info.get("last_active", 0) > time.time() - 60) else "RUNNING",
                 "launched_at": local_info.get("launched_at"),
                 "memory_mib": memory_mib,
                 "idle_timeout_sec": local_info.get("idle_timeout_sec"),
@@ -356,6 +360,22 @@ async def list_instances():
 
             # Track state transitions for cost
             _cost_tracker.record(microvm_id, state, memory_mib=memory_mib)
+
+        # Include VMs from _active_microvms that aren't yet in the AWS list (just launched)
+        for microvm_id, local_info in _active_microvms.items():
+            if microvm_id not in instances:
+                memory_mib = local_info.get("memory_mib", 4096)
+                instances[microvm_id] = {
+                    "endpoint": local_info.get("endpoint", ""),
+                    "name": local_info.get("name", ""),
+                    "state": "RUNNING",
+                    "launched_at": local_info.get("launched_at"),
+                    "memory_mib": memory_mib,
+                    "idle_timeout_sec": local_info.get("idle_timeout_sec"),
+                    "max_duration_sec": local_info.get("max_duration_sec"),
+                    "cost": _cost_tracker.get_cost(microvm_id),
+                }
+                _cost_tracker.record(microvm_id, "RUNNING", memory_mib=memory_mib)
 
         return {"instances": instances, "total_cost": _cost_tracker.get_total_cost()}
     except Exception as e:
