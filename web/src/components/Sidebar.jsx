@@ -277,7 +277,7 @@ export default function Sidebar({
                   <div
                     key={file.key}
                     className="sidebar-file-item sidebar-ds-clickable"
-                    onClick={() => onInsertCode && onInsertCode(`import pandas as pd\nimport boto3\nfrom io import BytesIO\nimport warnings\nwarnings.filterwarnings('ignore', category=DeprecationWarning)\n\ns3 = boto3.client('s3')\nobj = s3.get_object(Bucket='${file.bucket}', Key='${file.key}')\ndf = pd.read_csv(BytesIO(obj['Body'].read()))\ndf.head()`)}
+                    onClick={() => onInsertCode && onInsertCode(`import boto3, pandas as pd\n\ndef read_s3_csv(bucket, key):\n    obj = boto3.client('s3').get_object(Bucket=bucket, Key=key)\n    return pd.read_csv(obj['Body'])\n\ndf = read_s3_csv('${file.bucket}', '${file.key}')\ndf.head()`)}
                     title={`Click to insert code: read '${file.key}' from S3`}
                   >
                     <span className="sidebar-file-icon sidebar-icon-s3">
@@ -308,7 +308,7 @@ export default function Sidebar({
                   <div
                     key={table.name}
                     className="sidebar-file-item sidebar-ds-clickable"
-                    onClick={() => onInsertCode && onInsertCode(`import boto3\nimport pandas as pd\nimport warnings\nwarnings.filterwarnings('ignore', category=DeprecationWarning)\n\ndynamodb = boto3.resource('dynamodb', region_name='${table.region}')\ntable = dynamodb.Table('${table.name}')\nresponse = table.scan()\ndf = pd.DataFrame(response['Items'])\ndf.head()`)}
+                    onClick={() => onInsertCode && onInsertCode(`import boto3, pandas as pd\n\ndef scan_dynamodb(table_name, region='${table.region}'):\n    table = boto3.resource('dynamodb', region_name=region).Table(table_name)\n    return pd.DataFrame(table.scan()['Items'])\n\ndf = scan_dynamodb('${table.name}')\ndf.head()`)}
                     title={`Click to insert code for table '${table.name}'`}
                   >
                     <span className="sidebar-file-icon sidebar-icon-dynamodb">
@@ -339,7 +339,7 @@ export default function Sidebar({
                   <div
                     key={`${table.database}.${table.name}`}
                     className="sidebar-file-item sidebar-ds-clickable"
-                    onClick={() => onInsertCode && onInsertCode(`import boto3, pandas as pd, time\n\nathena = boto3.client('athena', region_name='${table.region}')\nquery = "SELECT * FROM ${table.database}.${table.name} LIMIT 100"\n\nexec_id = athena.start_query_execution(QueryString=query, WorkGroup='${athenaWorkgroup}')['QueryExecutionId']\nwhile athena.get_query_execution(QueryExecutionId=exec_id)['QueryExecution']['Status']['State'] in ('QUEUED', 'RUNNING'):\n    time.sleep(1)\n\nresults = athena.get_query_results(QueryExecutionId=exec_id)\ncolumns = [c['Label'] for c in results['ResultSet']['ResultSetMetadata']['ColumnInfo']]\nrows = [[f.get('VarCharValue', '') for f in r['Data']] for r in results['ResultSet']['Rows'][1:]]\ndf = pd.DataFrame(rows, columns=columns)\ndf`)}
+                    onClick={() => onInsertCode && onInsertCode(`import boto3, pandas as pd, time\n\ndef athena_query(sql, workgroup='${athenaWorkgroup}', region='${table.region}'):\n    c = boto3.client('athena', region_name=region)\n    eid = c.start_query_execution(QueryString=sql, WorkGroup=workgroup)['QueryExecutionId']\n    while c.get_query_execution(QueryExecutionId=eid)['QueryExecution']['Status']['State'] in ('QUEUED','RUNNING'): time.sleep(0.5)\n    rows = c.get_query_results(QueryExecutionId=eid)['ResultSet']['Rows']\n    header = [col['VarCharValue'] for col in rows[0]['Data']]\n    data = [[col.get('VarCharValue','') for col in row['Data']] for row in rows[1:]]\n    return pd.DataFrame(data, columns=header)\n\ndf = athena_query("SELECT * FROM ${table.database}.${table.name} LIMIT 100")\ndf`)}
                     title={`Click to query ${table.database}.${table.name} (${table.column_count} columns)`}
                   >
                     <span className="sidebar-file-icon sidebar-icon-athena">

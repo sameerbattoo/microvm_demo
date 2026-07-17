@@ -38,9 +38,11 @@ export default function ConnectionPanel({ tab, onConnect, onUpdateTab, onDismiss
         const data = await resp.json()
         if (data.tiers && data.tiers.length > 0) {
           setImageTiers(data.tiers)
-          // Default to 2048 if available, otherwise first tier
-          const defaultTier = data.tiers.find(t => t.memory_mib === 2048) || data.tiers[0]
-          setLaunchMemory(String(defaultTier.memory_mib))
+          // If tab already has a memory setting, keep it; otherwise default to 2048
+          if (!tab.microvmMemory) {
+            const defaultTier = data.tiers.find(t => t.memory_mib === 2048) || data.tiers[0]
+            setLaunchMemory(String(defaultTier.memory_mib))
+          }
         }
       }
     } catch {}
@@ -212,7 +214,9 @@ export default function ConnectionPanel({ tab, onConnect, onUpdateTab, onDismiss
                         <span className="connection-info-spec">
                           {tab.idleTimeoutSeconds >= 3600
                             ? `${Math.floor(tab.idleTimeoutSeconds / 3600)}h ${Math.floor((tab.idleTimeoutSeconds % 3600) / 60)}m`
-                            : `${Math.floor(tab.idleTimeoutSeconds / 60)} minutes`}
+                            : tab.idleTimeoutSeconds >= 60
+                              ? `${Math.floor(tab.idleTimeoutSeconds / 60)} minute${Math.floor(tab.idleTimeoutSeconds / 60) > 1 ? 's' : ''}`
+                              : `${tab.idleTimeoutSeconds} seconds`}
                         </span>
                       </div>
                     )}
@@ -359,6 +363,8 @@ export default function ConnectionPanel({ tab, onConnect, onUpdateTab, onDismiss
                 <div className="launch-spec-item launch-spec-editable">
                   <span className="launch-spec-label">Idle suspend</span>
                   <select className="launch-spec-select" value={launchIdleTimeout} onChange={(e) => setLaunchIdleTimeout(e.target.value)}>
+                    <option value="60">1 minute</option>
+                    <option value="120">2 minutes</option>
                     <option value="300">5 minutes</option>
                     <option value="900">15 minutes</option>
                     <option value="1800">30 minutes</option>
