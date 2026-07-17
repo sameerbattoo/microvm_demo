@@ -3,7 +3,7 @@ import Cell from './Cell'
 import ConnectionPanel from './ConnectionPanel'
 import PackageManager from './PackageManager'
 import VariableExplorer from './VariableExplorer'
-import { IconPlus, IconPlayAll, IconPlay, IconTrash, IconPackage, IconSave, IconFolderOpen, IconSettings, IconStop, IconFile, IconSearch, IconChevronUp, IconChevronDown, IconX, IconZap, IconSun, IconMoon, IconCode } from './Icons'
+import { IconPlus, IconPlayAll, IconPlay, IconTrash, IconPackage, IconSave, IconFolderOpen, IconStop, IconFile, IconSearch, IconChevronUp, IconChevronDown, IconX, IconZap, IconSun, IconMoon, IconCode } from './Icons'
 import { PROXY_URL } from '../config'
 import './Notebook.css'
 
@@ -654,13 +654,7 @@ export default function Notebook({ tab, onUpdateTab, attachedIds = [], theme, on
             <IconCode width={14} height={14} /> Variables
           </button>
 
-          <span className="toolbar-divider" />
-
-          <button className="toolbar-btn toolbar-btn-connection" onClick={() => setShowConnection(true)} title="Connection settings">
-            <IconSettings width={14} height={14} /> Connection
-          </button>
-
-          <div className="toolbar-status">
+          <div className="toolbar-status" onClick={() => setShowConnection(true)} title="Click to manage connection">
             <span className={`status-dot status-${tab.status}`} />
             <span className="status-text">
               {tab.status === 'connected' ? 'Connected' :

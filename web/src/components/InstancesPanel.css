@@ -456,3 +456,18 @@
   gap: var(--space-2);
   justify-content: flex-end;
 }
+
+.inst-cost-detail-lifecycle {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.inst-cost-detail-lifecycle .inst-cost-label {
+  font-size: var(--font-size-xs);
+}
+
+.inst-cost-detail-lifecycle .inst-cost-value {
+  font-size: 11px;
+  color: var(--text-secondary);
+}

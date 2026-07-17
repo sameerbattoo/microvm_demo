@@ -8,10 +8,10 @@ export default function ConnectionPanel({ tab, onConnect, onUpdateTab, onDismiss
   const [error, setError] = useState(null)
   const [availableInstances, setAvailableInstances] = useState([])
   const [loadingInstances, setLoadingInstances] = useState(false)
-  const [launchMemory, setLaunchMemory] = useState('2048')
-  const [launchIdleTimeout, setLaunchIdleTimeout] = useState('1800')
-  const [launchMaxDuration, setLaunchMaxDuration] = useState('28800')
-  const [checkpointEnabled, setCheckpointEnabled] = useState(true)
+  const [launchMemory, setLaunchMemory] = useState(String(tab.microvmMemory || '2048'))
+  const [launchIdleTimeout, setLaunchIdleTimeout] = useState(String(tab.idleTimeoutSeconds || '1800'))
+  const [launchMaxDuration, setLaunchMaxDuration] = useState(String(tab.maxDurationSeconds || '28800'))
+  const [checkpointEnabled, setCheckpointEnabled] = useState(tab.checkpointEnabled ?? true)
   const [imageTiers, setImageTiers] = useState([])
 
   // Auto-detect which mode we're in
@@ -151,6 +151,8 @@ export default function ConnectionPanel({ tab, onConnect, onUpdateTab, onDismiss
           microvmEndpoint: `${PROXY_URL}/proxy`,
           microvmRealEndpoint: result.endpoint,
           microvmMemory: parseInt(launchMemory),
+          idleTimeoutSeconds: parseInt(launchIdleTimeout),
+          maxDurationSeconds: parseInt(launchMaxDuration),
           sessionId: result.sessionId,
           checkpointEnabled,
           status: 'connected',
@@ -204,6 +206,26 @@ export default function ConnectionPanel({ tab, onConnect, onUpdateTab, onDismiss
                           : 'Fetching...'}
                       </span>
                     </div>
+                    {tab.idleTimeoutSeconds && (
+                      <div className="connection-info-row">
+                        <span className="connection-info-label">Idle Suspend</span>
+                        <span className="connection-info-spec">
+                          {tab.idleTimeoutSeconds >= 3600
+                            ? `${Math.floor(tab.idleTimeoutSeconds / 3600)}h ${Math.floor((tab.idleTimeoutSeconds % 3600) / 60)}m`
+                            : `${Math.floor(tab.idleTimeoutSeconds / 60)} minutes`}
+                        </span>
+                      </div>
+                    )}
+                    {tab.maxDurationSeconds && (
+                      <div className="connection-info-row">
+                        <span className="connection-info-label">Max Lifetime</span>
+                        <span className="connection-info-spec">
+                          {tab.maxDurationSeconds >= 3600
+                            ? `${Math.floor(tab.maxDurationSeconds / 3600)} hours`
+                            : `${Math.floor(tab.maxDurationSeconds / 60)} minutes`}
+                        </span>
+                      </div>
+                    )}
                     {tab.sessionId && (
                       <div className="connection-info-row">
                         <span className="connection-info-label">Session</span>

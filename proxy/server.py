@@ -246,6 +246,8 @@ async def launch_microvm(request: Request):
             "name": notebook_name,
             "launched_at": time.time(),
             "memory_mib": memory_mib,
+            "idle_timeout_sec": idle_timeout_sec,
+            "max_duration_sec": max_duration_sec,
         }
 
         # Start cost tracking from launch
@@ -347,6 +349,8 @@ async def list_instances():
                 "state": state,
                 "launched_at": local_info.get("launched_at"),
                 "memory_mib": memory_mib,
+                "idle_timeout_sec": local_info.get("idle_timeout_sec"),
+                "max_duration_sec": local_info.get("max_duration_sec"),
                 "cost": _cost_tracker.get_cost(microvm_id),
             }
 

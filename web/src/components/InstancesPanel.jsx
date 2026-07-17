@@ -311,6 +311,22 @@ export default function InstancesPanel({ onClose, onAttach, onTerminateAndSave, 
                         <span>Total estimated cost</span>
                         <span>${cost.total_cost_usd.toFixed(6)}</span>
                       </div>
+                      {(inst.idle_timeout_sec || inst.max_duration_sec) && (
+                        <div className="inst-cost-detail-lifecycle">
+                          {inst.idle_timeout_sec && (
+                            <div className="inst-cost-detail-row">
+                              <span className="inst-cost-label">Suspend after idle</span>
+                              <span className="inst-cost-value">{formatDuration(inst.idle_timeout_sec)}</span>
+                            </div>
+                          )}
+                          {inst.max_duration_sec && (
+                            <div className="inst-cost-detail-row">
+                              <span className="inst-cost-label">Max lifetime</span>
+                              <span className="inst-cost-value">{formatDuration(inst.max_duration_sec)}</span>
+                            </div>
+                          )}
+                        </div>
+                      )}
                     </div>
                   )
                 })()}
