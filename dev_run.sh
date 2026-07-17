@@ -23,14 +23,18 @@ echo "============================================"
 echo ""
 
 # --- Check and install dependencies ---
-if ! command -v python3 &>/dev/null; then
-  echo "❌ python3 not found. Install Python 3.11+"
+if command -v python3 &>/dev/null; then
+  PYTHON=python3
+elif command -v python &>/dev/null && [[ "$(python --version 2>&1)" == *"3."* ]]; then
+  PYTHON=python
+else
+  echo "❌ Python 3 not found. Install python3 or ensure 'python' points to Python 3."
   exit 1
 fi
 
 echo ">> Checking Python dependencies..."
-python3 -m pip install --quiet fastapi uvicorn "boto3>=1.43.40" 2>/dev/null || \
-  python3 -m pip install --quiet --break-system-packages fastapi uvicorn "boto3>=1.43.40" 2>/dev/null || \
+$PYTHON -m pip install --quiet fastapi uvicorn "boto3>=1.43.40" 2>/dev/null || \
+  $PYTHON -m pip install --quiet --break-system-packages fastapi uvicorn "boto3>=1.43.40" 2>/dev/null || \
   echo "   ⚠ Could not install Python deps automatically. Please install: pip3 install fastapi uvicorn 'boto3>=1.43.40'"
 
 if ! command -v npm &>/dev/null; then
@@ -55,7 +59,7 @@ fi
 
 # --- Start backend ---
 echo ">> Starting sandbox backend on http://localhost:$BACKEND_PORT"
-(cd "$ROOT_DIR" && python3 -m uvicorn app.server:app --host 0.0.0.0 --port "$BACKEND_PORT") &
+(cd "$ROOT_DIR" && $PYTHON -m uvicorn app.server:app --host 0.0.0.0 --port "$BACKEND_PORT") &
 BACKEND_PID=$!
 
 sleep 1

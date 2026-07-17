@@ -40,10 +40,15 @@ for port in $BACKEND_PORT $PROXY_PORT 5173; do
 done
 
 # --- Check dependencies ---
-if ! command -v python3 &>/dev/null; then
-  echo "❌ python3 not found."
+if command -v python3 &>/dev/null; then
+  PYTHON=python3
+elif command -v python &>/dev/null && [[ "$(python --version 2>&1)" == *"3."* ]]; then
+  PYTHON=python
+else
+  echo "❌ Python 3 not found. Install python3 or ensure 'python' points to Python 3."
   exit 1
 fi
+echo "   Python: $($PYTHON --version)"
 
 # Check AWS CLI version (need 2.35.10+ for lambda-microvms)
 if ! command -v aws &>/dev/null; then
@@ -69,8 +74,8 @@ fi
 echo "   AWS CLI version: $AWS_CLI_VERSION ✓"
 
 echo ">> Checking Python dependencies..."
-python3 -m pip install --quiet "fastapi" "uvicorn" "httpx" "boto3>=1.43.40" 2>/dev/null || \
-  python3 -m pip install --quiet --break-system-packages "fastapi" "uvicorn" "httpx" "boto3>=1.43.40" 2>/dev/null || \
+$PYTHON -m pip install --quiet "fastapi" "uvicorn" "httpx" "boto3>=1.43.40" 2>/dev/null || \
+  $PYTHON -m pip install --quiet --break-system-packages "fastapi" "uvicorn" "httpx" "boto3>=1.43.40" 2>/dev/null || \
   echo "   ⚠ Could not install Python deps automatically. Please install: pip3 install fastapi uvicorn httpx 'boto3>=1.43.40'"
 
 if ! command -v npm &>/dev/null; then
@@ -174,7 +179,7 @@ echo ">> Starting token proxy on http://localhost:$PROXY_PORT"
   POLL_INTERVAL_MS="$POLL_INTERVAL_MS" \
   ATHENA_DB="$ATHENA_DB" \
   ATHENA_WORKGROUP="$ATHENA_WORKGROUP" \
-  python3 -m uvicorn proxy.server:app --host 0.0.0.0 --port "$PROXY_PORT" --log-level warning) &
+  $PYTHON -m uvicorn proxy.server:app --host 0.0.0.0 --port "$PROXY_PORT" --log-level warning) &
 PROXY_PID=$!
 sleep 1
 
