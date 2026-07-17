@@ -16,7 +16,8 @@
       "Effect": "Allow",
       "Action": [
         "s3:GetObject",
-        "s3:ListBucket"
+        "s3:ListBucket",
+        "s3:GetBucketLocation"
       ],
       "Resource": [
         "arn:aws:s3:::microvm-sandbox-artifacts-*",
@@ -49,6 +50,44 @@
         "dynamodb:ListTables"
       ],
       "Resource": "arn:aws:dynamodb:*:*:table/microvm-demo-*"
+    },
+    {
+      "Sid": "AthenaQueryAccess",
+      "Effect": "Allow",
+      "Action": [
+        "athena:StartQueryExecution",
+        "athena:GetQueryExecution",
+        "athena:GetQueryResults",
+        "athena:GetWorkGroup",
+        "athena:ListDatabases",
+        "athena:ListTableMetadata",
+        "athena:GetTableMetadata"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "GlueCatalogAccess",
+      "Effect": "Allow",
+      "Action": [
+        "glue:GetDatabase",
+        "glue:GetDatabases",
+        "glue:GetTable",
+        "glue:GetTables"
+      ],
+      "Resource": [
+        "arn:aws:glue:*:*:catalog",
+        "arn:aws:glue:*:*:database/microvm_demo_db",
+        "arn:aws:glue:*:*:table/microvm_demo_db/*"
+      ]
+    },
+    {
+      "Sid": "S3AthenaResultsWrite",
+      "Effect": "Allow",
+      "Action": [
+        "s3:PutObject",
+        "s3:GetObject"
+      ],
+      "Resource": "arn:aws:s3:::microvm-sandbox-artifacts-*/athena-results/*"
     },
     {
       "Sid": "STSIdentity",

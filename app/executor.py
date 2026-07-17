@@ -8,6 +8,8 @@ AI-generated code runs here, accumulating state like a notebook kernel.
 
 import io
 import sys
+import ctypes
+import threading
 import traceback
 import subprocess
 from dataclasses import dataclass, field
@@ -43,6 +45,23 @@ class SandboxExecutor:
         self._execution_count: int = 0
         self._history: list[dict] = []
         self._created_at = datetime.now(timezone.utc)
+        self._exec_thread: threading.Thread | None = None
+        self._exec_thread_id: int | None = None
+
+    def interrupt(self) -> bool:
+        """
+        Interrupt a running execution by raising KeyboardInterrupt in the exec thread.
+        Returns True if an interrupt was sent, False if nothing was running.
+        """
+        tid = self._exec_thread_id
+        if tid is None:
+            return False
+        # Raise KeyboardInterrupt in the target thread
+        res = ctypes.pythonapi.PyThreadState_SetAsyncExc(
+            ctypes.c_ulong(tid),
+            ctypes.py_object(KeyboardInterrupt)
+        )
+        return res > 0
 
     def execute(self, code: str) -> ExecutionResult:
         """
@@ -65,6 +84,9 @@ class SandboxExecutor:
 
         variables_before = set(self._namespace.keys())
 
+        # Track current thread for interrupt support
+        self._exec_thread_id = threading.current_thread().ident
+
         try:
             # Try exec first (statements), fall back to eval (expressions)
             # If the last line is an expression, capture its value
@@ -72,6 +94,9 @@ class SandboxExecutor:
             exec(compiled, self._namespace)
             success = True
             error = ""
+        except KeyboardInterrupt:
+            success = False
+            error = "Execution interrupted by user"
         except Exception as e:
             success = False
             # Show only the user-friendly error, not internal traceback
@@ -86,6 +111,7 @@ class SandboxExecutor:
             else:
                 error = f"{error_type}: {error_msg}"
         finally:
+            self._exec_thread_id = None
             sys.stdout = old_stdout
             sys.stderr = old_stderr
 
@@ -152,18 +178,28 @@ class SandboxExecutor:
             module = type(val).__module__ or ""
 
             if 'pandas' in module and type_name in ('DataFrame', 'Series'):
-                # Limit to 50 rows for display
-                if hasattr(val, 'head'):
-                    display_val = val.head(50)
+                MAX_DISPLAY_ROWS = 50
+                total_rows = len(val)
+                if hasattr(val, 'head') and total_rows > MAX_DISPLAY_ROWS:
+                    display_val = val.head(MAX_DISPLAY_ROWS)
+                    html = display_val.to_html(classes='df-table', max_rows=MAX_DISPLAY_ROWS, max_cols=20)
+                    html += f'<div class="df-truncation-note">Showing {MAX_DISPLAY_ROWS} of {total_rows} rows</div>'
+                    return html
                 else:
-                    display_val = val
-                return display_val.to_html(classes='df-table', max_rows=50, max_cols=20)
+                    return val.to_html(classes='df-table', max_rows=MAX_DISPLAY_ROWS, max_cols=20)
 
             # Check for polars DataFrame
             if 'polars' in module and type_name in ('DataFrame', 'LazyFrame'):
-                if hasattr(val, 'head'):
-                    display_val = val.head(50)
-                    return display_val.to_pandas().to_html(classes='df-table', max_rows=50, max_cols=20)
+                MAX_DISPLAY_ROWS = 50
+                total_rows = len(val) if hasattr(val, '__len__') else 0
+                if hasattr(val, 'head') and total_rows > MAX_DISPLAY_ROWS:
+                    display_val = val.head(MAX_DISPLAY_ROWS)
+                    html = display_val.to_pandas().to_html(classes='df-table', max_rows=MAX_DISPLAY_ROWS, max_cols=20)
+                    html += f'<div class="df-truncation-note">Showing {MAX_DISPLAY_ROWS} of {total_rows} rows</div>'
+                    return html
+                elif hasattr(val, 'head'):
+                    display_val = val.head(MAX_DISPLAY_ROWS)
+                    return display_val.to_pandas().to_html(classes='df-table', max_rows=MAX_DISPLAY_ROWS, max_cols=20)
 
         except Exception:
             pass

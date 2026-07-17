@@ -16,57 +16,179 @@ on Lambda MicroVMs. Each notebook session gets its own Firecracker VM providing:
 - **VM-level isolation** — Each user's code runs in a separate Firecracker VM
 - **Suspend/resume** — Idle sessions pause automatically, resume instantly with all state intact
 - **Auto-provisioning** — New notebooks can auto-launch MicroVMs; closing terminates them
-- **Rich output** — DataFrames render as styled tables, matplotlib plots display inline
+- **Rich output** — DataFrames render as styled tables (with truncation for large results), matplotlib plots display inline
 - **File upload** — Upload CSV/Excel/Parquet/JSON files and reference them in code
+- **AWS data sources** — Auto-discover S3, DynamoDB, and Athena tables from the sidebar; click to insert query code
+- **Cost tracking** — Real-time estimated cost per MicroVM with detailed breakdown on hover
 - **Lifecycle hooks** — The sandbox responds to MicroVM lifecycle events
 
-## Features
+---
 
-### Notebook UI
+## Table of Contents
+
+1. [Prerequisites](#1-prerequisites)
+2. [Quick Start](#2-quick-start)
+3. [Features](#3-features)
+4. [Architecture](#4-architecture)
+5. [Usage](#5-usage)
+6. [Configuration](#6-configuration)
+7. [Technical Details](#7-technical-details)
+8. [Project Structure](#8-project-structure)
+9. [Cost](#9-cost)
+10. [References](#10-references)
+
+---
+
+## 1. Prerequisites
+
+### 1.1 Local Dev Mode (no AWS needed)
+
+| Requirement | Version | Notes |
+|------------|---------|-------|
+| Python | 3.11+ | For the sandbox backend |
+| Node.js | 18+ | For the React UI (Vite) |
+| pip | latest | Installs FastAPI, uvicorn, boto3 |
+
+### 1.2 AWS MicroVM Mode (full features)
+
+| Requirement | Version | Notes |
+|------------|---------|-------|
+| AWS CLI | **2.35.10+** | Required for `lambda-microvms` subcommand. Script validates and exits with upgrade instructions if too old. |
+| Python | 3.11+ | Proxy server + sandbox |
+| Node.js | 18+ | React UI |
+| npm | 8+ | Installed with Node.js |
+| boto3 | >= 1.43.40 | Auto-installed by launch script |
+| zip | any | For packaging the MicroVM image artifact |
+
+### 1.3 AWS Account Requirements
+
+| Resource | Purpose |
+|----------|---------|
+| **AWS Account** | Active account with billing enabled |
+| **AWS Credentials** | Configured via `~/.aws/credentials` or environment variables. The launch script uses the `default` profile (configurable in `scripts/config.sh`). |
+| **IAM Permissions** (for the operator) | `iam:CreateRole`, `iam:PutRolePolicy`, `iam:GetRole`, `s3:CreateBucket`, `s3:PutObject`, `s3:GetObject`, `lambda-microvms:*`, `dynamodb:CreateTable`, `dynamodb:BatchWriteItem`, `athena:CreateWorkGroup`, `athena:StartQueryExecution`, `glue:CreateDatabase`, `glue:CreateTable` |
+| **Region** | `us-west-2` (default). Also supports `us-east-1`, `us-east-2`, `eu-west-1`, `ap-northeast-1`. |
+
+### 1.4 IAM Roles Created by the Scripts
+
+| Role | Purpose | Key Permissions |
+|------|---------|-----------------|
+| `MicroVMSandboxBuildRole` | Used during MicroVM image build to pull artifacts from S3 | S3 read on artifact bucket |
+| `MicroVMSandboxExecRole` | Attached to running MicroVMs — gives your notebook code access to AWS services | S3 (read/write), DynamoDB (scan/query), Athena (query), Glue (catalog read), STS |
+
+### 1.5 Optional (for AI Code Generation)
+
+| Requirement | Notes |
+|------------|-------|
+| Amazon Bedrock access | Model access enabled for Claude Sonnet in your region |
+| `bedrock:InvokeModel` permission | On the operator's credentials (proxy calls Bedrock, not the MicroVM) |
+
+> AI features auto-detect credentials. If Bedrock is not configured, the AI toggle is simply hidden in the UI — everything else works normally.
+
+---
+
+## 2. Quick Start
+
+### 2.1 Local Dev
+
+```bash
+./dev_run.sh
+```
+
+Starts the sandbox backend (`:8080`) and notebook UI (`:5173`).
+Click **"Local Dev"** to connect. No AWS account needed.
+
+### 2.2 AWS MicroVM Mode
+
+```bash
+./aws_microvm_run.sh
+```
+
+Fully self-contained. On first run it:
+1. Creates S3 bucket, IAM roles (if missing)
+2. Provisions sample data (DynamoDB, S3, Athena)
+3. Builds MicroVM images in parallel (~4-5 min)
+4. Starts the token proxy (`:8081`)
+5. Starts the notebook UI (`:5173`)
+
+Subsequent runs skip the build and launch in seconds.
+
+### 2.3 Teardown
+
+```bash
+bash scripts/teardown.sh
+```
+
+Terminates all running/suspended MicroVMs and deletes all images. S3 bucket, IAM roles, and DynamoDB table are preserved for manual cleanup.
+
+---
+
+## 3. Features
+
+### 3.1 Notebook UI
 - Code cells with `Shift+Enter` execution
 - **AI-powered code generation** — Toggle cells to AI mode, describe what you want in plain English, and generate Python code using Amazon Bedrock (Claude Sonnet)
 - **Run All** — Execute all cells sequentially with one click
 - Sequential execution queue (prevents race conditions)
-- Inline DataFrame table rendering
+- Inline DataFrame table rendering (truncated at 50 rows with a note for larger results)
 - Inline matplotlib/chart image display
 - Package installation from toolbar
 - Save/Open notebooks (preserves code, output, tables, and charts)
 - Tab support for multiple notebooks (cells persist across tab switches)
+- Delete any cell (including the last one — replaced with a fresh empty cell)
 
-### AI Code Generation
-- Each cell has a **Code | ✨ AI** mode toggle
-- In AI mode, describe what you want in natural language and hit Enter (or click Generate)
-- The AI receives **full notebook context** — all prior cells, their outputs, and cell position — for accurate, contextual code generation
-- Generated code shows in a **preview panel** with Accept/Discard buttons
-- Accepting inserts the code and switches back to Code mode for execution
+### 3.2 AI Code Generation
+- Each cell has a **Code | AI** mode toggle
+- In AI mode, describe what you want in natural language and hit Enter
+- The AI receives **full notebook context** — all prior cells, their outputs, and cell position
+- Generated code shows in a preview panel with Accept/Discard buttons
 - Uses **Amazon Bedrock Converse API** with Claude Sonnet (configurable model)
 - Auto-detects AWS credential availability — AI toggle hidden when no credentials are configured
-- Works in both local dev and MicroVM modes
 
-### Sidebar (JupyterLab-style)
-- **📓 Notebooks** — Create, rename (double-click), switch, close
-- **📁 Data Sources** — Unified panel for uploaded files, sample data, S3 bucket files, DynamoDB tables. Click any item to insert read code into the active cell.
-- **💡 Sample Notebooks** — Pre-built analysis notebooks (Sales, Time Series, Statistical, APIs, AWS)
-- **☁️ MicroVMs** — Footer showing live instance count; click to manage (Attach, Resume, Terminate)
+### 3.3 Data Sources Sidebar
+- **Uploaded Files** — Upload CSV/Excel/Parquet/JSON; click to insert read code
+- **Sample Data** — 4 built-in CSV datasets (sales, customers, traffic, A/B test)
+- **S3 Bucket** — Auto-discovered files in the artifacts bucket
+- **DynamoDB** — Auto-discovered tables matching the demo pattern
+- **Athena** — Auto-discovered tables from `microvm_demo_db` via Glue catalog; click to insert a full query snippet using the `microvm-demo` workgroup
 
-### MicroVM Management
-- Auto-detect proxy availability
+### 3.4 MicroVM Management
 - Launch new MicroVMs from the UI (2 GB / 4 GB / 8 GB tiers)
 - Attach existing running instances to notebooks
 - Resume suspended instances
-- Terminate instances
+- Terminate instances (with optional S3 checkpoint)
 - Live state refresh every 15 seconds
-- Auto-reconnect on page refresh (remembers which VM each notebook was connected to)
+- Auto-reconnect on page refresh
 
-### UI & Theming
+### 3.5 Cost Tracking
+- **Real-time estimated cost** per MicroVM displayed in the Instances panel
+- Tracks time in RUNNING and SUSPENDED states via the proxy
+- **Hover tooltip** on any cost figure shows detailed breakdown:
+  - Running duration and cost
+  - Suspended duration and cost
+  - Memory tier
+  - Pricing rates applied
+- **Session total** in the panel footer (aggregated across all tracked MicroVMs)
+- Persists across page refreshes (tracked in proxy process memory)
+- Uses published Lambda MicroVM pricing: `$0.0000133/GB-sec` (running), `$0.0000000309/GB-sec` (suspended)
+
+### 3.6 Session Checkpoint & Restore
+- Enable "session restore" when launching a MicroVM
+- On termination, state is serialized to S3 (variables, files, packages)
+- Launch a new MicroVM and select "Restore from session" to resume where you left off
+- Extends effective session lifetime beyond the 8-hour VM maximum
+
+### 3.7 UI & Theming
 - **Light/Dark theme toggle** — persists across sessions
 - **Python syntax highlighting** — Prism.js-powered with One Dark-inspired colors
 - **SVG icons** throughout (Lucide-style, consistent stroke weight)
 - **Centralized CSS design tokens** — all colors, spacing, shadows via CSS custom properties
 
-## Architecture
+---
 
-### Local Dev Mode (`./dev_run.sh`)
+## 4. Architecture
+
+### 4.1 Local Dev Mode (`./dev_run.sh`)
 
 ```
 ┌──────────────────────┐           ┌───────────────────────────────────┐
@@ -77,7 +199,7 @@ on Lambda MicroVMs. Each notebook session gets its own Firecracker VM providing:
 └──────────────────────┘           └───────────────────────────────────┘
 ```
 
-### AWS MicroVM Mode (`./aws_microvm_run.sh`)
+### 4.2 AWS MicroVM Mode (`./aws_microvm_run.sh`)
 
 ```
 ┌──────────────────────┐           ┌───────────────────────────────────┐
@@ -86,10 +208,10 @@ on Lambda MicroVMs. Each notebook session gets its own Firecracker VM providing:
 │                      │           │  POST /launch    — provision VM   │
 │  Sidebar + Cells     │           │  POST /terminate — destroy VM     │
 │                      │           │  POST /resume    — wake suspended │
-│  AI Mode (per cell)  │           │  GET  /instances — list all VMs   │
+│  AI Mode (per cell)  │           │  GET  /instances — list + cost    │
 │                      │           │  */proxy/*       — auth + forward │
 │                      │           │  POST /ai/generate — AI code gen  │
-│                      │           │  GET  /ai/config   — AI status    │
+│                      │           │  GET  /datasources — S3/DDB/Athena│
 └──────────────────────┘           └────────────┬──────────┬───────────┘
                                                 │          │
                                    HTTPS + JWE  │          │ Bedrock
@@ -101,194 +223,111 @@ on Lambda MicroVMs. Each notebook session gets its own Firecracker VM providing:
            └──────────────────┘  └──────────────────┘  └──────────────────┘
 ```
 
-### Data Source Connectivity
+### 4.3 Data Source Connectivity
 
 ```
-┌───────────────────────────────────────────────────────────────────────────--──┐
-│ AWS Account                                                                   │
-│                                                                               │
-│  ┌─────────────────-───┐                                                      │
-│  │  Lambda MicroVM     │                                                      │
-│  │  (Firecracker VM)   │                                                      │
-│  │                     │                                                      │
-│  │  Your notebook code │                                                      │
-│  │  runs here          │                                                      │
-│  └─────────┬───────────┘                                                      │
-│            │                                                                  │
-│            ├──── Internet Egress (default) ────────►  Public APIs             │
-│            │     No VPC needed                        • REST Countries        │
-│            │                                          • Open-Meteo Weather    │
-│            │                                          • CoinGecko Crypto      │
-│            │                                                                  │
-│            ├──── IAM Execution Role ──────────────►  AWS Services             │
-│            │     Credentials auto-injected            • S3 (read buckets)     │
-│            │                                          • DynamoDB (scan/query) │
-│            │                                          • Athena, Redshift...   │
-│            │                                                                  │
-│            └──── VPC Egress Connector ───────────►  Private VPC Resources     │
-│                  ENI in your subnets                   • RDS Postgres/MySQL   │
-│                                                       • ElastiCache Redis     │
-│                  ┌──────────────────────────┐         • OpenSearch            │
-│                  │ Your VPC                 │         • On-prem (via DX/VPN)  │
-│                  │                          │                                 │
-│                  │  ┌─────┐    ┌──────────┐ │                                 │
-│                  │  │ ENI │───►│ RDS      │ │                                 │
-│                  │  └─────┘    │ Postgres │ │                                 │
-│                  │             └──────────┘ │                                 │
-│                  │  ┌─────┐    ┌──────────┐ │                                 │
-│                  │  │ NAT │───►│ Internet │ │  (if VPC needs outbound)        │
-│                  │  │ GW  │    │          │ │                                 │
-│                  │  └─────┘    └──────────┘ │                                 │
-│                  └──────────────────────────┘                                 │
-└────────────────────────────────────────────────────────────────────────────--─┘
+┌──────────────────────────────────────────────────────────────────────────┐
+│ AWS Account                                                              │
+│                                                                          │
+│  ┌─────────────────────┐                                                 │
+│  │  Lambda MicroVM     │                                                 │
+│  │  (Firecracker VM)   │                                                 │
+│  │                     │                                                 │
+│  │  Your notebook code │                                                 │
+│  │  runs here          │                                                 │
+│  └─────────┬───────────┘                                                 │
+│            │                                                             │
+│            ├──── Internet Egress (default) ────────►  Public APIs        │
+│            │     No VPC needed                        • REST APIs        │
+│            │                                          • Open-Meteo       │
+│            │                                          • CoinGecko        │
+│            │                                                             │
+│            ├──── IAM Execution Role ──────────────►  AWS Services        │
+│            │     Credentials auto-injected            • S3               │
+│            │                                          • DynamoDB         │
+│            │                                          • Athena + Glue    │
+│            │                                          • STS              │
+│            │                                                             │
+│            └──── VPC Egress Connector ───────────►  Private VPC          │
+│                  ENI in your subnets                   • RDS             │
+│                                                       • ElastiCache      │
+│                                                       • OpenSearch       │
+│                                                       • On-prem (DX)     │
+└──────────────────────────────────────────────────────────────────────────┘
 ```
-
-**Network patterns:**
 
 | Pattern | How | Use Case |
 |---------|-----|----------|
 | Internet Egress | Default `INTERNET_EGRESS` connector | Public APIs, external SaaS |
-| AWS Services (IAM) | Execution role permissions | S3, DynamoDB, Athena, STS |
+| AWS Services (IAM) | Execution role permissions | S3, DynamoDB, Athena, Glue, STS |
 | Private VPC | VPC egress connector (ENI) | RDS, ElastiCache, internal APIs |
 | On-premises | VPC + Direct Connect/VPN | Enterprise databases |
 
-## Quick Start (Local Dev)
+---
 
-```bash
-./dev_run.sh
-```
+## 5. Usage
 
-Starts the sandbox backend (`:8080`) and notebook UI (`:5173`).
-Click **"🖥 Local Dev"** to connect. No AWS account needed.
-
-## Quick Start (AWS MicroVM)
-
-```bash
-./aws_microvm_run.sh
-```
-
-Fully self-contained. On first run it:
-1. Creates S3 bucket, IAM roles (if missing)
-2. Builds the MicroVM image with all hooks enabled (~3-4 min)
-3. Starts the token proxy (`:8081`)
-4. Starts the notebook UI (`:5173`)
-
-Subsequent runs skip the build and launch in seconds.
-
-### Prerequisites for AWS mode
-
-- AWS CLI **2.35.10+** (script checks and exits with instructions if too old)
-- AWS credentials configured
-- **boto3 >= 1.43.40** (installed automatically)
-- Region: `us-west-2` (default), also supports `us-east-1`, `us-east-2`, `eu-west-1`, `ap-northeast-1`
-
-## Usage
-
-### Cells
+### 5.1 Cells
 - **Execute** — `Shift+Enter` or click ▶
 - **Run All** — `▶▶ Run All` in toolbar executes all cells sequentially
 - **Add cell** — `+ Cell` button or `+` on any cell
-- **Delete cell** — 🗑 button (appears on hover)
+- **Delete cell** — 🗑 button; deleting the last cell replaces it with a fresh empty cell
 
-### AI Code Generation
-- Click the **✨ AI** toggle on any cell to switch to AI mode
+### 5.2 AI Code Generation
+- Click the **AI** toggle on any cell to switch to AI mode
 - Type a natural language description (e.g. "Load the CSV and plot revenue by month")
 - Press `Enter` to generate, `Esc` to cancel
 - Review the generated code in the preview panel
-- Click **✓ Accept** to insert it into the cell, or **✗ Discard** to try again
-- The AI model is configurable via environment variable:
-  ```bash
-  export BEDROCK_MODEL_ID="us.anthropic.claude-sonnet-4-6"  # default
-  export BEDROCK_REGION="us-west-2"                          # default
-  ```
+- Click **Accept** to insert or **Discard** to try again
 
-### Rich Output
-- **DataFrames** — Type `df` or `df.head()` as the last line → renders as a styled table
+### 5.3 Rich Output
+- **DataFrames** — Type `df` or `df.head()` as the last line → renders as a styled table (max 50 rows with truncation note)
 - **Plots** — `plt.plot(...)` or `plt.show()` → renders inline as PNG
 - **Text** — `print(...)` → monospace text output
 
-### Files & Data Sources
+### 5.4 Files & Data Sources
 - Click `↑` in the Data Sources sidebar section to upload files
 - Supported: `.csv`, `.xlsx`, `.xls`, `.parquet`, `.json`
 - Files auto-load as pandas DataFrames (variable name derived from filename)
-- **Click any data source** (uploaded file, S3 object, DynamoDB table) to insert ready-to-run code into the active cell
-- S3 and DynamoDB sources are auto-discovered from your AWS account
+- **Click any data source** (uploaded file, S3 object, DynamoDB table, Athena table) to insert ready-to-run code into the active cell
+- S3, DynamoDB, and Athena sources are auto-discovered from your AWS account
 
-### Packages
+### 5.5 Packages
 - Click **Packages** in the toolbar to open the Package Manager
 - View all installed packages with version numbers
 - Install new packages (supports version pinning: `scikit-learn==1.5.1`)
-- Package list reflects what's installed on the connected MicroVM
-- Pre-baked in image: `pandas`, `numpy`, `polars`, `matplotlib`, `requests`, `psutil`, `openpyxl`, `xlrd`, `pyarrow`
+- Pre-baked in image: `pandas`, `numpy`, `polars`, `matplotlib`, `requests`, `psutil`, `openpyxl`, `xlrd`, `pyarrow`, `scipy`, `boto3`
 - Runtime installs persist across suspend/resume
 
-### Notebooks
+### 5.6 Notebooks
 - **Save** — Downloads a `.notebook.json` (includes code, output, tables, charts)
-- **Open** — Opens a saved notebook file as a **new tab** (doesn't overwrite the current notebook)
+- **Open** — Opens a saved notebook file as a new tab
 - **Rename** — Double-click the notebook name in the sidebar
 
-### MicroVM Instances
-- **Launch** — Click "Launch New MicroVM" in the connection panel (select 2/4/8 GB tier, idle timeout, max lifetime)
-- **Attach** — Click "Attach" on an available running instance to connect it to the current notebook
-- **Detach** — Detach a VM from a notebook (VM stays running, will suspend after idle timeout)
-- **Terminate & Save** — Terminate VM with state checkpointed to S3 (when session restore is enabled)
-- **Restore Session** — Launch a new VM and restore state from a previous S3 checkpoint
-- **Resume & Attach** — Resume a suspended instance and attach to a new notebook
-- **Terminate** — Destroy an unattached instance permanently
+### 5.7 MicroVM Instances
+- **Launch** — Click "Launch New MicroVM" in the connection panel (select 2/4/8 GB tier)
+- **Attach** — Connect a running instance to the current notebook
+- **Detach** — Detach a VM (stays running, will suspend after idle timeout)
+- **Terminate & Save** — Checkpoint state to S3 on termination
+- **Restore Session** — Launch a new VM from a previous S3 checkpoint
+- **Resume & Attach** — Resume a suspended instance
 - **Close notebook** — Automatically terminates the attached MicroVM
 
-## Project Structure
+### 5.8 Cost Tracking
+- Click the **MicroVMs** footer in the sidebar to open the Instances panel
+- Each MicroVM shows its estimated cost in the **Est. Cost** column
+- **Hover** over any cost figure to see a detailed tooltip:
+  - Running time and its cost contribution
+  - Suspended time and its cost contribution
+  - Memory tier and pricing rates
+- The **footer** shows the aggregated session total across all MicroVMs
+- Cost data refreshes every 15 seconds (same interval as instance state polling)
 
-```
-.
-├── app/
-│   ├── server.py        # FastAPI server: lifecycle hooks, execute, upload, install, AI generate
-│   └── executor.py      # Stateful Python executor with rich output (tables, plots)
-├── web/
-│   └── src/
-│       ├── main.jsx             # React entry point
-│       ├── App.jsx              # Layout, state, tab management, theme toggle
-│       ├── App.css              # App shell styles (header, layout, empty state)
-│       ├── index.css            # Global resets, imports theme + syntax CSS
-│       ├── theme.css            # Centralized design tokens (light + dark themes)
-│       ├── syntax-theme.css     # Python syntax highlighting colors (both themes)
-│       ├── components/
-│       │   ├── Icons.jsx        # SVG icon components (Lucide-style, 25+ icons)
-│       │   ├── Cell.jsx         # Code editor + syntax highlighting + AI mode toggle
-│       │   ├── Cell.css
-│       │   ├── ConnectionPanel.jsx  # MicroVM connection + attach existing
-│       │   ├── ConnectionPanel.css
-│       │   ├── InstancesPanel.jsx   # Modal: list/attach/resume/terminate MicroVMs
-│       │   ├── InstancesPanel.css
-│       │   ├── Modal.jsx        # Reusable confirm/input modals
-│       │   ├── Modal.css
-│       │   ├── Notebook.jsx     # Cell list, execution queue, Run All, save/load
-│       │   ├── Notebook.css
-│       │   ├── PackageManager.jsx   # Package Manager modal (list + install)
-│       │   ├── PackageManager.css
-│       │   ├── Sidebar.jsx      # Left panel: Notebooks, Data Sources, Samples
-│       │   ├── Sidebar.css
-│       │   ├── TabBar.jsx       # Tab bar component
-│       │   └── TabBar.css
-│       └── services/
-│           └── microvm.js       # MicroVM client service
-├── proxy/
-│   └── server.py        # Token proxy: launch, terminate, resume, auth, AI, data sources
-├── scripts/
-│   ├── config.sh             # AWS config (region, image sizes, roles)
-│   ├── setup_iam.sh          # Create IAM roles + S3 bucket
-│   ├── build_all_images.sh   # Build all size-tier images (2/4/8 GB)
-│   ├── setup_sample_data.sh  # Provision DynamoDB + S3 sample data
-│   └── teardown.sh           # Terminate all MicroVMs + delete images
-├── iam/                 # IAM trust and permission policies
-├── Dockerfile           # MicroVM image (al2023-minimal, Python 3.11, pre-baked packages)
-├── requirements.txt     # Python deps: server + data science + file format support
-├── dev_run.sh           # One-command local dev
-├── aws_microvm_run.sh   # One-command AWS mode (fully self-contained)
-└── README.md
-```
+---
 
-## Configuration
+## 6. Configuration
+
+### 6.1 AWS & Infrastructure Settings
 
 Edit `scripts/config.sh`:
 
@@ -296,134 +335,178 @@ Edit `scripts/config.sh`:
 AWS_REGION="us-west-2"          # MicroVM region
 AWS_CLI_PROFILE="default"       # AWS CLI profile
 IMAGE_NAME="agent-sandbox"      # MicroVM image name
+IMAGE_SIZES="512 1024 2048 4096 8192"  # Memory tiers to build (MiB)
 ```
 
-### AI Code Generation
+### 6.2 Ports & Polling
 
-The AI model is configurable via environment variables (set before running):
+```bash
+PROXY_PORT="8081"               # Token proxy port
+BACKEND_PORT="8080"             # Local sandbox backend port
+POLL_INTERVAL_MS="10000"        # Instance state refresh interval (ms)
+```
+
+### 6.3 Sample Data Resources
+
+```bash
+DYNAMO_TABLE="microvm-demo-data"   # DynamoDB table name
+ATHENA_DB="microvm_demo_db"        # Athena database name
+ATHENA_WORKGROUP="microvm-demo"    # Athena workgroup (has default S3 output)
+```
+
+### 6.4 AI Code Generation
+
+Set environment variables before running:
 
 ```bash
 export BEDROCK_MODEL_ID="us.anthropic.claude-sonnet-4-6"  # default model
 export BEDROCK_REGION="us-west-2"                          # Bedrock region
 ```
 
-AI mode auto-detects AWS credentials. If credentials are not configured, the AI toggle is hidden and cells operate in code-only mode.
+AI mode auto-detects AWS credentials. If not configured, cells operate in code-only mode.
 
-## Key Technical Details
+### 6.5 Frontend Port Configuration
 
-### Execution Queue
-Cells execute sequentially — if Cell 2 depends on Cell 1, it waits for Cell 1 to complete.
-No race conditions.
+The frontend reads ports from Vite environment variables (set automatically by the launch scripts):
 
-### Rich Output Detection
+```bash
+VITE_PROXY_PORT=8081    # Passed to React app at dev-server start
+VITE_BACKEND_PORT=8080  # Used for local dev mode connections
+```
+
+These are derived from `PROXY_PORT` and `BACKEND_PORT` in `config.sh` — no manual setup needed.
+
+---
+
+## 7. Technical Details
+
+### 7.1 Execution Queue
+Cells execute sequentially — if Cell 2 depends on Cell 1, it waits for Cell 1 to complete. No race conditions.
+
+### 7.2 Rich Output Detection
 The executor automatically detects:
-- **Last expression is a DataFrame** → converts to HTML table (max 50 rows)
+- **Last expression is a DataFrame** → converts to HTML table (max 50 rows, with truncation note showing total row count)
 - **matplotlib has active figure** → captures as PNG, returns base64
 - Works with both pandas and polars DataFrames
 
-### Token Authentication (MicroVM mode)
+### 7.3 Token Authentication (MicroVM mode)
 - Browser never handles AWS credentials
 - Proxy generates JWE tokens via `create-microvm-auth-token`
 - Tokens cached for 25 min (expire at 30)
 - Each request forwarded with `X-aws-proxy-auth` header
 
-### Lifecycle Hooks
+### 7.4 Lifecycle Hooks
+
 | Hook | When | Action |
 |------|------|--------|
 | `/ready` | Image build | Signals app initialized for snapshot |
 | `/run` | MicroVM starts | Load session config |
 | `/suspend` | Before idle suspend | Log state, flush output |
 | `/resume` | After resume | Validate state |
-| `/terminate` | Before termination | Could checkpoint to S3 |
+| `/terminate` | Before termination | Checkpoint to S3 |
 
-### Idle Policy
+### 7.5 Idle Policy
 - Auto-suspend after **30 minutes** idle
 - Stay suspended up to **8 hours**
 - Auto-resume on traffic (~1s per 500MB)
 - Max lifetime: **8 hours**
 
-### MicroVM Image Build
+### 7.6 MicroVM Image Build
 - Base: `public.ecr.aws/lambda/microvms:al2023-minimal`
 - Runtime: **Python 3.11** (installed via dnf, venv-isolated)
-- Base image version queried automatically (currently `"0"`)
 - All hooks enabled (run, suspend, resume, terminate, ready)
-- Supported memory tiers: 2 GB (1 vCPU), 4 GB (2 vCPU), 8 GB (4 vCPU)
+- Memory tiers: 2 GB (1 vCPU), 4 GB (2 vCPU), 8 GB (4 vCPU)
+- All tiers build **in parallel** (~4-5 minutes total) with automatic retry on transient failures
 
-### AI Code Generation (Bedrock Integration)
-- Uses **Amazon Bedrock Converse API** for code generation
-- Default model: `us.anthropic.claude-sonnet-4-6` (configurable)
-- AI runs on the **proxy server** (not inside the MicroVM) — no Bedrock access needed in the execution role
-- Full notebook context sent with each request: prior cell code, outputs, cell position
-- System prompt instructs the model to output only executable Python (no markdown, no explanations)
-- Auto-detects credential availability — gracefully hidden when no AWS credentials are present
+### 7.7 Cost Tracking Implementation
+- `proxy/cost_tracker.py` — `CostTracker` class records state transitions per MicroVM
+- State observations come from the `/instances` polling loop (every 15 seconds)
+- Initial `RUNNING` state recorded at launch time
+- Cost formula: `memory_gb × seconds_in_state × rate_per_gb_sec`
+- Rates: `$0.0000133/GB-sec` (running), `$0.0000000309/GB-sec` (suspended)
+- Persists across page refreshes (in-memory on the proxy process)
+- Resets on proxy restart (acceptable — proxy restart = fresh session)
 
-### Session Checkpoint & Restore
+### 7.8 Session Checkpoint & Restore
 
-Extends MicroVM lifetime beyond the 8-hour maximum by checkpointing state to S3 on termination and restoring it on a new MicroVM.
+**Termination flow:**
+1. `/terminate` hook fires (60s timeout)
+2. `dill.dumps(executor namespace)` → `checkpoint.pkl`
+3. `tar /tmp/*.csv,*.parquet` → `files.tar.gz`
+4. `pip freeze` → `requirements.txt`
+5. Upload all to `s3://bucket/sessions/{session_id}/`
 
-**How it works:**
+**Restore flow:**
+1. `/run` hook fires (60s timeout)
+2. Download `checkpoint.pkl` → `dill.loads()` → restore namespace
+3. Extract `files.tar.gz` → `/tmp/`
+4. `pip install -r requirements.txt`
+5. MicroVM ready with full previous state
 
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│ TERMINATION (automatic or manual)                                   │
-│                                                                     │
-│  /terminate hook fires (60s timeout):                               │
-│    1. dill.dumps(executor namespace) → checkpoint.pkl               │
-│    2. tar /tmp/*.csv,*.parquet → files.tar.gz                       │
-│    3. pip freeze → requirements.txt                                 │
-│    4. Upload all to s3://bucket/sessions/{session_id}/              │
-└─────────────────────────────────────────────────────────────────────┘
+**What's checkpointed:** Variables, local data files, runtime packages.
+**What's NOT checkpointed:** Network connections, matplotlib figures, non-serializable objects.
 
-┌─────────────────────────────────────────────────────────────────────┐
-│ RESTORE (user launches new MicroVM with "Restore Session")          │
-│                                                                     │
-│  /run hook fires (60s timeout):                                     │
-│    1. Download checkpoint.pkl → dill.loads() → restore namespace    │
-│    2. Download files.tar.gz → extract to /tmp/                      │
-│    3. pip install -r requirements.txt (runtime packages)            │
-│    4. MicroVM ready with full previous state                        │
-└─────────────────────────────────────────────────────────────────────┘
-```
+### 7.9 Sample Data (auto-provisioned)
+- **DynamoDB** — table `microvm-demo-data` with 10 sample products
+- **S3** — 4 CSV files in `samples/` prefix (sales_data, customers, web_traffic, ab_test_results)
+- **Athena** — database `microvm_demo_db` with 4 external tables over the S3 CSVs
+- **Athena Workgroup** — `microvm-demo` with pre-configured output location (no bucket needed in queries)
 
-**What's checkpointed:**
-- All Python variables (DataFrames, models, dicts, lists, etc.)
-- Local data files in `/tmp/` (uploaded CSVs, generated outputs)
-- Runtime-installed packages (beyond the pre-baked set)
-
-**What's NOT checkpointed:**
-- Open network connections (DB handles, sockets)
-- Matplotlib figures (re-run cells to regenerate plots)
-- Non-serializable objects (file handles, C extensions with state)
-
-**Usage:**
-1. Check "Enable session restore" when launching a MicroVM
-2. Work normally — state is auto-saved when the VM terminates
-3. Launch a new MicroVM and select "Restore from session" to pick up where you left off
-
-**S3 structure:**
-```
-s3://microvm-sandbox-artifacts-{account}-{region}/
-  sessions/
-    {session_id}/
-      checkpoint.pkl      # Serialized namespace (dill)
-      files.tar.gz        # Local data files
-      requirements.txt    # pip freeze output
-      metadata.json       # Session info (timestamps, counts)
-```
-
-### Pre-baked Packages
+### 7.10 Pre-baked Packages
 ```
 pandas, numpy, polars, matplotlib, requests, psutil,
 openpyxl (Excel .xlsx), xlrd (Excel .xls), pyarrow (Parquet),
 scipy (statistics), boto3 (AWS SDK)
 ```
 
-### Sample Data (auto-provisioned)
-- **DynamoDB** table `microvm-demo-data` with 10 sample products
-- **S3** file `samples/sales_data.csv` in the artifacts bucket
-- **Local CSV files** in `web/public/samples/data/` (sales, customers, traffic, A/B test)
+---
 
-## Cost (on AWS)
+## 8. Project Structure
+
+```
+.
+├── app/
+│   ├── server.py           # FastAPI: lifecycle hooks, execute, upload, install
+│   └── executor.py         # Stateful Python executor with rich output (tables, plots)
+├── proxy/
+│   ├── server.py           # Token proxy: launch, terminate, resume, auth, AI, datasources
+│   └── cost_tracker.py     # CostTracker class: per-MicroVM cost estimation
+├── web/
+│   └── src/
+│       ├── main.jsx
+│       ├── App.jsx              # Layout, state, tab management, theme toggle
+│       ├── theme.css            # Design tokens (light + dark themes)
+│       ├── syntax-theme.css     # Python syntax highlighting
+│       ├── components/
+│       │   ├── Cell.jsx         # Code editor + syntax highlighting + AI mode
+│       │   ├── ConnectionPanel.jsx  # MicroVM connection + launch
+│       │   ├── InstancesPanel.jsx   # Instance list + cost display + tooltips
+│       │   ├── Notebook.jsx     # Cell list, execution queue, Run All, save/load
+│       │   ├── PackageManager.jsx   # Package list + install
+│       │   ├── Sidebar.jsx      # Notebooks, Data Sources (S3/DDB/Athena), Samples
+│       │   ├── Icons.jsx        # SVG icon components (25+)
+│       │   └── Modal.jsx        # Reusable confirm/input modals
+│       └── services/
+│           └── microvm.js       # MicroVM client service
+├── scripts/
+│   ├── config.sh               # AWS config (region, sizes, roles)
+│   ├── setup_iam.sh            # Create IAM roles + S3 bucket
+│   ├── build_all_images.sh     # Parallel image build (2/4/8 GB) with retry
+│   ├── setup_sample_data.sh    # DynamoDB + S3 + Athena tables + workgroup
+│   └── teardown.sh             # Terminate MicroVMs + delete images
+├── iam/                    # IAM trust and permission policies
+├── Dockerfile              # MicroVM image (al2023-minimal, Python 3.11)
+├── requirements.txt        # Python deps
+├── dev_run.sh              # One-command local dev
+├── aws_microvm_run.sh      # One-command AWS mode
+└── README.md
+```
+
+---
+
+## 9. Cost
+
+### 9.1 Estimated AWS Cost
 
 4 GB / 2 vCPU sandbox, 1 hour active per day:
 
@@ -434,18 +517,16 @@ scipy (statistics), boto3 (AWS SDK)
 | Suspend/resume IO | ~$0.10 |
 | **Total** | **~$5.60** |
 
-## Dependencies
+### 9.2 In-App Cost Tracking
 
-| Component | Requirement |
-|-----------|-------------|
-| Python | 3.11+ |
-| Node.js | 18+ |
-| AWS CLI | 2.35.10+ |
-| boto3 | >= 1.43.40 |
+The application tracks and displays estimated cost per MicroVM in real time:
+- Cost is computed from observed RUNNING and SUSPENDED durations
+- Displayed in the Instances panel (hover for breakdown)
+- Based on published pricing — actual AWS bill may vary slightly due to rounding
 
-All dependencies installed automatically by launch scripts.
+---
 
-## References
+## 10. References
 
 - [AWS Lambda MicroVMs Docs](https://docs.aws.amazon.com/lambda/latest/dg/lambda-microvms-guide.html)
 - [Launch Blog Post](https://aws.amazon.com/blogs/aws/run-isolated-sandboxes-with-full-lifecycle-control-aws-lambda-introduces-microvms/)

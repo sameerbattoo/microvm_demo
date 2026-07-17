@@ -1,15 +1,16 @@
 import { useState, useEffect, useCallback } from 'react'
 import { IconRefresh, IconX } from './Icons'
+import { PROXY_URL } from '../config'
 import './InstancesPanel.css'
-
-const PROXY_URL = 'http://localhost:8081'
 
 export default function InstancesPanel({ onClose, onAttach, onTerminateAndSave, onSuspend, attachedIds, tabs = [] }) {
   const [instances, setInstances] = useState({})
+  const [totalCost, setTotalCost] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [actionInProgress, setActionInProgress] = useState(new Set())
   const [confirmTerminate, setConfirmTerminate] = useState(null) // { id, type: 'terminate' | 'terminateAndSave', name }
+  const [expandedCostId, setExpandedCostId] = useState(null) // MicroVM ID with cost detail expanded
 
   const fetchInstances = useCallback(async () => {
     setLoading(true)
@@ -19,6 +20,7 @@ export default function InstancesPanel({ onClose, onAttach, onTerminateAndSave, 
       if (resp.ok) {
         const data = await resp.json()
         setInstances(data.instances || {})
+        setTotalCost(data.total_cost || null)
       } else {
         setError('Failed to fetch instances')
       }
@@ -87,22 +89,55 @@ export default function InstancesPanel({ onClose, onAttach, onTerminateAndSave, 
 
   const instanceList = Object.entries(instances)
 
+  const formatDuration = (secs) => {
+    if (!secs || secs < 60) return `${secs || 0}s`
+    if (secs < 3600) return `${Math.floor(secs / 60)}m ${secs % 60}s`
+    const h = Math.floor(secs / 3600)
+    const m = Math.floor((secs % 3600) / 60)
+    return `${h}h ${m}m`
+  }
+
+  const formatCostDisplay = (cost) => {
+    if (!cost) return '—'
+    const usd = cost.total_cost_usd
+    if (usd === 0) return '$0.0000'
+    if (usd < 0.01) return `$${usd.toFixed(4)}`
+    return `$${usd.toFixed(2)}`
+  }
+
   const getStatusBadge = (id, state) => {
     const isAttached = attachedIds.includes(id)
-    if (isAttached) return <span className="inst-badge inst-badge-attached">Attached</span>
 
+    // Always show the real VM state
+    let stateBadge
     switch (state) {
       case 'RUNNING':
-        return <span className="inst-badge inst-badge-running">Running</span>
+        stateBadge = <span className="inst-badge inst-badge-running">Running</span>
+        break
       case 'SUSPENDED':
-        return <span className="inst-badge inst-badge-suspended">Suspended</span>
+        stateBadge = <span className="inst-badge inst-badge-suspended">Suspended</span>
+        break
       case 'TERMINATED':
-        return <span className="inst-badge inst-badge-terminated">Terminated</span>
+        stateBadge = <span className="inst-badge inst-badge-terminated">Terminated</span>
+        break
       case 'PENDING':
-        return <span className="inst-badge inst-badge-pending">Pending</span>
+        stateBadge = <span className="inst-badge inst-badge-pending">Pending</span>
+        break
       default:
-        return <span className="inst-badge inst-badge-unknown">{state || 'Unknown'}</span>
+        stateBadge = <span className="inst-badge inst-badge-unknown">{state || 'Unknown'}</span>
     }
+
+    // Show attachment as a secondary indicator
+    if (isAttached) {
+      return (
+        <span className="inst-state-group">
+          {stateBadge}
+          <span className="inst-badge inst-badge-linked">Linked</span>
+        </span>
+      )
+    }
+
+    return stateBadge
   }
 
   return (
@@ -132,6 +167,7 @@ export default function InstancesPanel({ onClose, onAttach, onTerminateAndSave, 
               <span>Session</span>
               <span>Spec</span>
               <span>State</span>
+              <span>Est. Cost</span>
               <span>Actions</span>
             </div>
             {instanceList.map(([id, inst]) => {
@@ -142,7 +178,8 @@ export default function InstancesPanel({ onClose, onAttach, onTerminateAndSave, 
               const hasCheckpoint = attachedTab?.checkpointEnabled
 
               return (
-                <div key={id} className={`instances-row ${isAttached ? 'instances-row-attached' : ''}`}>
+                <div key={id} className="instances-row-wrapper">
+                <div className={`instances-row ${isAttached ? 'instances-row-attached' : ''}`}>
                   <span className="inst-id-text">{id}</span>
                   <span>{attachedTab ? attachedTab.name : '—'}</span>
                   <span className="inst-id-text">{attachedTab?.sessionId ? attachedTab.sessionId.slice(-12) : '—'}</span>
@@ -152,6 +189,13 @@ export default function InstancesPanel({ onClose, onAttach, onTerminateAndSave, 
                       : '4 GB · 2 vCPU'}
                   </span>
                   <span>{getStatusBadge(id, state)}</span>
+                  <span
+                    className={`inst-cost-cell ${expandedCostId === id ? 'inst-cost-cell-active' : ''}`}
+                    onClick={() => setExpandedCostId(expandedCostId === id ? null : id)}
+                  >
+                    {formatCostDisplay(inst.cost)}
+                    <span className="inst-cost-chevron">{expandedCostId === id ? '▾' : '▸'}</span>
+                  </span>
                   <span className="inst-col-actions">
                     {/* Attached + Running: Suspend (detach) and Terminate & Save */}
                     {state === 'RUNNING' && isAttached && (
@@ -224,6 +268,53 @@ export default function InstancesPanel({ onClose, onAttach, onTerminateAndSave, 
                     )}
                   </span>
                 </div>
+                {expandedCostId === id && inst.cost && (() => {
+                  const memGb = (inst.memory_mib || 4096) / 1024
+                  const cost = inst.cost
+                  const effectiveRunRate = memGb * 0.0000133
+                  const effectiveSuspendRate = memGb * 0.0000000309
+                  return (
+                    <div className="inst-cost-detail">
+                      <div className="inst-cost-detail-grid">
+                        <div className="inst-cost-detail-section">
+                          <div className="inst-cost-detail-title">Compute (Running)</div>
+                          <div className="inst-cost-detail-row">
+                            <span className="inst-cost-label">Duration</span>
+                            <span className="inst-cost-value">{formatDuration(cost.running_secs)}</span>
+                          </div>
+                          <div className="inst-cost-detail-row">
+                            <span className="inst-cost-label">Rate</span>
+                            <span className="inst-cost-value">${effectiveRunRate.toFixed(7)}/sec ({memGb} GB × $0.0000133)</span>
+                          </div>
+                          <div className="inst-cost-detail-row inst-cost-detail-subtotal">
+                            <span className="inst-cost-label">Subtotal</span>
+                            <span className="inst-cost-value">${cost.running_cost_usd.toFixed(6)}</span>
+                          </div>
+                        </div>
+                        <div className="inst-cost-detail-section">
+                          <div className="inst-cost-detail-title">Snapshot (Suspended)</div>
+                          <div className="inst-cost-detail-row">
+                            <span className="inst-cost-label">Duration</span>
+                            <span className="inst-cost-value">{formatDuration(cost.suspended_secs)}</span>
+                          </div>
+                          <div className="inst-cost-detail-row">
+                            <span className="inst-cost-label">Rate</span>
+                            <span className="inst-cost-value">${effectiveSuspendRate.toFixed(10)}/sec ({memGb} GB × $0.0000000309)</span>
+                          </div>
+                          <div className="inst-cost-detail-row inst-cost-detail-subtotal">
+                            <span className="inst-cost-label">Subtotal</span>
+                            <span className="inst-cost-value">${cost.suspended_cost_usd.toFixed(6)}</span>
+                          </div>
+                        </div>
+                      </div>
+                      <div className="inst-cost-detail-total">
+                        <span>Total estimated cost</span>
+                        <span>${cost.total_cost_usd.toFixed(6)}</span>
+                      </div>
+                    </div>
+                  )
+                })()}
+                </div>
               )
             })}
           </div>
@@ -237,6 +328,17 @@ export default function InstancesPanel({ onClose, onAttach, onTerminateAndSave, 
             {instanceList.filter(([, i]) => i.state === 'RUNNING').length} running,{' '}
             {instanceList.filter(([, i]) => i.state === 'SUSPENDED').length} suspended
           </span>
+          {totalCost && totalCost.total_cost_usd > 0 && (
+            <>
+              {' · '}
+              <span
+                className="instances-total-cost"
+                title={`Total running: ${formatDuration(totalCost.running_secs)}\nTotal suspended: ${formatDuration(totalCost.suspended_secs)}\nTracking ${totalCost.microvm_count} MicroVM(s) this session`}
+              >
+                Session total: {formatCostDisplay(totalCost)}
+              </span>
+            </>
+          )}
         </div>
       </div>
 

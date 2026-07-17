@@ -331,6 +331,17 @@ async def reset_sandbox():
     return {"status": "reset", "message": "Namespace cleared"}
 
 
+@app.post("/interrupt")
+async def interrupt_execution():
+    """Interrupt a running code execution."""
+    interrupted = executor.interrupt()
+    if interrupted:
+        logger.info("⛔ Execution interrupted by user")
+        return {"status": "interrupted", "message": "Execution interrupted"}
+    else:
+        return {"status": "idle", "message": "Nothing running to interrupt"}
+
+
 @app.get("/health")
 async def health():
     """Health check with session metadata."""

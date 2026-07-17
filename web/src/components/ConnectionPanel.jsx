@@ -1,7 +1,6 @@
 import { useState, useEffect } from 'react'
+import { PROXY_URL, BACKEND_URL } from '../config'
 import './ConnectionPanel.css'
-
-const PROXY_URL = 'http://localhost:8081'
 
 export default function ConnectionPanel({ tab, onConnect, onUpdateTab, onDismiss, attachedIds = [] }) {
   const [mode, setMode] = useState(null) // null until detected, then 'local' | 'microvm'
@@ -9,10 +8,11 @@ export default function ConnectionPanel({ tab, onConnect, onUpdateTab, onDismiss
   const [error, setError] = useState(null)
   const [availableInstances, setAvailableInstances] = useState([])
   const [loadingInstances, setLoadingInstances] = useState(false)
-  const [launchMemory, setLaunchMemory] = useState('4096')
+  const [launchMemory, setLaunchMemory] = useState('2048')
   const [launchIdleTimeout, setLaunchIdleTimeout] = useState('1800')
   const [launchMaxDuration, setLaunchMaxDuration] = useState('28800')
   const [checkpointEnabled, setCheckpointEnabled] = useState(true)
+  const [imageTiers, setImageTiers] = useState([])
 
   // Auto-detect which mode we're in
   useEffect(() => {
@@ -23,12 +23,28 @@ export default function ConnectionPanel({ tab, onConnect, onUpdateTab, onDismiss
           setProxyAvailable(true)
           setMode('microvm')
           fetchAvailableInstances()
+          fetchImageTiers()
         } else {
           setMode('local')
         }
       })
       .catch(() => setMode('local'))
   }, [])
+
+  const fetchImageTiers = async () => {
+    try {
+      const resp = await fetch(`${PROXY_URL}/image-tiers`)
+      if (resp.ok) {
+        const data = await resp.json()
+        if (data.tiers && data.tiers.length > 0) {
+          setImageTiers(data.tiers)
+          // Default to 2048 if available, otherwise first tier
+          const defaultTier = data.tiers.find(t => t.memory_mib === 2048) || data.tiers[0]
+          setLaunchMemory(String(defaultTier.memory_mib))
+        }
+      }
+    } catch {}
+  }
 
   const fetchAvailableInstances = async () => {
     setLoadingInstances(true)
@@ -47,7 +63,7 @@ export default function ConnectionPanel({ tab, onConnect, onUpdateTab, onDismiss
   }
 
   const handleConnectLocal = async () => {
-    const url = 'http://localhost:8080'
+    const url = BACKEND_URL
     onUpdateTab({ status: 'connecting' })
     setError(null)
 
@@ -61,7 +77,7 @@ export default function ConnectionPanel({ tab, onConnect, onUpdateTab, onDismiss
         onUpdateTab({ status: 'disconnected' })
       }
     } catch {
-      setError('Cannot reach local backend. Run: python3 -m uvicorn app.server:app --port 8080')
+      setError(`Cannot reach local backend. Run: python3 -m uvicorn app.server:app --port ${BACKEND_URL.split(':').pop()}`)
       onUpdateTab({ status: 'disconnected' })
     }
   }
@@ -226,7 +242,7 @@ export default function ConnectionPanel({ tab, onConnect, onUpdateTab, onDismiss
         {mode === 'local' && (
           <div className="connection-form">
             <div className="connection-hint">
-              Connects directly to the FastAPI sandbox on <code>localhost:8080</code>.
+              Connects directly to the FastAPI sandbox on <code>localhost:{BACKEND_URL.split(':').pop()}</code>.
               No auth token required.
             </div>
             <div className="form-actions">
@@ -293,14 +309,26 @@ export default function ConnectionPanel({ tab, onConnect, onUpdateTab, onDismiss
                 <div className="launch-spec-item launch-spec-editable">
                   <span className="launch-spec-label">Baseline</span>
                   <select className="launch-spec-select" value={launchMemory} onChange={(e) => setLaunchMemory(e.target.value)}>
-                    <option value="2048">2 GB · 1 vCPU</option>
-                    <option value="4096">4 GB · 2 vCPU</option>
-                    <option value="8192">8 GB · 4 vCPU</option>
+                    {imageTiers.length > 0 ? (
+                      imageTiers.map(tier => (
+                        <option key={tier.memory_mib} value={tier.memory_mib}>
+                          {tier.label}
+                        </option>
+                      ))
+                    ) : (
+                      <>
+                        <option value="512">0.5 GB · 0.25 vCPU</option>
+                        <option value="1024">1 GB · 0.5 vCPU</option>
+                        <option value="2048">2 GB · 1 vCPU</option>
+                        <option value="4096">4 GB · 2 vCPU</option>
+                        <option value="8192">8 GB · 4 vCPU</option>
+                      </>
+                    )}
                   </select>
                 </div>
                 <div className="launch-spec-item">
                   <span className="launch-spec-label">Peak (burst 4×)</span>
-                  <span className="launch-spec-value">{parseInt(launchMemory) / 1024 * 4} GB · {Math.max(1, parseInt(launchMemory) / 2048) * 4} vCPU</span>
+                  <span className="launch-spec-value">{(parseInt(launchMemory) / 1024 * 4).toFixed(1)} GB · {Math.max(0.25, parseInt(launchMemory) / 2048) * 4} vCPU</span>
                 </div>
                 <div className="launch-spec-item">
                   <span className="launch-spec-label">Architecture</span>

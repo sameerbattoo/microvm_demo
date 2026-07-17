@@ -1,26 +1,55 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 import Prism from 'prismjs'
 import 'prismjs/components/prism-python'
-import { IconPlay, IconPlus, IconTrash, IconSparkles, IconCode, IconCheck, IconX } from './Icons'
+import { marked } from 'marked'
+import { IconPlay, IconPlus, IconTrash, IconSparkles, IconCode, IconCheck, IconX, IconStop, IconChevronDown, IconChevronRight, IconGripVertical } from './Icons'
+import { PROXY_URL } from '../config'
 import './Cell.css'
+
+// Ticking timer component for running cells
+function ElapsedTimer() {
+  const [elapsed, setElapsed] = useState(0)
+  useEffect(() => {
+    const start = Date.now()
+    const interval = setInterval(() => {
+      setElapsed(((Date.now() - start) / 1000).toFixed(1))
+    }, 100)
+    return () => clearInterval(interval)
+  }, [])
+  return <span className="cell-timer">{elapsed}s</span>
+}
 
 export default function Cell({
   cell,
   index,
   isConnected,
   isActive,
+  isDragOver,
+  hasSearchMatch,
   onFocus,
   onExecute,
+  onInterrupt,
   onCodeChange,
   onAddBelow,
   onDelete,
+  onTypeChange,
+  onDragStart,
+  onDragOver,
+  onDrop,
+  onDragEnd,
+  searchQuery,
+  searchActiveOccurrence,
   notebookContext,
   microvmEndpoint,
   aiAvailable,
 }) {
   const aiInputRef = useRef(null)
   const textareaRef = useRef(null)
+  const mdTextareaRef = useRef(null)
   const [mode, setMode] = useState('code') // 'code' | 'ai'
+  const [mdEditing, setMdEditing] = useState(!cell.code) // markdown cells start in edit mode if empty
+  const [codeCollapsed, setCodeCollapsed] = useState(false)
+  const [outputCollapsed, setOutputCollapsed] = useState(false)
   const [aiPrompt, setAiPrompt] = useState('')
   const [aiGenerating, setAiGenerating] = useState(false)
   const [aiPreview, setAiPreview] = useState(null) // generated code awaiting accept/discard
@@ -40,12 +69,35 @@ export default function Cell({
       el.style.height = 'auto'
       el.style.height = `${el.scrollHeight}px`
     }
-  }, [cell.code, mode])
+  }, [cell.code, mode, codeCollapsed])
+
+  // Auto-resize markdown textarea
+  useEffect(() => {
+    const el = mdTextareaRef.current
+    if (el && mdEditing) {
+      el.style.height = 'auto'
+      el.style.height = `${el.scrollHeight}px`
+    }
+  }, [cell.code, mdEditing])
 
   const highlightCode = useCallback((code) => {
     if (!code) return ''
-    return Prism.highlight(code, Prism.languages.python, 'python')
-  }, [])
+    let html = Prism.highlight(code, Prism.languages.python, 'python')
+    // Add search highlighting on top of syntax highlighting
+    if (searchQuery && searchQuery.trim()) {
+      const escaped = searchQuery.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+      const regex = new RegExp(`(${escaped})`, 'gi')
+      let occurrenceIdx = 0
+      html = html.replace(regex, (match) => {
+        const cls = occurrenceIdx === searchActiveOccurrence
+          ? 'search-highlight search-highlight-active'
+          : 'search-highlight'
+        occurrenceIdx++
+        return `<mark class="${cls}">${match}</mark>`
+      })
+    }
+    return html
+  }, [searchQuery, searchActiveOccurrence])
 
   const handleKeyDown = (e) => {
     // Shift+Enter to execute
@@ -73,9 +125,9 @@ export default function Cell({
     setAiError(null)
     setAiPreview(null)
 
-    // AI endpoints live on the proxy (8081) or local backend (8080)
-    const aiBase = microvmEndpoint.includes('8081')
-      ? 'http://localhost:8081'
+    // AI endpoints live on the proxy or local backend
+    const aiBase = microvmEndpoint.includes(PROXY_URL)
+      ? PROXY_URL
       : microvmEndpoint
 
     try {
@@ -143,19 +195,127 @@ export default function Cell({
     : cell.status === 'error' ? 'cell-error'
     : 'cell-idle'
 
+  // --- MARKDOWN CELL ---
+  if (cell.type === 'markdown') {
+    return (
+      <div
+        className={`cell cell-markdown ${isActive ? 'cell-active' : ''} ${isDragOver ? 'cell-drag-over' : ''} ${hasSearchMatch ? 'cell-search-match' : ''}`}
+        data-cell-id={cell.id}
+        onClick={onFocus}
+        onDragOver={(e) => { e.preventDefault(); onDragOver?.() }}
+        onDrop={(e) => { e.preventDefault(); onDrop?.() }}
+        onDragEnd={onDragEnd}
+      >
+        <div className="cell-gutter">
+          <span
+            className="cell-drag-handle"
+            draggable
+            onDragStart={onDragStart}
+            title="Drag to reorder"
+          >
+            <IconGripVertical width={12} height={12} />
+          </span>
+          <span className="cell-type-badge">MD</span>
+        </div>
+        <div className="cell-content">
+          {mdEditing ? (
+            <div className="md-edit-area">
+              <textarea
+                ref={mdTextareaRef}
+                className="md-textarea"
+                value={cell.code}
+                onChange={(e) => onCodeChange(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Escape' || (e.key === 'Enter' && e.shiftKey)) {
+                    e.preventDefault()
+                    setMdEditing(false)
+                  }
+                }}
+                placeholder="Write markdown here... (Shift+Enter or Esc to render)"
+                spellCheck={true}
+                autoFocus
+              />
+              <div className="md-edit-hint">Shift+Enter to render · Esc to close</div>
+            </div>
+          ) : (
+            <div
+              className="md-rendered"
+              onDoubleClick={() => setMdEditing(true)}
+              dangerouslySetInnerHTML={{ __html: cell.code ? marked.parse(cell.code) : '<p class="md-placeholder">Double-click to edit markdown</p>' }}
+            />
+          )}
+          <div className="cell-actions md-actions">
+            {mdEditing ? (
+              <button className="cell-action-btn" onClick={() => setMdEditing(false)} title="Render markdown">
+                <IconCheck width={14} height={14} />
+              </button>
+            ) : (
+              <button className="cell-action-btn" onClick={() => setMdEditing(true)} title="Edit markdown">
+                <IconCode width={14} height={14} />
+              </button>
+            )}
+            <button className="cell-action-btn" onClick={() => onAddBelow('code')} title="Add code cell below">
+              <IconPlus width={14} height={14} />
+            </button>
+            <button className="cell-action-btn cell-add-md-btn" onClick={() => onAddBelow('markdown')} title="Add text cell below">
+              M
+            </button>
+            <button className="cell-action-btn cell-delete-btn" onClick={onDelete} title="Delete cell">
+              <IconTrash width={14} height={14} />
+            </button>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  // --- CODE CELL ---
+
   return (
     <div
-      className={`cell ${statusColor} ${mode === 'ai' ? 'cell-ai-mode' : ''} ${isActive ? 'cell-active' : ''}`}
+      className={`cell ${statusColor} ${mode === 'ai' ? 'cell-ai-mode' : ''} ${isActive ? 'cell-active' : ''} ${isDragOver ? 'cell-drag-over' : ''} ${hasSearchMatch ? 'cell-search-match' : ''}`}
+      data-cell-id={cell.id}
       onClick={onFocus}
+      onDragOver={(e) => { e.preventDefault(); onDragOver?.() }}
+      onDrop={(e) => { e.preventDefault(); onDrop?.() }}
+      onDragEnd={onDragEnd}
     >
       <div className="cell-gutter">
+        <span
+          className="cell-drag-handle"
+          draggable
+          onDragStart={onDragStart}
+          title="Drag to reorder"
+        >
+          <IconGripVertical width={12} height={12} />
+        </span>
+        <button
+          className="cell-collapse-btn"
+          onClick={() => setCodeCollapsed(!codeCollapsed)}
+          title={codeCollapsed ? 'Expand code' : 'Collapse code'}
+        >
+          {codeCollapsed ? <IconChevronRight width={12} height={12} /> : <IconChevronDown width={12} height={12} />}
+        </button>
         <span className="cell-number">
           {cell.executionNumber ? `[${cell.executionNumber}]` : `[${index + 1}]`}
         </span>
-        {cell.status === 'running' && <span className="cell-spinner" />}
+        {cell.status === 'running' && <ElapsedTimer />}
+        {cell.lastExecutedCode != null && cell.code !== cell.lastExecutedCode && cell.status !== 'running' && (
+          <span className="cell-stale-badge" title="Code modified since last execution — re-run to update output">●</span>
+        )}
       </div>
 
       <div className="cell-content">
+        {/* Collapsed code summary */}
+        {codeCollapsed && (
+          <div className="cell-collapsed-summary" onClick={() => setCodeCollapsed(false)}>
+            <span className="cell-collapsed-text">
+              {cell.code.split('\n')[0].slice(0, 80)}{cell.code.split('\n').length > 1 ? '...' : ''}
+            </span>
+            <span className="cell-collapsed-lines">{cell.code.split('\n').length} lines</span>
+          </div>
+        )}
+
         {/* Mode toggle — only show if AI is available */}
         {aiAvailable && (
           <div className="cell-mode-bar">
@@ -179,7 +339,7 @@ export default function Cell({
         )}
 
         {/* Code mode — normal editor */}
-        {(mode === 'code' || !aiAvailable) && (
+        {(mode === 'code' || !aiAvailable) && !codeCollapsed && (
           <div className="cell-input">
             <div className="cell-editor-wrapper">
               <pre
@@ -199,16 +359,29 @@ export default function Cell({
               />
             </div>
             <div className="cell-actions">
-              <button
-                className="cell-run-btn"
-                onClick={onExecute}
-                disabled={!isConnected || cell.status === 'running'}
-                title="Run cell (Shift+Enter)"
-              >
-                <IconPlay width={12} height={12} />
-              </button>
-              <button className="cell-action-btn" onClick={onAddBelow} title="Add cell below">
+              {cell.status === 'running' ? (
+                <button
+                  className="cell-run-btn cell-stop-btn"
+                  onClick={onInterrupt}
+                  title="Stop execution"
+                >
+                  <IconStop width={12} height={12} />
+                </button>
+              ) : (
+                <button
+                  className="cell-run-btn"
+                  onClick={onExecute}
+                  disabled={!isConnected || cell.status === 'running'}
+                  title="Run cell (Shift+Enter)"
+                >
+                  <IconPlay width={12} height={12} />
+                </button>
+              )}
+              <button className="cell-action-btn" onClick={() => onAddBelow('code')} title="Add code cell below">
                 <IconPlus width={14} height={14} />
+              </button>
+              <button className="cell-action-btn cell-add-md-btn" onClick={() => onAddBelow('markdown')} title="Add text cell below">
+                M
               </button>
               <button className="cell-action-btn cell-delete-btn" onClick={onDelete} title="Delete cell">
                 <IconTrash width={14} height={14} />
@@ -267,8 +440,11 @@ export default function Cell({
 
             {/* Cell actions in AI mode */}
             <div className="cell-actions cell-actions-ai">
-              <button className="cell-action-btn" onClick={onAddBelow} title="Add cell below">
+              <button className="cell-action-btn" onClick={() => onAddBelow('code')} title="Add code cell below">
                 <IconPlus width={14} height={14} />
+              </button>
+              <button className="cell-action-btn cell-add-md-btn" onClick={() => onAddBelow('markdown')} title="Add text cell below">
+                M
               </button>
               <button className="cell-action-btn cell-delete-btn" onClick={onDelete} title="Delete cell">
                 <IconTrash width={14} height={14} />
@@ -278,21 +454,34 @@ export default function Cell({
         )}
 
         {(cell.output || cell.error || cell.html || cell.image) && (
-          <div className={`cell-output ${cell.error ? 'cell-output-error' : ''}`}>
-            {cell.image && (
-              <div className="output-image">
-                <img src={cell.image} alt="Plot output" />
+          <div className={`cell-output ${cell.error ? 'cell-output-error' : ''} ${outputCollapsed ? 'cell-output-collapsed' : ''}`}>
+            {outputCollapsed ? (
+              <div className="cell-output-collapse-bar" onClick={() => setOutputCollapsed(false)}>
+                <IconChevronRight width={10} height={10} />
+                <span>Output hidden — click to expand</span>
+              </div>
+            ) : (
+              <>
+                <div className="cell-output-collapse-bar" onClick={() => setOutputCollapsed(true)}>
+                  <IconChevronDown width={10} height={10} />
+                  <span>Output</span>
+                </div>
+                {cell.image && (
+                  <div className="output-image">
+                    <img src={cell.image} alt="Plot output" />
+                  </div>
+                )}
+                {cell.output && <pre className="output-text">{cell.output}</pre>}
+                {cell.html && (
+                  <div className="output-html" dangerouslySetInnerHTML={{ __html: cell.html }} />
+                )}
+                {cell.error && <pre className="output-error">{cell.error}</pre>}
+                {cell.executionTime != null && (
+                  <div className="output-meta">
+                    Executed in {cell.executionTime.toFixed(1)}ms
               </div>
             )}
-            {cell.html && (
-              <div className="output-html" dangerouslySetInnerHTML={{ __html: cell.html }} />
-            )}
-            {cell.output && <pre className="output-text">{cell.output}</pre>}
-            {cell.error && <pre className="output-error">{cell.error}</pre>}
-            {cell.executionTime != null && (
-              <div className="output-meta">
-                Executed in {cell.executionTime.toFixed(1)}ms
-              </div>
+              </>
             )}
           </div>
         )}

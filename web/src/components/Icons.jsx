@@ -271,3 +271,49 @@ export function IconLink(props) {
     </svg>
   )
 }
+
+export function IconTable(props) {
+  return (
+    <svg {...iconProps} {...props}>
+      <path d="M9 3H5a2 2 0 0 0-2 2v4m6-6h10a2 2 0 0 1 2 2v4M9 3v18m0 0h10a2 2 0 0 0 2-2V9M9 21H5a2 2 0 0 1-2-2V9m0 0h18" />
+    </svg>
+  )
+}
+
+export function IconStop(props) {
+  return (
+    <svg {...iconProps} {...props}>
+      <rect x="6" y="6" width="12" height="12" rx="1" />
+    </svg>
+  )
+}
+
+export function IconGripVertical(props) {
+  return (
+    <svg {...iconProps} {...props}>
+      <circle cx="9" cy="5" r="1" fill="currentColor" stroke="none" />
+      <circle cx="15" cy="5" r="1" fill="currentColor" stroke="none" />
+      <circle cx="9" cy="12" r="1" fill="currentColor" stroke="none" />
+      <circle cx="15" cy="12" r="1" fill="currentColor" stroke="none" />
+      <circle cx="9" cy="19" r="1" fill="currentColor" stroke="none" />
+      <circle cx="15" cy="19" r="1" fill="currentColor" stroke="none" />
+    </svg>
+  )
+}
+
+export function IconSearch(props) {
+  return (
+    <svg {...iconProps} {...props}>
+      <circle cx="11" cy="11" r="8" />
+      <path d="M21 21l-4.35-4.35" />
+    </svg>
+  )
+}
+
+export function IconChevronUp(props) {
+  return (
+    <svg {...iconProps} {...props}>
+      <polyline points="18 15 12 9 6 15" />
+    </svg>
+  )
+}

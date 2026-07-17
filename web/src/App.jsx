@@ -4,9 +4,8 @@ import Sidebar from './components/Sidebar'
 import InstancesPanel from './components/InstancesPanel'
 import { ConfirmModal, InputModal } from './components/Modal'
 import { IconZap, IconSun, IconMoon } from './components/Icons'
+import { PROXY_URL } from './config'
 import './App.css'
-
-const PROXY_URL = 'http://localhost:8081'
 
 let nextTabId = parseInt(localStorage.getItem('microvm-next-tab-id') || '1')
 
@@ -55,6 +54,7 @@ export default function App() {
   })
   const [instances, setInstances] = useState({})
   const [uploadedFiles, setUploadedFiles] = useState([])
+  const [pollIntervalMs, setPollIntervalMs] = useState(10000)
 
   // Persist tabs to localStorage (strip large binary data, keep cell code + text output)
   useEffect(() => {
@@ -62,6 +62,7 @@ export default function App() {
       // Persist cells with code and text outputs, but strip base64 images
       const cells = (tab._cells || []).map(c => ({
         id: c.id,
+        type: c.type || 'code',
         code: c.code || '',
         output: c.output || null,
         error: c.error || null,
@@ -70,6 +71,7 @@ export default function App() {
         status: c.output || c.error || c.html ? 'success' : 'idle',
         executionNumber: c.executionNumber || null,
         executionTime: c.executionTime || null,
+        lastExecutedCode: c.lastExecutedCode || null,
       }))
       return { ...tab, _cells: cells.length > 0 ? cells : undefined }
     })
@@ -79,7 +81,7 @@ export default function App() {
       // If localStorage is full (quota exceeded), save without outputs
       const minimal = tabs.map(({ _cells, _loadedCells, ...rest }) => ({
         ...rest,
-        _cells: (_cells || []).map(c => ({ id: c.id, code: c.code || '', output: null, error: null, html: null, image: null, status: 'idle', executionNumber: null, executionTime: null })),
+        _cells: (_cells || []).map(c => ({ id: c.id, type: c.type || 'code', code: c.code || '', output: null, error: null, html: null, image: null, status: 'idle', executionNumber: null, executionTime: null, lastExecutedCode: null })),
       }))
       try {
         localStorage.setItem('microvm-notebooks', JSON.stringify(minimal))
@@ -158,9 +160,21 @@ export default function App() {
 
   useEffect(() => {
     fetchInstances()
-    const interval = setInterval(fetchInstances, 15000) // Refresh every 15s
+    const interval = setInterval(fetchInstances, pollIntervalMs)
     return () => clearInterval(interval)
-  }, [fetchInstances])
+  }, [fetchInstances, pollIntervalMs])
+
+  // Fetch poll interval from proxy config
+  useEffect(() => {
+    fetch(`${PROXY_URL}/health`)
+      .then(r => r.json())
+      .then(data => {
+        if (data.poll_interval_ms && data.poll_interval_ms > 0) {
+          setPollIntervalMs(data.poll_interval_ms)
+        }
+      })
+      .catch(() => {})
+  }, [])
 
   // Auto-reconnect tabs that have a saved microvmId
   useEffect(() => {
@@ -531,8 +545,40 @@ export default function App() {
         <main className="app-main">
           {tabs.length === 0 && (
             <div className="app-empty">
-              <div className="app-empty-text">No notebooks open</div>
-              <button className="app-empty-btn" onClick={addTab}>+ Create Notebook</button>
+              <div className="app-empty-icon">
+                <svg width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                  <rect x="4" y="4" width="16" height="16" rx="2" />
+                  <path d="M9 9h6M9 13h6M9 17h4" />
+                </svg>
+              </div>
+              <h2 className="app-empty-title">MicroVM Notebook</h2>
+              <p className="app-empty-subtitle">Stateful Python execution in isolated Firecracker VMs</p>
+              <div className="app-empty-actions">
+                <button className="app-empty-btn app-empty-btn-primary" onClick={addTab}>
+                  + New Notebook
+                </button>
+                <button className="app-empty-btn" onClick={() => loadSample('/samples/aws_data_sources.notebook.json', 'AWS Data Sources')}>
+                  Open Sample: AWS Data Sources
+                </button>
+              </div>
+              <div className="app-empty-hints">
+                <div className="app-empty-hint">
+                  <span className="app-empty-hint-icon">1</span>
+                  <span>Create a notebook and connect to a MicroVM sandbox</span>
+                </div>
+                <div className="app-empty-hint">
+                  <span className="app-empty-hint-icon">2</span>
+                  <span>Write Python code in cells — <kbd>Shift+Enter</kbd> to execute</span>
+                </div>
+                <div className="app-empty-hint">
+                  <span className="app-empty-hint-icon">3</span>
+                  <span>Use the <strong>AI assistant</strong> — toggle any cell to AI mode, describe what you want, and get code generated</span>
+                </div>
+                <div className="app-empty-hint">
+                  <span className="app-empty-hint-icon">4</span>
+                  <span>Click data sources in the sidebar to insert ready-to-run query code</span>
+                </div>
+              </div>
             </div>
           )}
           {tabs.filter(tab => tab.id === activeTabId).map(tab => (

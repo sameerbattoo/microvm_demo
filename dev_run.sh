@@ -6,6 +6,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$ROOT_DIR/scripts/config.sh"
 
 cleanup() {
   echo ""
@@ -51,15 +52,15 @@ else
 fi
 
 # --- Start backend ---
-echo ">> Starting sandbox backend on http://localhost:8080"
-(cd "$ROOT_DIR" && python3 -m uvicorn app.server:app --host 0.0.0.0 --port 8080) &
+echo ">> Starting sandbox backend on http://localhost:$BACKEND_PORT"
+(cd "$ROOT_DIR" && python3 -m uvicorn app.server:app --host 0.0.0.0 --port "$BACKEND_PORT") &
 BACKEND_PID=$!
 
 sleep 1
 
 # --- Start frontend ---
 echo ">> Starting notebook UI on http://localhost:5173"
-(cd "$ROOT_DIR/web" && npm run dev -- --open) &
+(cd "$ROOT_DIR/web" && VITE_PROXY_PORT="$PROXY_PORT" npm run dev -- --open) &
 FRONTEND_PID=$!
 
 echo ""
@@ -67,7 +68,7 @@ echo "============================================"
 echo "  ✅ Running!"
 echo ""
 echo "  Notebook UI:  http://localhost:5173"
-echo "  Sandbox API:  http://localhost:8080"
+echo "  Sandbox API:  http://localhost:$BACKEND_PORT"
 echo ""
 echo "  Click 'Local Dev Mode' in the UI to connect."
 echo "  Press Ctrl+C to stop both servers."

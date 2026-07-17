@@ -2,7 +2,8 @@ import { useState, useCallback, useRef, useEffect } from 'react'
 import Cell from './Cell'
 import ConnectionPanel from './ConnectionPanel'
 import PackageManager from './PackageManager'
-import { IconPlus, IconPlayAll, IconPlay, IconTrash, IconPackage, IconSave, IconFolderOpen, IconSettings } from './Icons'
+import { IconPlus, IconPlayAll, IconPlay, IconTrash, IconPackage, IconSave, IconFolderOpen, IconSettings, IconStop, IconFile, IconSearch, IconChevronUp, IconChevronDown, IconX } from './Icons'
+import { PROXY_URL } from '../config'
 import './Notebook.css'
 
 let nextCellId = (() => {
@@ -23,9 +24,10 @@ let nextCellId = (() => {
   return 1
 })()
 
-function createCell() {
+function createCell(type = 'code') {
   return {
     id: nextCellId++,
+    type,  // 'code' | 'markdown'
     code: '',
     output: null,
     error: null,
@@ -34,6 +36,7 @@ function createCell() {
     status: 'idle', // idle | running | success | error
     executionNumber: null,
     executionTime: null,
+    lastExecutedCode: null, // snapshot of code at execution time (for staleness detection)
   }
 }
 
@@ -47,6 +50,7 @@ export default function Notebook({ tab, onUpdateTab, attachedIds = [] }) {
     if (tab._loadedCells && Array.isArray(tab._loadedCells)) {
       return tab._loadedCells.map(c => ({
         id: nextCellId++,
+        type: c.type || 'code',
         code: c.code || '',
         output: c.output || null,
         error: c.error || null,
@@ -54,7 +58,8 @@ export default function Notebook({ tab, onUpdateTab, attachedIds = [] }) {
         image: c.image || null,
         status: 'idle',
         executionNumber: c.executionNumber || null,
-        executionTime: null,
+        executionTime: c.executionTime || null,
+        lastExecutedCode: c.lastExecutedCode || null,
       }))
     }
     return [createCell()]
@@ -64,8 +69,85 @@ export default function Notebook({ tab, onUpdateTab, attachedIds = [] }) {
   const [isExecuting, setIsExecuting] = useState(false)
   const [activeCellId, setActiveCellId] = useState(null)
   const [aiAvailable, setAiAvailable] = useState(false)
+  const [dragOverId, setDragOverId] = useState(null)
+  const [showSearch, setShowSearch] = useState(false)
+  const [searchQuery, setSearchQuery] = useState('')
+  const [searchMatches, setSearchMatches] = useState([]) // [{cellId, index}]
+  const [searchActiveIdx, setSearchActiveIdx] = useState(0)
+  const searchInputRef = useRef(null)
+  const draggedCellRef = useRef(null)
   const executionQueue = useRef([])
   const bottomRef = useRef(null)
+
+  // Cmd+F to open search
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === 'f') {
+        e.preventDefault()
+        setShowSearch(true)
+        setTimeout(() => searchInputRef.current?.focus(), 50)
+      }
+      if (e.key === 'Escape' && showSearch) {
+        setShowSearch(false)
+        setSearchQuery('')
+        setSearchMatches([])
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [showSearch])
+
+  // Update matches when query changes
+  useEffect(() => {
+    if (!searchQuery.trim()) {
+      setSearchMatches([])
+      setSearchActiveIdx(0)
+      return
+    }
+    const q = searchQuery.toLowerCase()
+    const matches = []
+    cells.forEach(cell => {
+      if (cell.code && cell.code.toLowerCase().includes(q)) {
+        // Count occurrences in this cell
+        let idx = 0
+        const code = cell.code.toLowerCase()
+        while ((idx = code.indexOf(q, idx)) !== -1) {
+          matches.push({ cellId: cell.id, pos: idx })
+          idx += q.length
+        }
+      }
+    })
+    setSearchMatches(matches)
+    setSearchActiveIdx(0)
+    // Scroll to first match
+    if (matches.length > 0) {
+      setActiveCellId(matches[0].cellId)
+      scrollToCellId(matches[0].cellId)
+    }
+  }, [searchQuery, cells])
+
+  const scrollToCellId = (cellId) => {
+    setTimeout(() => {
+      const el = document.querySelector(`[data-cell-id="${cellId}"]`)
+      if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    }, 50)
+  }
+
+  const searchNext = () => {
+    if (searchMatches.length === 0) return
+    const nextIdx = (searchActiveIdx + 1) % searchMatches.length
+    setSearchActiveIdx(nextIdx)
+    setActiveCellId(searchMatches[nextIdx].cellId)
+    scrollToCellId(searchMatches[nextIdx].cellId)
+  }
+
+  const searchPrev = () => {
+    if (searchMatches.length === 0) return
+    const prevIdx = (searchActiveIdx - 1 + searchMatches.length) % searchMatches.length
+    setSearchActiveIdx(prevIdx)
+    setActiveCellId(searchMatches[prevIdx].cellId)
+    scrollToCellId(searchMatches[prevIdx].cellId)
+  }
 
   // Auto-scroll when cells are added
   useEffect(() => {
@@ -122,9 +204,9 @@ export default function Notebook({ tab, onUpdateTab, attachedIds = [] }) {
   // Check AI availability when connected
   useEffect(() => {
     if (tab.status === 'connected' && tab.microvmEndpoint) {
-      // AI endpoints live on the proxy (8081) or local backend (8080)
-      const aiBase = tab.microvmEndpoint.includes('8081')
-        ? 'http://localhost:8081'
+      // AI endpoints live on the proxy or local backend
+      const aiBase = tab.microvmEndpoint.includes(PROXY_URL)
+        ? PROXY_URL
         : tab.microvmEndpoint
       fetch(`${aiBase}/ai/config`)
         .then(r => r.json())
@@ -140,6 +222,7 @@ export default function Notebook({ tab, onUpdateTab, attachedIds = [] }) {
 
     const cell = cells.find(c => c.id === cellId)
     if (!cell || !cell.code.trim()) return
+    if (cell.type === 'markdown') return  // Markdown cells don't execute
 
     // Queue execution — cells run sequentially to maintain state consistency
     const doExecute = async () => {
@@ -155,7 +238,7 @@ export default function Notebook({ tab, onUpdateTab, attachedIds = [] }) {
         let realEndpoint = tab.microvmRealEndpoint
         if (!realEndpoint) {
           try {
-            const instResp = await fetch('http://localhost:8081/instances')
+            const instResp = await fetch(`${PROXY_URL}/instances`)
             const instData = await instResp.json()
             const inst = instData.instances?.[tab.microvmId]
             if (inst?.endpoint) {
@@ -208,6 +291,7 @@ export default function Notebook({ tab, onUpdateTab, attachedIds = [] }) {
                 image: result.image || null,
                 executionNumber: result.execution_number,
                 executionTime: result.execution_time_ms,
+                lastExecutedCode: c.code,
               }
             : c
         ))
@@ -248,10 +332,41 @@ export default function Notebook({ tab, onUpdateTab, attachedIds = [] }) {
     }
   }, [activeCellId, executeCell])
 
+  const interruptExecution = useCallback(async () => {
+    if (!tab.microvmEndpoint || tab.status !== 'connected') return
+
+    const headers = { 'Content-Type': 'application/json' }
+    if (tab.microvmId) {
+      headers['X-MicroVM-Id'] = tab.microvmId
+      if (tab.microvmRealEndpoint) {
+        headers['X-MicroVM-Endpoint'] = tab.microvmRealEndpoint
+      }
+    }
+
+    try {
+      await fetch(`${tab.microvmEndpoint}/interrupt`, {
+        method: 'POST',
+        headers,
+      })
+    } catch {}
+
+    // Mark any running cell as interrupted
+    setCells(prev => prev.map(c =>
+      c.status === 'running'
+        ? { ...c, status: 'error', error: 'Execution interrupted by user' }
+        : c
+    ))
+  }, [tab.microvmEndpoint, tab.microvmId, tab.microvmRealEndpoint, tab.status])
+
   const deleteActiveCell = useCallback(() => {
     if (activeCellId) {
       setCells(prev => {
-        if (prev.length <= 1) return prev
+        if (prev.length <= 1) {
+          // Last cell — replace with a fresh empty cell
+          const fresh = createCell()
+          setActiveCellId(fresh.id)
+          return [fresh]
+        }
         const idx = prev.findIndex(c => c.id === activeCellId)
         const next = prev.filter(c => c.id !== activeCellId)
         // Select the next cell (or previous if last)
@@ -266,23 +381,73 @@ export default function Notebook({ tab, onUpdateTab, attachedIds = [] }) {
     setCells(prev => prev.map(c => c.id === cellId ? { ...c, code } : c))
   }, [])
 
-  const addCellBelow = useCallback((cellId) => {
-    const newCell = createCell()
+  const addCellBelow = useCallback((cellId, type = 'code') => {
+    const newCell = createCell(type)
     setCells(prev => {
       const idx = prev.findIndex(c => c.id === cellId)
       const next = [...prev]
       next.splice(idx + 1, 0, newCell)
       return next
     })
+    setActiveCellId(newCell.id)
   }, [])
 
-  const addCellAtEnd = useCallback(() => {
-    setCells(prev => [...prev, createCell()])
+  const addCellAtEnd = useCallback((type = 'code') => {
+    const newCell = createCell(type)
+    setCells(prev => [...prev, newCell])
+    setActiveCellId(newCell.id)
+  }, [])
+
+  const changeCellType = useCallback((cellId, newType) => {
+    setCells(prev => prev.map(c =>
+      c.id === cellId ? { ...c, type: newType, output: null, error: null, html: null, image: null, status: 'idle' } : c
+    ))
+  }, [])
+
+  // Drag-to-reorder handlers
+  const handleDragStart = useCallback((cellId) => {
+    draggedCellRef.current = cellId
+  }, [])
+
+  const handleDragOver = useCallback((cellId) => {
+    if (draggedCellRef.current && draggedCellRef.current !== cellId) {
+      setDragOverId(cellId)
+    }
+  }, [])
+
+  const handleDrop = useCallback((targetCellId) => {
+    const draggedId = draggedCellRef.current
+    if (!draggedId || draggedId === targetCellId) {
+      setDragOverId(null)
+      draggedCellRef.current = null
+      return
+    }
+    setCells(prev => {
+      const draggedIdx = prev.findIndex(c => c.id === draggedId)
+      const targetIdx = prev.findIndex(c => c.id === targetCellId)
+      if (draggedIdx === -1 || targetIdx === -1) return prev
+      const reordered = [...prev]
+      const [moved] = reordered.splice(draggedIdx, 1)
+      reordered.splice(targetIdx, 0, moved)
+      return reordered
+    })
+    setDragOverId(null)
+    draggedCellRef.current = null
+  }, [])
+
+  const handleDragEnd = useCallback(() => {
+    setDragOverId(null)
+    draggedCellRef.current = null
   }, [])
 
   const deleteCell = useCallback((cellId) => {
     setCells(prev => {
-      if (prev.length <= 1) return prev // Keep at least one cell
+      if (prev.length <= 1) {
+        // Last cell — replace with a fresh empty cell
+        const fresh = createCell()
+        setActiveCellId(fresh.id)
+        return [fresh]
+      }
       return prev.filter(c => c.id !== cellId)
     })
   }, [])
@@ -302,6 +467,7 @@ export default function Notebook({ tab, onUpdateTab, attachedIds = [] }) {
       microvmId: tab.microvmId || null,
       savedAt: new Date().toISOString(),
       cells: cells.map(c => ({
+        type: c.type || 'code',
         code: c.code,
         output: c.output,
         error: c.error,
@@ -366,8 +532,11 @@ export default function Notebook({ tab, onUpdateTab, attachedIds = [] }) {
         <>
         <div className="notebook-toolbar">
           <div className="toolbar-group">
-            <button className="toolbar-btn" onClick={addCellAtEnd} title="Add cell">
-              <IconPlus width={14} height={14} /> Cell
+            <button className="toolbar-btn" onClick={() => addCellAtEnd('code')} title="Add code cell">
+              <IconPlus width={14} height={14} /> Code
+            </button>
+            <button className="toolbar-btn" onClick={() => addCellAtEnd('markdown')} title="Add text/markdown cell">
+              <IconFile width={14} height={14} /> Text
             </button>
             <button
               className="toolbar-btn toolbar-btn-run"
@@ -376,6 +545,14 @@ export default function Notebook({ tab, onUpdateTab, attachedIds = [] }) {
               title="Run active cell (Shift+Enter)"
             >
               <IconPlay width={14} height={14} /> Run
+            </button>
+            <button
+              className="toolbar-btn toolbar-btn-stop"
+              onClick={interruptExecution}
+              disabled={!cells.some(c => c.status === 'running')}
+              title="Stop execution"
+            >
+              <IconStop width={14} height={14} /> Stop
             </button>
             <button
               className="toolbar-btn toolbar-btn-run-all"
@@ -398,18 +575,21 @@ export default function Notebook({ tab, onUpdateTab, attachedIds = [] }) {
           <span className="toolbar-divider" />
 
           <div className="toolbar-group">
-            <button className="toolbar-btn" onClick={saveNotebook} title="Save notebook">
+            <button className="toolbar-btn toolbar-btn-save" onClick={saveNotebook} title="Save notebook">
               <IconSave width={14} height={14} /> Save
             </button>
-            <button className="toolbar-btn" onClick={loadNotebook} title="Open notebook">
+            <button className="toolbar-btn toolbar-btn-open" onClick={loadNotebook} title="Open notebook">
               <IconFolderOpen width={14} height={14} /> Open
+            </button>
+            <button className="toolbar-btn toolbar-btn-find" onClick={() => { setShowSearch(true); setTimeout(() => searchInputRef.current?.focus(), 50) }} title="Find in notebook (Cmd+F)">
+              <IconSearch width={14} height={14} /> Find
             </button>
           </div>
 
           <span className="toolbar-divider" />
 
           <button
-            className="toolbar-btn"
+            className="toolbar-btn toolbar-btn-packages"
             onClick={() => setShowPackageManager(true)}
             title="Manage packages"
           >
@@ -418,17 +598,20 @@ export default function Notebook({ tab, onUpdateTab, attachedIds = [] }) {
 
           <span className="toolbar-divider" />
 
-          <button className="toolbar-btn" onClick={() => setShowConnection(true)} title="Connection settings">
+          <button className="toolbar-btn toolbar-btn-connection" onClick={() => setShowConnection(true)} title="Connection settings">
             <IconSettings width={14} height={14} /> Connection
           </button>
 
           <div className="toolbar-status">
             <span className={`status-dot status-${tab.status}`} />
             <span className="status-text">
-              {tab.status === 'connected' ? 'Connected' : 'Disconnected'}
+              {tab.status === 'connected' ? 'Connected' :
+               tab.status === 'connecting' ? 'Connecting...' :
+               tab.status === 'launching' ? 'Launching...' :
+               'Disconnected'}
             </span>
-            {tab.microvmId && (
-              <span className="status-id">{tab.microvmId}</span>
+            {tab.microvmId && tab.status === 'connected' && (
+              <span className="status-id" title={tab.microvmId}>{tab.microvmId.slice(-12)}</span>
             )}
           </div>
         </div>
@@ -436,6 +619,45 @@ export default function Notebook({ tab, onUpdateTab, attachedIds = [] }) {
           <div className="notebook-description">{tab.description}</div>
         )}
         </>
+      )}
+
+      {showSearch && (
+        <div className="notebook-search-bar">
+          <div className="notebook-search-field">
+            <IconSearch width={13} height={13} className="notebook-search-icon" />
+            <input
+              ref={searchInputRef}
+              className="notebook-search-input"
+              type="text"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') { e.shiftKey ? searchPrev() : searchNext() }
+                if (e.key === 'Escape') { setShowSearch(false); setSearchQuery(''); setSearchMatches([]) }
+              }}
+              placeholder="Find in notebook..."
+              autoFocus
+            />
+            {searchQuery && (
+              <span className="notebook-search-count">
+                {searchMatches.length > 0
+                  ? `${searchActiveIdx + 1} of ${searchMatches.length} in ${new Set(searchMatches.map(m => m.cellId)).size} cells`
+                  : 'No results'}
+              </span>
+            )}
+          </div>
+          <div className="notebook-search-actions">
+            <button className="notebook-search-nav" onClick={searchPrev} disabled={searchMatches.length === 0} title="Previous (Shift+Enter)">
+              <IconChevronUp width={14} height={14} />
+            </button>
+            <button className="notebook-search-nav" onClick={searchNext} disabled={searchMatches.length === 0} title="Next (Enter)">
+              <IconChevronDown width={14} height={14} />
+            </button>
+            <button className="notebook-search-close" onClick={() => { setShowSearch(false); setSearchQuery(''); setSearchMatches([]) }} title="Close (Esc)">
+              <IconX width={14} height={14} />
+            </button>
+          </div>
+        </div>
       )}
 
       <div className="cells-container">
@@ -446,19 +668,42 @@ export default function Notebook({ tab, onUpdateTab, attachedIds = [] }) {
             index={index}
             isConnected={tab.status === 'connected'}
             isActive={cell.id === activeCellId}
+            isDragOver={cell.id === dragOverId}
+            hasSearchMatch={showSearch && searchQuery && searchMatches.some(m => m.cellId === cell.id)}
             onFocus={() => setActiveCellId(cell.id)}
             onExecute={() => executeCell(cell.id)}
+            onInterrupt={interruptExecution}
             onCodeChange={(code) => updateCellCode(cell.id, code)}
-            onAddBelow={() => addCellBelow(cell.id)}
+            onAddBelow={(type) => addCellBelow(cell.id, type)}
+            onTypeChange={(newType) => changeCellType(cell.id, newType)}
             onDelete={() => deleteCell(cell.id)}
+            onDragStart={() => handleDragStart(cell.id)}
+            onDragOver={() => handleDragOver(cell.id)}
+            onDrop={() => handleDrop(cell.id)}
+            onDragEnd={handleDragEnd}
+            searchQuery={showSearch ? searchQuery : ''}
+            searchActiveOccurrence={(() => {
+              if (!showSearch || !searchQuery || searchMatches.length === 0) return -1
+              const activeMatch = searchMatches[searchActiveIdx]
+              if (activeMatch?.cellId !== cell.id) return -1
+              // Count which occurrence within THIS cell is active
+              let countInCell = 0
+              for (let i = 0; i < searchActiveIdx; i++) {
+                if (searchMatches[i].cellId === cell.id) countInCell++
+              }
+              return countInCell
+            })()}
             notebookContext={cells}
             microvmEndpoint={tab.microvmEndpoint}
             aiAvailable={aiAvailable}
           />
         ))}
         <div className="add-cell-row">
-          <button className="add-cell-btn" onClick={addCellAtEnd}>
-            + Add cell
+          <button className="add-cell-btn" onClick={() => addCellAtEnd('code')}>
+            + Code
+          </button>
+          <button className="add-cell-btn" onClick={() => addCellAtEnd('markdown')}>
+            + Text
           </button>
         </div>
         <div ref={bottomRef} />

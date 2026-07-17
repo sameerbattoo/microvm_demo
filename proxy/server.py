@@ -50,6 +50,7 @@ app.add_middleware(
 AWS_REGION = os.environ.get("AWS_REGION", "us-west-2")
 IMAGE_ARN = os.environ.get("MICROVM_IMAGE_ARN", "")
 EXEC_ROLE_ARN = os.environ.get("MICROVM_EXEC_ROLE_ARN", "")
+POLL_INTERVAL_MS = int(os.environ.get("POLL_INTERVAL_MS", "10000"))
 INGRESS_CONNECTOR = os.environ.get("MICROVM_INGRESS_CONNECTOR",
     f"arn:aws:lambda:{AWS_REGION}:aws:network-connector:aws-network-connector:ALL_INGRESS")
 EGRESS_CONNECTOR = os.environ.get("MICROVM_EGRESS_CONNECTOR",
@@ -60,6 +61,10 @@ _token_cache: dict[str, dict] = {}
 
 # Track active MicroVMs launched by this proxy
 _active_microvms: dict[str, dict] = {}  # id -> {"endpoint": str, "launched_at": float}
+
+# Cost tracker instance (persists across page refreshes, resets on proxy restart)
+from proxy.cost_tracker import CostTracker
+_cost_tracker = CostTracker()
 
 # AWS client (uses default credentials from environment/profile)
 # IMPORTANT: Requires boto3 >= 1.43.40 for lambda-microvms service client
@@ -222,6 +227,9 @@ async def launch_microvm(request: Request):
             "memory_mib": memory_mib,
         }
 
+        # Start cost tracking from launch
+        _cost_tracker.record(microvm_id, "RUNNING", memory_mib=memory_mib)
+
         logger.info(f"MicroVM launched: {microvm_id} at {endpoint}")
 
         # Poll until running (max 60s)
@@ -318,9 +326,13 @@ async def list_instances():
                 "state": state,
                 "launched_at": local_info.get("launched_at"),
                 "memory_mib": memory_mib,
+                "cost": _cost_tracker.get_cost(microvm_id),
             }
 
-        return {"instances": instances}
+            # Track state transitions for cost
+            _cost_tracker.record(microvm_id, state, memory_mib=memory_mib)
+
+        return {"instances": instances, "total_cost": _cost_tracker.get_total_cost()}
     except Exception as e:
         logger.error(f"Failed to list instances: {e}")
         return {"instances": _active_microvms}
@@ -360,7 +372,51 @@ async def health():
         "image_arn": IMAGE_ARN or "(not configured)",
         "cached_tokens": len(_token_cache),
         "active_instances": len(_active_microvms),
+        "poll_interval_ms": POLL_INTERVAL_MS,
     }
+
+
+@app.get("/image-tiers")
+async def list_image_tiers():
+    """
+    Discover available MicroVM image size tiers by listing images matching
+    the configured image name pattern. Returns memory/vCPU options for the UI.
+    """
+    if not IMAGE_ARN:
+        return {"tiers": []}
+
+    try:
+        client = get_lambda_client()
+        # Image ARN base name (e.g. "agent-sandbox")
+        image_base = IMAGE_ARN.split(":")[-1]  # e.g. "agent-sandbox"
+
+        # List all images and filter by our naming pattern
+        response = client.list_microvm_images()
+        tiers = []
+        for img in response.get("items", []):
+            name = img.get("name", "")
+            state = img.get("state", "")
+            # Match pattern: {image_base}-{memoryMiB}
+            if name.startswith(f"{image_base}-") and state in ("CREATED", "UPDATED"):
+                suffix = name.replace(f"{image_base}-", "")
+                if suffix.isdigit():
+                    mem = int(suffix)
+                    vcpu = max(1, mem // 2048)
+                    tiers.append({
+                        "memory_mib": mem,
+                        "memory_gb": mem / 1024,
+                        "vcpu": vcpu,
+                        "label": f"{mem / 1024:.1f} GB · {vcpu} vCPU",
+                        "image_name": name,
+                    })
+
+        # Sort by memory size
+        tiers.sort(key=lambda t: t["memory_mib"])
+        return {"tiers": tiers}
+    except Exception as e:
+        logger.warning(f"Failed to list image tiers: {e}")
+        # Fallback: return standard tiers based on the IMAGE_ARN pattern
+        return {"tiers": []}
 
 
 @app.get("/packages")
@@ -480,8 +536,11 @@ async def delete_session(session_id: str):
 
 
 # ============================================================
-# DATA SOURCES (S3 + DynamoDB discovery)
+# DATA SOURCES (S3 + DynamoDB + Athena discovery)
 # ============================================================
+
+ATHENA_DB = os.environ.get("ATHENA_DB", "microvm_demo_db")
+
 
 @app.get("/datasources")
 async def list_datasources():
@@ -489,9 +548,11 @@ async def list_datasources():
     List external data sources accessible from the MicroVM:
     - S3 objects in the artifacts bucket (samples/ prefix)
     - DynamoDB tables matching the demo pattern
+    - Athena tables in the microvm_demo_db database
     """
     s3_files = []
     dynamodb_tables = []
+    athena_tables = []
 
     try:
         s3 = boto3.client("s3", region_name=AWS_REGION)
@@ -504,12 +565,17 @@ async def list_datasources():
                 break
 
         if bucket_name:
-            # List objects in samples/ prefix
+            # List objects in samples/ prefix (only flat files, skip per-table subfolders)
             paginator = s3.get_paginator("list_objects_v2")
             for page in paginator.paginate(Bucket=bucket_name, Prefix="samples/", MaxKeys=50):
                 for obj in page.get("Contents", []):
                     key = obj["Key"]
                     if key.endswith("/"):
+                        continue
+                    # Only show top-level samples (e.g. samples/sales_data.csv)
+                    # Skip files inside per-table subfolders (e.g. samples/sales_data/sales_data.csv)
+                    parts = key.replace("samples/", "", 1).split("/")
+                    if len(parts) > 1:
                         continue
                     size = obj["Size"]
                     if size < 1024:
@@ -544,9 +610,26 @@ async def list_datasources():
     except Exception as e:
         logger.warning(f"Failed to list DynamoDB sources: {e}")
 
+    try:
+        glue = boto3.client("glue", region_name=AWS_REGION)
+        resp = glue.get_tables(DatabaseName=ATHENA_DB)
+        for table in resp.get("TableList", []):
+            columns = table.get("StorageDescriptor", {}).get("Columns", [])
+            athena_tables.append({
+                "name": table["Name"],
+                "database": ATHENA_DB,
+                "columns": [{"name": c["Name"], "type": c["Type"]} for c in columns],
+                "column_count": len(columns),
+                "region": AWS_REGION,
+            })
+    except Exception as e:
+        logger.warning(f"Failed to list Athena sources: {e}")
+
     return {
         "s3": s3_files,
         "dynamodb": dynamodb_tables,
+        "athena": athena_tables,
+        "artifact_bucket": bucket_name,
     }
 
 

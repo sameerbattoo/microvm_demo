@@ -1,8 +1,17 @@
 {
   "name": "Sales Data Analysis",
   "description": "Generate sales data, explore trends, and visualize revenue by product and month.",
-  "savedAt": "2026-07-14T00:00:00.000Z",
+  "savedAt": "2026-07-16T00:00:00.000Z",
   "cells": [
+    {
+      "type": "markdown",
+      "code": "# Sales Data Analysis\n\nGenerate sample sales data, explore trends by product and time, then visualize with charts.\n\n**What you'll learn:**\n- Creating DataFrames with `pandas`\n- Groupby aggregations\n- Matplotlib bar charts and line plots",
+      "output": null,
+      "error": null,
+      "html": null,
+      "image": null,
+      "executionNumber": null
+    },
     {
       "code": "import pandas as pd\nimport numpy as np\nimport matplotlib.pyplot as plt\n\n# Generate sample sales data\nnp.random.seed(42)\nmonths = pd.date_range('2025-01-01', periods=12, freq='MS')\nproducts = ['Laptop', 'Phone', 'Tablet', 'Headphones', 'Monitor']\n\nrows = []\nfor month in months:\n    for product in products:\n        qty = np.random.randint(50, 500)\n        price = {'Laptop': 999, 'Phone': 699, 'Tablet': 449, 'Headphones': 149, 'Monitor': 349}[product]\n        rows.append({'date': month, 'product': product, 'quantity': qty, 'unit_price': price, 'revenue': qty * price})\n\nsales = pd.DataFrame(rows)\nprint(f\"Generated {len(sales)} rows of sales data\")\nsales.head(10)",
       "output": null,

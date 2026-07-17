@@ -18,7 +18,7 @@ export IMAGE_ARN="arn:aws:lambda:${AWS_REGION}:${ACCOUNT_ID}:microvm-image:${IMA
 export BASE_IMAGE_ARN="arn:aws:lambda:${AWS_REGION}:aws:microvm-image:al2023-1"
 
 # Size tiers (image name suffix → memory in MiB)
-export IMAGE_SIZES="2048 4096 8192"
+export IMAGE_SIZES="512 1024 2048 4096 8192"
 
 # IAM role names
 export BUILD_ROLE_NAME="MicroVMSandboxBuildRole"
@@ -32,6 +32,18 @@ export EGRESS_CONNECTOR="arn:aws:lambda:${AWS_REGION}:aws:network-connector:aws-
 
 # Artifact key in S3
 export ARTIFACT_KEY="images/${IMAGE_NAME}.zip"
+
+# Polling interval for MicroVM state refresh (milliseconds)
+export POLL_INTERVAL_MS="10000"
+
+# Port configuration
+export PROXY_PORT="8081"
+export BACKEND_PORT="8080"
+
+# Sample data resource names
+export DYNAMO_TABLE="microvm-demo-data"
+export ATHENA_DB="microvm_demo_db"
+export ATHENA_WORKGROUP="microvm-demo"
 
 # Project root
 export ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

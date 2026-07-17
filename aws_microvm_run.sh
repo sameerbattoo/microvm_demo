@@ -34,6 +34,11 @@ echo "  Account:  $ACCOUNT_ID"
 echo "  Image:    $IMAGE_NAME"
 echo ""
 
+# --- Kill stale processes from a previous run ---
+for port in $BACKEND_PORT $PROXY_PORT 5173; do
+  lsof -ti :$port 2>/dev/null | xargs kill -9 2>/dev/null || true
+done
+
 # --- Check dependencies ---
 if ! command -v python3 &>/dev/null; then
   echo "❌ python3 not found."
@@ -160,18 +165,20 @@ fi
 
 # --- Start token proxy ---
 echo ""
-echo ">> Starting token proxy on http://localhost:8081"
+echo ">> Starting token proxy on http://localhost:$PROXY_PORT"
 (cd "$ROOT_DIR" && \
   MICROVM_IMAGE_ARN="$IMAGE_ARN" \
   MICROVM_EXEC_ROLE_ARN="$EXEC_ROLE_ARN" \
   AWS_REGION="$AWS_REGION" \
-  python3 -m uvicorn proxy.server:app --host 0.0.0.0 --port 8081 --log-level warning) &
+  POLL_INTERVAL_MS="$POLL_INTERVAL_MS" \
+  ATHENA_DB="$ATHENA_DB" \
+  python3 -m uvicorn proxy.server:app --host 0.0.0.0 --port "$PROXY_PORT" --log-level warning) &
 PROXY_PID=$!
 sleep 1
 
 # --- Start frontend ---
 echo ">> Starting notebook UI on http://localhost:5173"
-(cd "$ROOT_DIR/web" && npm run dev -- --open) &
+(cd "$ROOT_DIR/web" && VITE_PROXY_PORT="$PROXY_PORT" npm run dev -- --open) &
 FRONTEND_PID=$!
 
 echo ""
@@ -179,7 +186,7 @@ echo "============================================"
 echo "  ✅ All running!"
 echo ""
 echo "  Notebook UI:    http://localhost:5173"
-echo "  Token Proxy:    http://localhost:8081"
+echo "  Token Proxy:    http://localhost:$PROXY_PORT"
 echo "  MicroVM Image:  $IMAGE_ARN"
 echo ""
 echo "  New notebook tabs auto-launch their own MicroVM."
