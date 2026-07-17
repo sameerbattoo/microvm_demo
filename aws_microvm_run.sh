@@ -172,6 +172,7 @@ echo ">> Starting token proxy on http://localhost:$PROXY_PORT"
   AWS_REGION="$AWS_REGION" \
   POLL_INTERVAL_MS="$POLL_INTERVAL_MS" \
   ATHENA_DB="$ATHENA_DB" \
+  ATHENA_WORKGROUP="$ATHENA_WORKGROUP" \
   python3 -m uvicorn proxy.server:app --host 0.0.0.0 --port "$PROXY_PORT" --log-level warning) &
 PROXY_PID=$!
 sleep 1

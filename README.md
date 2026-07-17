@@ -34,8 +34,12 @@ on Lambda MicroVMs. Each notebook session gets its own Firecracker VM providing:
 6. [Configuration](#6-configuration)
 7. [Technical Details](#7-technical-details)
 8. [Project Structure](#8-project-structure)
-9. [Cost](#9-cost)
-10. [References](#10-references)
+9. [Tests](#9-tests)
+10. [Cost](#10-cost)
+11. [References](#11-references)
+12. [License](#12-license)
+13. [Contributing](#13-contributing)
+14. [Security](#14-security)
 
 ---
 
@@ -53,12 +57,43 @@ on Lambda MicroVMs. Each notebook session gets its own Firecracker VM providing:
 
 | Requirement | Version | Notes |
 |------------|---------|-------|
-| AWS CLI | **2.35.10+** | Required for `lambda-microvms` subcommand. Script validates and exits with upgrade instructions if too old. |
+| **AWS CLI** | **2.35.10+** | **Required for `lambda-microvms` subcommand. Most existing installations will be too old — see install instructions below.** |
 | Python | 3.11+ | Proxy server + sandbox |
 | Node.js | 18+ | React UI |
 | npm | 8+ | Installed with Node.js |
 | boto3 | >= 1.43.40 | Auto-installed by launch script |
 | zip | any | For packaging the MicroVM image artifact |
+
+> **Important: AWS CLI 2.35.10+ is required.** The `lambda-microvms` subcommand was introduced in this version. If you have an older version, MicroVM commands will fail with "Invalid choice" errors.
+
+**Install or upgrade AWS CLI:**
+
+```bash
+# Check your current version
+aws --version
+# Output: aws-cli/2.x.x ...
+
+# macOS (recommended)
+curl "https://awscli.amazonaws.com/AWSCLIV2.pkg" -o /tmp/AWSCLIV2.pkg
+sudo installer -pkg /tmp/AWSCLIV2.pkg -target /
+
+# Linux (x86_64)
+curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o /tmp/awscliv2.zip
+unzip -o /tmp/awscliv2.zip -d /tmp
+sudo /tmp/aws/install --update
+
+# Linux (ARM64)
+curl "https://awscli.amazonaws.com/awscli-exe-linux-aarch64.zip" -o /tmp/awscliv2.zip
+unzip -o /tmp/awscliv2.zip -d /tmp
+sudo /tmp/aws/install --update
+
+# Windows
+# Download and run: https://awscli.amazonaws.com/AWSCLIV2.msi
+
+# Verify after install
+aws --version
+# Should show 2.35.10 or higher
+```
 
 ### 1.3 AWS Account Requirements
 
@@ -179,10 +214,29 @@ Terminates all running/suspended MicroVMs and deletes all images. S3 bucket, IAM
 - Extends effective session lifetime beyond the 8-hour VM maximum
 
 ### 3.7 UI & Theming
-- **Light/Dark theme toggle** — persists across sessions
+- **Light/Dark theme toggle** — persists across sessions (rotation animation on hover)
 - **Python syntax highlighting** — Prism.js-powered with One Dark-inspired colors
 - **SVG icons** throughout (Lucide-style, consistent stroke weight)
 - **Centralized CSS design tokens** — all colors, spacing, shadows via CSS custom properties
+- **Cell dip effect** — subtle lift on hover/select with shadow
+
+### 3.8 Variable Explorer
+- **Collapsible right panel** (280px default, resizable by dragging left edge)
+- **Auto-refreshes** after each cell execution
+- **Rich type previews** per variable:
+  - DataFrames/Series → HTML mini-table
+  - Lists → indexed vertical list
+  - Dicts → key-value row display
+  - Color lists → hex swatches with color preview
+  - Booleans → green/red badges
+  - Numbers → locale-formatted with commas
+  - URLs → clickable links
+  - File paths → directory + bold filename
+  - Datetimes → human-readable format
+  - matplotlib objects → "Plot object" badge
+  - None → greyed "null" pill
+- **Expandable detail** per variable: size, shape, preview
+- Modules and functions filtered out (only user data shown)
 
 ---
 
@@ -415,7 +469,8 @@ The executor automatically detects:
 - Base: `public.ecr.aws/lambda/microvms:al2023-minimal`
 - Runtime: **Python 3.11** (installed via dnf, venv-isolated)
 - All hooks enabled (run, suspend, resume, terminate, ready)
-- Memory tiers: 2 GB (1 vCPU), 4 GB (2 vCPU), 8 GB (4 vCPU)
+- Memory tiers: 0.5 GB (0.25 vCPU), 1 GB (0.5 vCPU), 2 GB (1 vCPU), 4 GB (2 vCPU), 8 GB (4 vCPU)
+- Each tier can burst up to **4× baseline** during peak activity (baseline-peak model)
 - All tiers build **in parallel** (~4-5 minutes total) with automatic retry on transient failures
 
 ### 7.7 Cost Tracking Implementation
@@ -466,32 +521,48 @@ scipy (statistics), boto3 (AWS SDK)
 ```
 .
 ├── app/
-│   ├── server.py           # FastAPI: lifecycle hooks, execute, upload, install
-│   └── executor.py         # Stateful Python executor with rich output (tables, plots)
+│   ├── server.py           # FastAPI: lifecycle hooks, execute (async), upload, install, interrupt
+│   └── executor.py         # Stateful Python executor with rich output, interrupt, variable inspection
 ├── proxy/
-│   ├── server.py           # Token proxy: launch, terminate, resume, auth, AI, datasources
+│   ├── server.py           # Token proxy: launch, terminate, resume, auth, datasources
+│   ├── ai_utils.py         # AI code generation: system prompt builder, code extraction
 │   └── cost_tracker.py     # CostTracker class: per-MicroVM cost estimation
 ├── web/
 │   └── src/
 │       ├── main.jsx
-│       ├── App.jsx              # Layout, state, tab management, theme toggle
+│       ├── App.jsx              # Layout, state, tab management (debounced localStorage)
+│       ├── App.css              # App shell, empty state welcome page
+│       ├── config.js            # Runtime config (ports from Vite env vars)
 │       ├── theme.css            # Design tokens (light + dark themes)
 │       ├── syntax-theme.css     # Python syntax highlighting
 │       ├── components/
-│       │   ├── Cell.jsx         # Code editor + syntax highlighting + AI mode
-│       │   ├── ConnectionPanel.jsx  # MicroVM connection + launch
-│       │   ├── InstancesPanel.jsx   # Instance list + cost display + tooltips
-│       │   ├── Notebook.jsx     # Cell list, execution queue, Run All, save/load
+│       │   ├── Cell.jsx         # Code cell: collapse, drag, timer, search highlight, staleness
+│       │   ├── Cell.css
+│       │   ├── MarkdownCell.jsx     # Markdown/text cell: edit/render modes
+│       │   ├── ConnectionPanel.jsx  # MicroVM connection + launch (dynamic tiers)
+│       │   ├── ConnectionPanel.css
+│       │   ├── InstancesPanel.jsx   # Instance list + cost display + expandable detail
+│       │   ├── InstancesPanel.css
+│       │   ├── Notebook.jsx     # Toolbar, cell management, search, drag-reorder, execution
+│       │   ├── Notebook.css
 │       │   ├── PackageManager.jsx   # Package list + install
+│       │   ├── VariableExplorer.jsx # Collapsible right panel: live variable state
+│       │   ├── VariableExplorer.css
+│       │   ├── VariablePreviewRenderer.jsx  # Smart type-aware variable preview
 │       │   ├── Sidebar.jsx      # Notebooks, Data Sources (S3/DDB/Athena), Samples
-│       │   ├── Icons.jsx        # SVG icon components (25+)
+│       │   ├── Sidebar.css
+│       │   ├── Icons.jsx        # SVG icon components (35+)
 │       │   └── Modal.jsx        # Reusable confirm/input modals
 │       └── services/
 │           └── microvm.js       # MicroVM client service
+├── tests/
+│   ├── test_interrupt_execution.py  # E2E: interrupt long-running cells (7 scenarios)
+│   ├── test_microvm_lifecycle.py    # E2E: full state machine + checkpoint/restore (15 scenarios)
+│   └── test_s3_restore.py          # E2E: checkpoint serialization & restore (8 scenarios)
 ├── scripts/
-│   ├── config.sh               # AWS config (region, sizes, roles)
+│   ├── config.sh               # All config (region, ports, sizes, DB names, polling)
 │   ├── setup_iam.sh            # Create IAM roles + S3 bucket
-│   ├── build_all_images.sh     # Parallel image build (2/4/8 GB) with retry
+│   ├── build_all_images.sh     # Parallel image build (all 5 tiers) with retry
 │   ├── setup_sample_data.sh    # DynamoDB + S3 + Athena tables + workgroup
 │   └── teardown.sh             # Terminate MicroVMs + delete images
 ├── iam/                    # IAM trust and permission policies
@@ -504,9 +575,80 @@ scipy (statistics), boto3 (AWS SDK)
 
 ---
 
-## 9. Cost
+## 9. Tests
 
-### 9.1 Estimated AWS Cost
+Three end-to-end test scripts validate the major aspects of MicroVM execution. All tests launch real MicroVMs via the proxy, execute code, and verify results.
+
+```bash
+# Run any test (requires aws_microvm_run.sh to be running)
+python3 tests/test_interrupt_execution.py
+python3 tests/test_microvm_lifecycle.py
+python3 tests/test_s3_restore.py
+```
+
+### 9.1 Interrupt Execution (`test_interrupt_execution.py`)
+
+Tests the ability to stop long-running or stuck cells mid-execution.
+
+| # | Scenario | Validates |
+|---|----------|-----------|
+| 1 | Normal execution | Sanity — code runs and returns output |
+| 2 | Interrupt `time.sleep()` | Blocking I/O can be interrupted |
+| 3 | Post-interrupt health | Sandbox still works after interrupt, variables preserved |
+| 4 | Interrupt CPU loop | `while True` loop can be stopped |
+| 5 | Loop variable survived | State created during the loop exists after interrupt |
+| 6 | No-op interrupt | Calling interrupt when idle is gracefully handled |
+| 7 | Final execution + HTML | Full execution with DataFrame rendering works after all interrupts |
+
+### 9.2 MicroVM Lifecycle (`test_microvm_lifecycle.py`)
+
+Comprehensive state machine test covering all MicroVM lifecycle transitions.
+
+**Part 1 — Without checkpoint:**
+
+| # | State Transition | Validates |
+|---|-----------------|-----------|
+| 1 | PENDING → RUNNING | Launch succeeds, VM is healthy |
+| 2 | Execute + create variables | Code runs, state accumulates |
+| 3 | Cross-call persistence | Variables survive across separate /execute calls |
+| 4 | RUNNING → SUSPENDED | Programmatic suspend works |
+| 5 | SUSPENDED → RUNNING (auto) | Sending /execute auto-resumes the VM |
+| 6 | Variables after resume | All state survives the suspend/resume cycle |
+| 7 | RUNNING → TERMINATED | Terminate without checkpoint |
+| 8 | Not recoverable | Terminated VM cannot be restored |
+
+**Part 2 — With S3 checkpoint:**
+
+| # | State Transition | Validates |
+|---|-----------------|-----------|
+| 9 | Launch with checkpoint | checkpointEnabled flag accepted |
+| 10 | Create rich state | DataFrames, numpy arrays, computed values |
+| 11 | Terminate → S3 | Checkpoint files written to S3 |
+| 12 | Launch new VM + restore | New VM restores from S3 checkpoint |
+| 13 | Variables restored | All variables match pre-terminate state |
+| 14 | Packages restored | pip-installed packages survive |
+| 15 | Clean up | Restored VM terminated |
+
+### 9.3 S3 Checkpoint & Restore (`test_s3_restore.py`)
+
+Focused deep test of the checkpoint/restore mechanism — serialization, S3 upload, and namespace restoration.
+
+| # | Scenario | Validates |
+|---|----------|-----------|
+| 1 | Launch with checkpoint | Session ID assigned |
+| 2 | Create complex state | Variables, DataFrames, local files, installed packages |
+| 3 | Terminate (triggers checkpoint) | /terminate hook fires, state serialized to S3 |
+| 4 | Verify S3 checkpoint | checkpoint.pkl, files.tar.gz, requirements.txt, metadata.json exist |
+| 5 | Launch new VM + restore | restoreFromSession flag triggers download + deserialization |
+| 6 | Validate restored namespace | All variables match, types correct |
+| 7 | Validate restored files | Local /tmp/ files exist |
+| 8 | Timing report | End-to-end latency breakdown |
+
+---
+
+## 10. Cost
+
+### 10.1 Estimated AWS Cost
 
 4 GB / 2 vCPU sandbox, 1 hour active per day:
 
@@ -517,7 +659,7 @@ scipy (statistics), boto3 (AWS SDK)
 | Suspend/resume IO | ~$0.10 |
 | **Total** | **~$5.60** |
 
-### 9.2 In-App Cost Tracking
+### 10.2 In-App Cost Tracking
 
 The application tracks and displays estimated cost per MicroVM in real time:
 - Cost is computed from observed RUNNING and SUSPENDED durations
@@ -526,10 +668,25 @@ The application tracks and displays estimated cost per MicroVM in real time:
 
 ---
 
-## 10. References
+## 11. References
 
 - [AWS Lambda MicroVMs Docs](https://docs.aws.amazon.com/lambda/latest/dg/lambda-microvms-guide.html)
 - [Launch Blog Post](https://aws.amazon.com/blogs/aws/run-isolated-sandboxes-with-full-lifecycle-control-aws-lambda-introduces-microvms/)
 - [MicroVM Networking](https://docs.aws.amazon.com/lambda/latest/dg/microvms-networking.html)
 - [Running & Lifecycle](https://docs.aws.amazon.com/lambda/latest/dg/microvms-launching.html)
 - [Pricing](https://aws.amazon.com/lambda/pricing/)
+
+---
+
+## 12. License
+
+This project is licensed under the Apache License 2.0. See [LICENSE](LICENSE) for the full license text.
+
+## 13. Contributing
+
+Contributions are welcome! Please read [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+
+## 14. Security
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for reporting security issues.
+If you discover a potential security issue, please do **not** create a public GitHub issue.

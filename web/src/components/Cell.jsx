@@ -1,7 +1,8 @@
-import { useState, useRef, useEffect, useCallback } from 'react'
+import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
 import Prism from 'prismjs'
 import 'prismjs/components/prism-python'
 import { marked } from 'marked'
+import MarkdownCell from './MarkdownCell'
 import { IconPlay, IconPlus, IconTrash, IconSparkles, IconCode, IconCheck, IconX, IconStop, IconChevronDown, IconChevronRight, IconGripVertical } from './Icons'
 import { PROXY_URL } from '../config'
 import './Cell.css'
@@ -13,7 +14,7 @@ function ElapsedTimer() {
     const start = Date.now()
     const interval = setInterval(() => {
       setElapsed(((Date.now() - start) / 1000).toFixed(1))
-    }, 100)
+    }, 500)
     return () => clearInterval(interval)
   }, [])
   return <span className="cell-timer">{elapsed}s</span>
@@ -45,9 +46,7 @@ export default function Cell({
 }) {
   const aiInputRef = useRef(null)
   const textareaRef = useRef(null)
-  const mdTextareaRef = useRef(null)
   const [mode, setMode] = useState('code') // 'code' | 'ai'
-  const [mdEditing, setMdEditing] = useState(!cell.code) // markdown cells start in edit mode if empty
   const [codeCollapsed, setCodeCollapsed] = useState(false)
   const [outputCollapsed, setOutputCollapsed] = useState(false)
   const [aiPrompt, setAiPrompt] = useState('')
@@ -71,19 +70,9 @@ export default function Cell({
     }
   }, [cell.code, mode, codeCollapsed])
 
-  // Auto-resize markdown textarea
-  useEffect(() => {
-    const el = mdTextareaRef.current
-    if (el && mdEditing) {
-      el.style.height = 'auto'
-      el.style.height = `${el.scrollHeight}px`
-    }
-  }, [cell.code, mdEditing])
-
-  const highlightCode = useCallback((code) => {
-    if (!code) return ''
-    let html = Prism.highlight(code, Prism.languages.python, 'python')
-    // Add search highlighting on top of syntax highlighting
+  const highlightedHtml = useMemo(() => {
+    if (!cell.code) return ''
+    let html = Prism.highlight(cell.code, Prism.languages.python, 'python')
     if (searchQuery && searchQuery.trim()) {
       const escaped = searchQuery.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
       const regex = new RegExp(`(${escaped})`, 'gi')
@@ -97,7 +86,7 @@ export default function Cell({
       })
     }
     return html
-  }, [searchQuery, searchActiveOccurrence])
+  }, [cell.code, searchQuery, searchActiveOccurrence])
 
   const handleKeyDown = (e) => {
     // Shift+Enter to execute
@@ -198,74 +187,20 @@ export default function Cell({
   // --- MARKDOWN CELL ---
   if (cell.type === 'markdown') {
     return (
-      <div
-        className={`cell cell-markdown ${isActive ? 'cell-active' : ''} ${isDragOver ? 'cell-drag-over' : ''} ${hasSearchMatch ? 'cell-search-match' : ''}`}
-        data-cell-id={cell.id}
-        onClick={onFocus}
-        onDragOver={(e) => { e.preventDefault(); onDragOver?.() }}
-        onDrop={(e) => { e.preventDefault(); onDrop?.() }}
+      <MarkdownCell
+        cell={cell}
+        isActive={isActive}
+        isDragOver={isDragOver}
+        hasSearchMatch={hasSearchMatch}
+        onFocus={onFocus}
+        onCodeChange={onCodeChange}
+        onAddBelow={onAddBelow}
+        onDelete={onDelete}
+        onDragStart={onDragStart}
+        onDragOver={onDragOver}
+        onDrop={onDrop}
         onDragEnd={onDragEnd}
-      >
-        <div className="cell-gutter">
-          <span
-            className="cell-drag-handle"
-            draggable
-            onDragStart={onDragStart}
-            title="Drag to reorder"
-          >
-            <IconGripVertical width={12} height={12} />
-          </span>
-          <span className="cell-type-badge">MD</span>
-        </div>
-        <div className="cell-content">
-          {mdEditing ? (
-            <div className="md-edit-area">
-              <textarea
-                ref={mdTextareaRef}
-                className="md-textarea"
-                value={cell.code}
-                onChange={(e) => onCodeChange(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Escape' || (e.key === 'Enter' && e.shiftKey)) {
-                    e.preventDefault()
-                    setMdEditing(false)
-                  }
-                }}
-                placeholder="Write markdown here... (Shift+Enter or Esc to render)"
-                spellCheck={true}
-                autoFocus
-              />
-              <div className="md-edit-hint">Shift+Enter to render · Esc to close</div>
-            </div>
-          ) : (
-            <div
-              className="md-rendered"
-              onDoubleClick={() => setMdEditing(true)}
-              dangerouslySetInnerHTML={{ __html: cell.code ? marked.parse(cell.code) : '<p class="md-placeholder">Double-click to edit markdown</p>' }}
-            />
-          )}
-          <div className="cell-actions md-actions">
-            {mdEditing ? (
-              <button className="cell-action-btn" onClick={() => setMdEditing(false)} title="Render markdown">
-                <IconCheck width={14} height={14} />
-              </button>
-            ) : (
-              <button className="cell-action-btn" onClick={() => setMdEditing(true)} title="Edit markdown">
-                <IconCode width={14} height={14} />
-              </button>
-            )}
-            <button className="cell-action-btn" onClick={() => onAddBelow('code')} title="Add code cell below">
-              <IconPlus width={14} height={14} />
-            </button>
-            <button className="cell-action-btn cell-add-md-btn" onClick={() => onAddBelow('markdown')} title="Add text cell below">
-              M
-            </button>
-            <button className="cell-action-btn cell-delete-btn" onClick={onDelete} title="Delete cell">
-              <IconTrash width={14} height={14} />
-            </button>
-          </div>
-        </div>
-      </div>
+      />
     )
   }
 
@@ -345,7 +280,7 @@ export default function Cell({
               <pre
                 className="cell-editor-highlight"
                 aria-hidden="true"
-                dangerouslySetInnerHTML={{ __html: highlightCode(cell.code) + '\n' }}
+                dangerouslySetInnerHTML={{ __html: highlightedHtml + '\n' }}
               />
               <textarea
                 ref={textareaRef}
@@ -377,13 +312,13 @@ export default function Cell({
                   <IconPlay width={12} height={12} />
                 </button>
               )}
-              <button className="cell-action-btn" onClick={() => onAddBelow('code')} title="Add code cell below">
+              <button className="cell-action-btn" onClick={(e) => { e.stopPropagation(); onAddBelow('code') }} title="Add code cell below">
                 <IconPlus width={14} height={14} />
               </button>
-              <button className="cell-action-btn cell-add-md-btn" onClick={() => onAddBelow('markdown')} title="Add text cell below">
+              <button className="cell-action-btn cell-add-md-btn" onClick={(e) => { e.stopPropagation(); onAddBelow('markdown') }} title="Add text cell below">
                 M
               </button>
-              <button className="cell-action-btn cell-delete-btn" onClick={onDelete} title="Delete cell">
+              <button className="cell-action-btn cell-delete-btn" onClick={(e) => { e.stopPropagation(); onDelete() }} title="Delete cell">
                 <IconTrash width={14} height={14} />
               </button>
             </div>
@@ -440,13 +375,13 @@ export default function Cell({
 
             {/* Cell actions in AI mode */}
             <div className="cell-actions cell-actions-ai">
-              <button className="cell-action-btn" onClick={() => onAddBelow('code')} title="Add code cell below">
+              <button className="cell-action-btn" onClick={(e) => { e.stopPropagation(); onAddBelow('code') }} title="Add code cell below">
                 <IconPlus width={14} height={14} />
               </button>
-              <button className="cell-action-btn cell-add-md-btn" onClick={() => onAddBelow('markdown')} title="Add text cell below">
+              <button className="cell-action-btn cell-add-md-btn" onClick={(e) => { e.stopPropagation(); onAddBelow('markdown') }} title="Add text cell below">
                 M
               </button>
-              <button className="cell-action-btn cell-delete-btn" onClick={onDelete} title="Delete cell">
+              <button className="cell-action-btn cell-delete-btn" onClick={(e) => { e.stopPropagation(); onDelete() }} title="Delete cell">
                 <IconTrash width={14} height={14} />
               </button>
             </div>

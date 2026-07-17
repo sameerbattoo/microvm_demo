@@ -39,6 +39,7 @@ export default function Sidebar({
   const [dynamoTables, setDynamoTables] = useState([])
   const [athenaTables, setAthenaTables] = useState([])
   const [artifactBucket, setArtifactBucket] = useState('')
+  const [athenaWorkgroup, setAthenaWorkgroup] = useState('microvm-demo')
   const [dsLoading, setDsLoading] = useState(false)
   const [dsFetched, setDsFetched] = useState(false)
 
@@ -65,6 +66,7 @@ export default function Sidebar({
         setDynamoTables(data.dynamodb || [])
         setAthenaTables(data.athena || [])
         setArtifactBucket(data.artifact_bucket || '')
+        setAthenaWorkgroup(data.athena_workgroup || 'microvm-demo')
       }
     } catch {}
     setDsLoading(false)
@@ -195,9 +197,9 @@ export default function Sidebar({
         </div>
         {dataSourcesExpanded && (
           <div className="sidebar-section-body">
-            {/* Uploaded Files */}
+            {/* Sandbox Files (local to VM) */}
             <div className="sidebar-subheader sidebar-subheader-toggle">
-              <IconUpload width={11} height={11} className="sidebar-icon-file-csv" /> Uploaded Files
+              <IconUpload width={11} height={11} className="sidebar-icon-file-csv" /> Sandbox Files <span className="sidebar-subheader-hint">local to VM</span>
             </div>
             {uploadedFiles.length > 0 ? (
               <>
@@ -229,7 +231,7 @@ export default function Sidebar({
               </>
             ) : (
               <div className="sidebar-empty-inline">
-                No files uploaded. Click ↑ to add files.
+                No files in sandbox. Upload files to the VM's /tmp/ directory.
               </div>
             )}
 
@@ -337,7 +339,7 @@ export default function Sidebar({
                   <div
                     key={`${table.database}.${table.name}`}
                     className="sidebar-file-item sidebar-ds-clickable"
-                    onClick={() => onInsertCode && onInsertCode(`import boto3, pandas as pd, time\n\nathena = boto3.client('athena', region_name='${table.region}')\nquery = "SELECT * FROM ${table.database}.${table.name} LIMIT 100"\n\nexec_id = athena.start_query_execution(QueryString=query, WorkGroup='microvm-demo')['QueryExecutionId']\nwhile athena.get_query_execution(QueryExecutionId=exec_id)['QueryExecution']['Status']['State'] in ('QUEUED', 'RUNNING'):\n    time.sleep(1)\n\nresults = athena.get_query_results(QueryExecutionId=exec_id)\ncolumns = [c['Label'] for c in results['ResultSet']['ResultSetMetadata']['ColumnInfo']]\nrows = [[f.get('VarCharValue', '') for f in r['Data']] for r in results['ResultSet']['Rows'][1:]]\ndf = pd.DataFrame(rows, columns=columns)\ndf`)}
+                    onClick={() => onInsertCode && onInsertCode(`import boto3, pandas as pd, time\n\nathena = boto3.client('athena', region_name='${table.region}')\nquery = "SELECT * FROM ${table.database}.${table.name} LIMIT 100"\n\nexec_id = athena.start_query_execution(QueryString=query, WorkGroup='${athenaWorkgroup}')['QueryExecutionId']\nwhile athena.get_query_execution(QueryExecutionId=exec_id)['QueryExecution']['Status']['State'] in ('QUEUED', 'RUNNING'):\n    time.sleep(1)\n\nresults = athena.get_query_results(QueryExecutionId=exec_id)\ncolumns = [c['Label'] for c in results['ResultSet']['ResultSetMetadata']['ColumnInfo']]\nrows = [[f.get('VarCharValue', '') for f in r['Data']] for r in results['ResultSet']['Rows'][1:]]\ndf = pd.DataFrame(rows, columns=columns)\ndf`)}
                     title={`Click to query ${table.database}.${table.name} (${table.column_count} columns)`}
                   >
                     <span className="sidebar-file-icon sidebar-icon-athena">

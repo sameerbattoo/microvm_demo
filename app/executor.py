@@ -87,6 +87,14 @@ class SandboxExecutor:
         # Track current thread for interrupt support
         self._exec_thread_id = threading.current_thread().ident
 
+        # Clear any lingering matplotlib figure from previous execution
+        # (prevents plots from bleeding into subsequent cells)
+        try:
+            import matplotlib.pyplot as plt
+            plt.close('all')
+        except (ImportError, Exception):
+            pass
+
         try:
             # Try exec first (statements), fall back to eval (expressions)
             # If the last line is an expression, capture its value
@@ -142,13 +150,15 @@ class SandboxExecutor:
             image=image_output,
         )
 
-        # Record history
+        # Record history (capped at 1000 entries to prevent unbounded memory growth)
         self._history.append({
             "execution_number": self._execution_count,
             "code": code[:500],  # truncate for history
             "success": success,
             "timestamp": datetime.now(timezone.utc).isoformat(),
         })
+        if len(self._history) > 1000:
+            self._history = self._history[-1000:]
 
         return result
 
@@ -258,28 +268,94 @@ class SandboxExecutor:
                 error=str(e),
             )
 
-    def get_variables(self) -> dict[str, str]:
+    def get_variables(self) -> dict[str, dict]:
         """
-        Return all user-defined variables with their types and repr.
+        Return all user-defined variables with type, preview, and metadata.
 
-        Filters out dunder attributes and module internals.
+        Provides rich info for the variable explorer:
+        - type: Python type name
+        - value: short repr (truncated to 100 chars)
+        - size: human-readable memory size
+        - shape: for DataFrames/arrays/lists (e.g. "500 rows × 8 cols")
+        - preview: first few items or .head() for collections
         """
         variables = {}
         for name, value in self._namespace.items():
             if name.startswith("__") and name.endswith("__"):
                 continue
+            # Skip modules, functions, classes
+            type_name = type(value).__name__
+            module = getattr(type(value), '__module__', '') or ''
+            if type_name in ('module', 'function', 'builtin_function_or_method', 'type'):
+                continue
+
             try:
+                # Basic repr (short)
                 val_repr = repr(value)
-                if len(val_repr) > 200:
-                    val_repr = val_repr[:200] + "..."
+                if len(val_repr) > 100:
+                    val_repr = val_repr[:100] + "..."
+
+                # Size
+                try:
+                    size_bytes = sys.getsizeof(value)
+                    if size_bytes < 1024:
+                        size_str = f"{size_bytes} B"
+                    elif size_bytes < 1024 * 1024:
+                        size_str = f"{size_bytes / 1024:.1f} KB"
+                    else:
+                        size_str = f"{size_bytes / (1024 * 1024):.1f} MB"
+                except Exception:
+                    size_str = ""
+
+                # Shape / length
+                shape = ""
+                preview = val_repr
+                preview_type = "text"  # "text" or "html"
+                if 'pandas' in module and type_name == 'DataFrame':
+                    shape = f"{value.shape[0]} rows × {value.shape[1]} cols"
+                    try:
+                        preview = value.head(3).to_html(classes='var-df-preview', max_cols=6, max_rows=3)
+                    except Exception:
+                        pass
+                    preview_type = "html"
+                elif 'pandas' in module and type_name == 'Series':
+                    shape = f"{len(value)} items"
+                    try:
+                        preview = value.head(5).to_frame().to_html(classes='var-df-preview', max_rows=5)
+                        preview_type = "html"
+                    except Exception:
+                        pass
+                elif 'numpy' in module and hasattr(value, 'shape'):
+                    shape = f"shape {value.shape}"
+                elif isinstance(value, (list, tuple)):
+                    shape = f"{len(value)} items"
+                    if len(value) > 5:
+                        preview = repr(value[:5])[:-1] + ", ...]"
+                        if len(preview) > 100:
+                            preview = preview[:100] + "..."
+                elif isinstance(value, dict):
+                    shape = f"{len(value)} keys"
+                    if len(value) > 3:
+                        keys = list(value.keys())[:3]
+                        preview = "{" + ", ".join(f"{repr(k)}: ..." for k in keys) + ", ...}"
+                elif isinstance(value, str) and len(value) > 50:
+                    shape = f"{len(value)} chars"
+
                 variables[name] = {
-                    "type": type(value).__name__,
+                    "type": type_name,
                     "value": val_repr,
+                    "size": size_str,
+                    "shape": shape,
+                    "preview": preview,
+                    "preview_type": preview_type,
                 }
             except Exception:
                 variables[name] = {
-                    "type": type(value).__name__,
-                    "value": "<unable to repr>",
+                    "type": type_name,
+                    "value": "<unable to inspect>",
+                    "size": "",
+                    "shape": "",
+                    "preview": "",
                 }
         return variables
 

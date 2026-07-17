@@ -200,7 +200,7 @@ export default function ConnectionPanel({ tab, onConnect, onUpdateTab, onDismiss
                       <span className="connection-info-label">Spec</span>
                       <span className="connection-info-spec">
                         {tab.microvmMemory
-                          ? `${tab.microvmMemory / 1024} GB · ${Math.max(1, tab.microvmMemory / 2048)} vCPU · ARM64`
+                          ? `${tab.microvmMemory / 1024} GB · ${tab.microvmMemory / 2048} vCPU · ARM64`
                           : 'Fetching...'}
                       </span>
                     </div>

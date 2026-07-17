@@ -5,11 +5,36 @@ app.zip
 # Python
 __pycache__/
 *.pyc
+*.pyo
 .venv/
+venv/
+.env
+*.egg-info/
+
+# Node.js
+web/node_modules/
+web/dist/
 
 # OS
 .DS_Store
+Thumbs.db
+*.swp
+*~
 
-# Editor
+# Editor / IDE
 .vscode/
 .idea/
+*.iml
+
+# AWS credentials (should never be committed)
+.aws/
+credentials
+*.pem
+
+# Logs
+*.log
+
+# Test artifacts
+.pytest_cache/
+.coverage
+htmlcov/

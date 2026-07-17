@@ -449,17 +449,19 @@
 }
 
 .sidebar-subheader-count {
-  margin-left: auto;
   font-size: 10px;
   color: var(--text-muted);
   font-weight: 500;
   background: var(--surface-4);
   padding: 1px 6px;
   border-radius: 8px;
+  margin-left: auto;
 }
 
 .sidebar-subheader-chevron {
-  margin-left: auto;
+  font-size: 9px;
+  color: var(--text-muted);
+  margin-left: 6px;
   font-size: 9px;
   color: var(--text-muted);
 }
@@ -601,4 +603,13 @@
   margin-left: auto;
   font-size: var(--font-size-xs);
   color: var(--text-muted);
+}
+
+.sidebar-subheader-hint {
+  font-size: 9px;
+  font-weight: 400;
+  color: var(--text-muted);
+  font-style: italic;
+  text-transform: none;
+  letter-spacing: 0;
 }

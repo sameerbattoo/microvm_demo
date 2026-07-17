@@ -9,9 +9,6 @@
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/config.sh"
 
-DYNAMO_TABLE="${DYNAMO_TABLE}"
-ATHENA_DB="${ATHENA_DB}"
-ATHENA_WORKGROUP="${ATHENA_WORKGROUP}"
 ATHENA_RESULTS_PREFIX="athena-results"
 
 # All sample CSV files to upload

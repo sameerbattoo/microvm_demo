@@ -9,17 +9,20 @@
   border: 1px solid var(--cell-border);
   border-radius: var(--radius-lg);
   overflow: hidden;
-  transition: border-color var(--transition-normal), box-shadow var(--transition-normal);
+  transition: border-color var(--transition-normal), box-shadow var(--transition-normal), transform var(--transition-fast);
   background: var(--cell-bg);
 }
 
 .cell:hover {
   border-color: var(--border-default);
+  box-shadow: var(--shadow-sm);
+  transform: translateY(-1px);
 }
 
 .cell-active {
   border-color: var(--accent-primary-muted);
   box-shadow: var(--shadow-glow-blue);
+  transform: translateY(-1px);
 }
 
 .cell-active .cell-gutter {

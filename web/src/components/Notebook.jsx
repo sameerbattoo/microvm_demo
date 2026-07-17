@@ -1,8 +1,9 @@
-import { useState, useCallback, useRef, useEffect } from 'react'
+import { useState, useCallback, useRef, useEffect, useMemo } from 'react'
 import Cell from './Cell'
 import ConnectionPanel from './ConnectionPanel'
 import PackageManager from './PackageManager'
-import { IconPlus, IconPlayAll, IconPlay, IconTrash, IconPackage, IconSave, IconFolderOpen, IconSettings, IconStop, IconFile, IconSearch, IconChevronUp, IconChevronDown, IconX } from './Icons'
+import VariableExplorer from './VariableExplorer'
+import { IconPlus, IconPlayAll, IconPlay, IconTrash, IconPackage, IconSave, IconFolderOpen, IconSettings, IconStop, IconFile, IconSearch, IconChevronUp, IconChevronDown, IconX, IconZap, IconSun, IconMoon, IconCode } from './Icons'
 import { PROXY_URL } from '../config'
 import './Notebook.css'
 
@@ -40,7 +41,7 @@ function createCell(type = 'code') {
   }
 }
 
-export default function Notebook({ tab, onUpdateTab, attachedIds = [] }) {
+export default function Notebook({ tab, onUpdateTab, attachedIds = [], theme, onToggleTheme }) {
   const [cells, setCells] = useState(() => {
     // Restore cells from tab state (persists across tab switches)
     if (tab._cells && Array.isArray(tab._cells) && tab._cells.length > 0) {
@@ -74,6 +75,8 @@ export default function Notebook({ tab, onUpdateTab, attachedIds = [] }) {
   const [searchQuery, setSearchQuery] = useState('')
   const [searchMatches, setSearchMatches] = useState([]) // [{cellId, index}]
   const [searchActiveIdx, setSearchActiveIdx] = useState(0)
+  const [showVarExplorer, setShowVarExplorer] = useState(true)
+  const [variables, setVariables] = useState({})
   const searchInputRef = useRef(null)
   const draggedCellRef = useRef(null)
   const executionQueue = useRef([])
@@ -149,9 +152,12 @@ export default function Notebook({ tab, onUpdateTab, attachedIds = [] }) {
     scrollToCellId(searchMatches[prevIdx].cellId)
   }
 
-  // Auto-scroll when cells are added
+  // Scroll new cell into view when added
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
+    if (activeCellId) {
+      const el = document.querySelector(`[data-cell-id="${activeCellId}"]`)
+      if (el) el.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+    }
   }, [cells.length])
 
   // Persist cells to tab state (survives tab switches)
@@ -185,7 +191,8 @@ export default function Notebook({ tab, onUpdateTab, attachedIds = [] }) {
         }
         // Add a new cell
         return [...prev, {
-          id: Date.now(),
+          id: nextCellId++,
+          type: 'code',
           code,
           output: null,
           error: null,
@@ -215,12 +222,28 @@ export default function Notebook({ tab, onUpdateTab, attachedIds = [] }) {
     }
   }, [tab.status, tab.microvmEndpoint])
 
+  const fetchVariables = useCallback(async () => {
+    if (!tab.microvmEndpoint || tab.status !== 'connected') return
+    try {
+      const headers = { 'Content-Type': 'application/json' }
+      if (tab.microvmId) {
+        headers['X-MicroVM-Id'] = tab.microvmId
+        if (tab.microvmRealEndpoint) headers['X-MicroVM-Endpoint'] = tab.microvmRealEndpoint
+      }
+      const resp = await fetch(`${tab.microvmEndpoint}/variables`, { headers })
+      if (resp.ok) {
+        const data = await resp.json()
+        setVariables(data.variables || {})
+      }
+    } catch {}
+  }, [tab.microvmEndpoint, tab.microvmId, tab.microvmRealEndpoint, tab.status])
+
   const executeCell = useCallback(async (cellId) => {
     if (!tab.microvmEndpoint || tab.status !== 'connected') {
       return
     }
 
-    const cell = cells.find(c => c.id === cellId)
+    const cell = prevCellsRef.current.find(c => c.id === cellId)
     if (!cell || !cell.code.trim()) return
     if (cell.type === 'markdown') return  // Markdown cells don't execute
 
@@ -313,8 +336,10 @@ export default function Notebook({ tab, onUpdateTab, attachedIds = [] }) {
         await next()
       }
       setIsExecuting(false)
+      // Refresh variable explorer after execution
+      fetchVariables()
     }
-  }, [tab.microvmEndpoint, tab.microvmId, tab.microvmRealEndpoint, tab.status, cells, isExecuting])
+  }, [tab.microvmEndpoint, tab.microvmId, tab.microvmRealEndpoint, tab.status, isExecuting])
 
   const executeAllCells = useCallback(async () => {
     if (!tab.microvmEndpoint || tab.status !== 'connected') return
@@ -385,6 +410,7 @@ export default function Notebook({ tab, onUpdateTab, attachedIds = [] }) {
     const newCell = createCell(type)
     setCells(prev => {
       const idx = prev.findIndex(c => c.id === cellId)
+      if (idx === -1) return [...prev, newCell]  // fallback: add at end
       const next = [...prev]
       next.splice(idx + 1, 0, newCell)
       return next
@@ -517,6 +543,24 @@ export default function Notebook({ tab, onUpdateTab, attachedIds = [] }) {
     input.click()
   }, [onUpdateTab])
 
+  // Pre-compute search match data for performance (avoids recalculating per-cell in JSX)
+  const searchMatchCellIds = useMemo(() => {
+    if (!showSearch || !searchQuery) return new Set()
+    return new Set(searchMatches.map(m => m.cellId))
+  }, [showSearch, searchQuery, searchMatches])
+
+  const searchActiveOccurrenceMap = useMemo(() => {
+    if (!showSearch || !searchQuery || searchMatches.length === 0) return {}
+    const activeMatch = searchMatches[searchActiveIdx]
+    if (!activeMatch) return {}
+    // Count which occurrence within the active cell is highlighted
+    let countInCell = 0
+    for (let i = 0; i < searchActiveIdx; i++) {
+      if (searchMatches[i].cellId === activeMatch.cellId) countInCell++
+    }
+    return { [activeMatch.cellId]: countInCell }
+  }, [showSearch, searchQuery, searchMatches, searchActiveIdx])
+
   return (
     <div className="notebook">
       {showConnection && (
@@ -531,6 +575,13 @@ export default function Notebook({ tab, onUpdateTab, attachedIds = [] }) {
       {!showConnection && (
         <>
         <div className="notebook-toolbar">
+          <div className="toolbar-brand">
+            <IconZap width={14} height={14} />
+            <span>MicroVM</span>
+          </div>
+
+          <span className="toolbar-divider" />
+
           <div className="toolbar-group">
             <button className="toolbar-btn" onClick={() => addCellAtEnd('code')} title="Add code cell">
               <IconPlus width={14} height={14} /> Code
@@ -595,6 +646,13 @@ export default function Notebook({ tab, onUpdateTab, attachedIds = [] }) {
           >
             <IconPackage width={14} height={14} /> Packages
           </button>
+          <button
+            className={`toolbar-btn toolbar-btn-variables ${showVarExplorer ? 'toolbar-btn-active' : ''}`}
+            onClick={() => { setShowVarExplorer(!showVarExplorer); if (!showVarExplorer) fetchVariables() }}
+            title="Variable explorer"
+          >
+            <IconCode width={14} height={14} /> Variables
+          </button>
 
           <span className="toolbar-divider" />
 
@@ -614,6 +672,10 @@ export default function Notebook({ tab, onUpdateTab, attachedIds = [] }) {
               <span className="status-id" title={tab.microvmId}>{tab.microvmId.slice(-12)}</span>
             )}
           </div>
+
+          <button className="toolbar-theme-btn" onClick={onToggleTheme} title={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}>
+            {theme === 'dark' ? <IconSun width={14} height={14} /> : <IconMoon width={14} height={14} />}
+          </button>
         </div>
         {tab.description && (
           <div className="notebook-description">{tab.description}</div>
@@ -660,6 +722,7 @@ export default function Notebook({ tab, onUpdateTab, attachedIds = [] }) {
         </div>
       )}
 
+      <div className="notebook-body">
       <div className="cells-container">
         {cells.map((cell, index) => (
           <Cell
@@ -669,7 +732,7 @@ export default function Notebook({ tab, onUpdateTab, attachedIds = [] }) {
             isConnected={tab.status === 'connected'}
             isActive={cell.id === activeCellId}
             isDragOver={cell.id === dragOverId}
-            hasSearchMatch={showSearch && searchQuery && searchMatches.some(m => m.cellId === cell.id)}
+            hasSearchMatch={searchMatchCellIds.has(cell.id)}
             onFocus={() => setActiveCellId(cell.id)}
             onExecute={() => executeCell(cell.id)}
             onInterrupt={interruptExecution}
@@ -682,17 +745,7 @@ export default function Notebook({ tab, onUpdateTab, attachedIds = [] }) {
             onDrop={() => handleDrop(cell.id)}
             onDragEnd={handleDragEnd}
             searchQuery={showSearch ? searchQuery : ''}
-            searchActiveOccurrence={(() => {
-              if (!showSearch || !searchQuery || searchMatches.length === 0) return -1
-              const activeMatch = searchMatches[searchActiveIdx]
-              if (activeMatch?.cellId !== cell.id) return -1
-              // Count which occurrence within THIS cell is active
-              let countInCell = 0
-              for (let i = 0; i < searchActiveIdx; i++) {
-                if (searchMatches[i].cellId === cell.id) countInCell++
-              }
-              return countInCell
-            })()}
+            searchActiveOccurrence={searchActiveOccurrenceMap[cell.id] ?? -1}
             notebookContext={cells}
             microvmEndpoint={tab.microvmEndpoint}
             aiAvailable={aiAvailable}
@@ -707,6 +760,13 @@ export default function Notebook({ tab, onUpdateTab, attachedIds = [] }) {
           </button>
         </div>
         <div ref={bottomRef} />
+      </div>
+
+      <VariableExplorer
+        variables={variables}
+        isOpen={showVarExplorer}
+        onClose={() => setShowVarExplorer(false)}
+      />
       </div>
 
       {showPackageManager && (

@@ -59,11 +59,32 @@ EGRESS_CONNECTOR = os.environ.get("MICROVM_EGRESS_CONNECTOR",
 # Token cache: microvm_id -> {"token": str, "expires_at": float}
 _token_cache: dict[str, dict] = {}
 
+# Cached artifacts bucket name (discovered once, reused)
+_artifacts_bucket: str | None = None
+
+
+def _get_artifacts_bucket() -> str | None:
+    """Find the microvm-sandbox-artifacts bucket (cached after first call)."""
+    global _artifacts_bucket
+    if _artifacts_bucket:
+        return _artifacts_bucket
+    try:
+        s3 = boto3.client("s3", region_name=AWS_REGION)
+        resp = s3.list_buckets()
+        for b in resp.get("Buckets", []):
+            if b["Name"].startswith("microvm-sandbox-artifacts-"):
+                _artifacts_bucket = b["Name"]
+                return _artifacts_bucket
+    except Exception:
+        pass
+    return None
+
 # Track active MicroVMs launched by this proxy
 _active_microvms: dict[str, dict] = {}  # id -> {"endpoint": str, "launched_at": float}
 
 # Cost tracker instance (persists across page refreshes, resets on proxy restart)
 from proxy.cost_tracker import CostTracker
+from proxy.ai_utils import build_ai_system_prompt, extract_code
 _cost_tracker = CostTracker()
 
 # AWS client (uses default credentials from environment/profile)
@@ -335,7 +356,7 @@ async def list_instances():
         return {"instances": instances, "total_cost": _cost_tracker.get_total_cost()}
     except Exception as e:
         logger.error(f"Failed to list instances: {e}")
-        return {"instances": _active_microvms}
+        return {"instances": _active_microvms, "total_cost": _cost_tracker.get_total_cost()}
 
 
 @app.post("/resume/{microvm_id}")
@@ -401,7 +422,7 @@ async def list_image_tiers():
                 suffix = name.replace(f"{image_base}-", "")
                 if suffix.isdigit():
                     mem = int(suffix)
-                    vcpu = max(1, mem // 2048)
+                    vcpu = mem / 2048
                     tiers.append({
                         "memory_mib": mem,
                         "memory_gb": mem / 1024,
@@ -459,14 +480,7 @@ async def list_sessions():
     """List available session checkpoints from S3."""
     try:
         s3 = boto3.client("s3", region_name=AWS_REGION)
-
-        # Find artifacts bucket
-        bucket_name = None
-        resp = s3.list_buckets()
-        for b in resp.get("Buckets", []):
-            if b["Name"].startswith("microvm-sandbox-artifacts-"):
-                bucket_name = b["Name"]
-                break
+        bucket_name = _get_artifacts_bucket()
 
         if not bucket_name:
             return {"sessions": []}
@@ -510,13 +524,7 @@ async def delete_session(session_id: str):
     try:
         s3 = boto3.client("s3", region_name=AWS_REGION)
 
-        bucket_name = None
-        resp = s3.list_buckets()
-        for b in resp.get("Buckets", []):
-            if b["Name"].startswith("microvm-sandbox-artifacts-"):
-                bucket_name = b["Name"]
-                break
-
+        bucket_name = _get_artifacts_bucket()
         if not bucket_name:
             return {"error": "Bucket not found"}
 
@@ -540,6 +548,7 @@ async def delete_session(session_id: str):
 # ============================================================
 
 ATHENA_DB = os.environ.get("ATHENA_DB", "microvm_demo_db")
+ATHENA_WORKGROUP = os.environ.get("ATHENA_WORKGROUP", "microvm-demo")
 
 
 @app.get("/datasources")
@@ -553,16 +562,11 @@ async def list_datasources():
     s3_files = []
     dynamodb_tables = []
     athena_tables = []
+    bucket_name = None
 
     try:
         s3 = boto3.client("s3", region_name=AWS_REGION)
-        # Find the artifacts bucket
-        bucket_name = None
-        resp = s3.list_buckets()
-        for b in resp.get("Buckets", []):
-            if b["Name"].startswith("microvm-sandbox-artifacts-"):
-                bucket_name = b["Name"]
-                break
+        bucket_name = _get_artifacts_bucket()
 
         if bucket_name:
             # List objects in samples/ prefix (only flat files, skip per-table subfolders)
@@ -630,6 +634,7 @@ async def list_datasources():
         "dynamodb": dynamodb_tables,
         "athena": athena_tables,
         "artifact_bucket": bucket_name,
+        "athena_workgroup": ATHENA_WORKGROUP,
     }
 
 
@@ -644,9 +649,26 @@ _bedrock_client = None
 
 
 def get_bedrock_client():
+    """
+    Get a Bedrock Runtime client with retry and timeout configuration.
+    Uses boto3's built-in exponential backoff with jitter for transient errors.
+    """
     global _bedrock_client
     if _bedrock_client is None:
-        _bedrock_client = boto3.client("bedrock-runtime", region_name=AI_REGION)
+        from botocore.config import Config
+        bedrock_config = Config(
+            retries={
+                'max_attempts': 5,
+                'mode': 'standard',  # exponential backoff with jitter for 429/5xx
+            },
+            read_timeout=120,       # 2 min read timeout for large model responses
+            connect_timeout=10,     # 10s connection timeout
+        )
+        _bedrock_client = boto3.client(
+            "bedrock-runtime",
+            region_name=AI_REGION,
+            config=bedrock_config,
+        )
     return _bedrock_client
 
 
@@ -701,7 +723,7 @@ async def ai_generate_code(request: Request):
     logger.info(f"  variables: {variables}")
     logger.info(f"---")
 
-    system_prompt = _build_ai_system_prompt(notebook_context, cell_index, variables, current_cell_code)
+    system_prompt = build_ai_system_prompt(notebook_context, cell_index, variables, current_cell_code)
 
     try:
         client = get_bedrock_client()
@@ -727,7 +749,7 @@ async def ai_generate_code(request: Request):
             if "text" in block:
                 generated_text += block["text"]
 
-        code = _extract_code(generated_text)
+        code = extract_code(generated_text)
 
         logger.info(f"AI generated code (model={AI_MODEL_ID}, prompt_len={len(prompt)}, code_len={len(code)})")
 
@@ -746,100 +768,3 @@ async def ai_generate_code(request: Request):
         )
 
 
-def _build_ai_system_prompt(notebook_context, cell_index, variables, current_cell_code=""):
-    lines = []
-    lines.append("You are a Python code generation assistant embedded in a data science notebook.")
-    lines.append("Generate ONLY executable Python code. No explanations, no markdown fences, no comments unless they clarify complex logic.")
-    lines.append("The code will be inserted directly into a notebook cell and executed.")
-    lines.append("")
-    lines.append("RULES:")
-    lines.append("- Output raw Python code only (no ```python fences)")
-    lines.append("- Use variables and imports from prior cells (they persist)")
-    lines.append("- For DataFrames, end with the expression (e.g. df.head()) so it renders as a table")
-    lines.append("- For plots, use matplotlib (plt.plot/plt.show) - they render inline")
-    lines.append("- For plots, ALWAYS use a dark style: plt.style.use('dark_background') at the top, or set facecolor='#1a1a2e' on the figure and use color='white' for titles, labels, and tick text")
-    lines.append("- Keep code concise and idiomatic")
-    lines.append("")
-
-    if current_cell_code.strip():
-        lines.append("IMPORTANT: This cell already contains code. The user wants to MODIFY the existing code based on their request.")
-        lines.append("Return the complete updated code for this cell (not just the changes).")
-        lines.append("")
-        lines.append("CURRENT CELL CODE:")
-        lines.append("```")
-        lines.append(current_cell_code.strip())
-        lines.append("```")
-        lines.append("")
-
-    if variables:
-        lines.append(f"AVAILABLE VARIABLES: {', '.join(variables)}")
-        lines.append("")
-
-    if notebook_context:
-        lines.append("NOTEBOOK CELLS ABOVE (executed in order):")
-        lines.append("---")
-        for cell in notebook_context:
-            idx = cell.get("index", "?")
-            code = cell.get("code", "").strip()
-            output = cell.get("output", "").strip()
-            html = cell.get("html", "").strip()
-            if code:
-                lines.append(f"Cell [{idx + 1}]:")
-                lines.append(code)
-                if output:
-                    lines.append(f"# Output: {output[:300]}")
-                if html:
-                    # Extract a text representation from HTML table for context
-                    table_text = _extract_table_text(html)
-                    if table_text:
-                        lines.append(f"# DataFrame output (columns and sample rows):")
-                        lines.append(f"# {table_text}")
-                lines.append("")
-        lines.append("---")
-        lines.append("")
-
-    lines.append(f"Generate code for Cell [{cell_index + 1}] based on the user's request.")
-    return "\n".join(lines)
-
-
-def _extract_code(text):
-    text = text.strip()
-    if "```python" in text:
-        parts = text.split("```python")
-        if len(parts) > 1:
-            return parts[1].split("```")[0].strip()
-    if text.startswith("```") and text.endswith("```"):
-        lines = text.split("\n")
-        return "\n".join(lines[1:-1]).strip()
-    return text
-
-
-def _extract_table_text(html):
-    """Extract column names and first few rows from an HTML table for AI context."""
-    import re
-    try:
-        # Extract header cells
-        headers = re.findall(r'<th[^>]*>(.*?)</th>', html, re.DOTALL)
-        if not headers:
-            return ""
-        # Clean HTML tags from headers
-        headers = [re.sub(r'<[^>]+>', '', h).strip() for h in headers]
-
-        # Extract first few data rows
-        rows = re.findall(r'<tr[^>]*>(.*?)</tr>', html, re.DOTALL)
-        data_rows = []
-        for row in rows[:4]:  # First 3-4 data rows
-            cells = re.findall(r'<td[^>]*>(.*?)</td>', row, re.DOTALL)
-            if cells:
-                cells = [re.sub(r'<[^>]+>', '', c).strip() for c in cells]
-                data_rows.append(cells)
-
-        # Build text summary
-        result = f"Columns: {headers}"
-        if data_rows:
-            result += f"\nFirst rows: {data_rows[:3]}"
-
-        # Limit to 500 chars
-        return result[:500]
-    except Exception:
-        return ""

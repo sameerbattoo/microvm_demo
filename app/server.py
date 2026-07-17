@@ -17,6 +17,7 @@ interactions without losing context.
 import logging
 import base64
 import os
+import asyncio
 from datetime import datetime, timezone
 
 from fastapi import FastAPI, Request
@@ -257,7 +258,7 @@ async def execute_code(request: Request):
         )
 
     logger.info(f"▶ Executing code (len={len(code)})")
-    result = executor.execute(code)
+    result = await asyncio.to_thread(executor.execute, code)
 
     return {
         "success": result.success,

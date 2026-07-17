@@ -185,7 +185,7 @@ export default function InstancesPanel({ onClose, onAttach, onTerminateAndSave, 
                   <span className="inst-id-text">{attachedTab?.sessionId ? attachedTab.sessionId.slice(-12) : '—'}</span>
                   <span className="inst-spec-text">
                     {inst.memory_mib
-                      ? `${inst.memory_mib / 1024} GB · ${Math.max(1, inst.memory_mib / 2048)} vCPU`
+                      ? `${inst.memory_mib / 1024} GB · ${inst.memory_mib / 2048} vCPU`
                       : '4 GB · 2 vCPU'}
                   </span>
                   <span>{getStatusBadge(id, state)}</span>

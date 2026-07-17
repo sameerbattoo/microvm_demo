@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from 'react'
+import { useState, useCallback, useEffect, useRef } from 'react'
 import Notebook from './components/Notebook'
 import Sidebar from './components/Sidebar'
 import InstancesPanel from './components/InstancesPanel'
@@ -55,9 +55,12 @@ export default function App() {
   const [instances, setInstances] = useState({})
   const [uploadedFiles, setUploadedFiles] = useState([])
   const [pollIntervalMs, setPollIntervalMs] = useState(10000)
+  const saveTimerRef = useRef(null)
 
-  // Persist tabs to localStorage (strip large binary data, keep cell code + text output)
+  // Persist tabs to localStorage (debounced 1.5s to avoid thrashing during typing)
   useEffect(() => {
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
+    saveTimerRef.current = setTimeout(() => {
     const toSave = tabs.map(({ _loadedCells, ...tab }) => {
       // Persist cells with code and text outputs, but strip base64 images
       const cells = (tab._cells || []).map(c => ({
@@ -87,6 +90,8 @@ export default function App() {
         localStorage.setItem('microvm-notebooks', JSON.stringify(minimal))
       } catch {}
     }
+    }, 1500)
+    return () => { if (saveTimerRef.current) clearTimeout(saveTimerRef.current) }
   }, [tabs])
 
   useEffect(() => {
@@ -508,18 +513,6 @@ export default function App() {
 
   return (
     <div className="app">
-      <header className="app-header">
-        <div className="app-brand">
-          <span className="brand-icon"><IconZap width={18} height={18} /></span>
-          <span className="brand-text">MicroVM Notebook</span>
-          <span className="brand-sub">Python · Lambda MicroVMs</span>
-        </div>
-        <div className="app-header-actions">
-          <button className="theme-toggle-btn" onClick={toggleTheme} title={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}>
-            {theme === 'dark' ? <IconSun width={16} height={16} /> : <IconMoon width={16} height={16} />}
-          </button>
-        </div>
-      </header>
       <div className="app-body">
         <Sidebar
           tabs={tabs}
@@ -545,6 +538,9 @@ export default function App() {
         <main className="app-main">
           {tabs.length === 0 && (
             <div className="app-empty">
+              <button className="app-empty-theme-btn" onClick={toggleTheme} title={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}>
+                {theme === 'dark' ? <IconSun width={16} height={16} /> : <IconMoon width={16} height={16} />}
+              </button>
               <div className="app-empty-icon">
                 <svg width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
                   <rect x="4" y="4" width="16" height="16" rx="2" />
@@ -587,6 +583,8 @@ export default function App() {
               tab={tab}
               onUpdateTab={(updates) => updateTab(tab.id, updates)}
               attachedIds={attachedIds}
+              theme={theme}
+              onToggleTheme={toggleTheme}
             />
           ))}
         </main>
