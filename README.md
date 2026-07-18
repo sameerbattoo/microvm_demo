@@ -124,22 +124,13 @@ aws --version
 
 ## 2. Quick Start
 
-### 2.1 Local Dev
-
-```bash
-./dev_run.sh
-```
-
-Starts the sandbox backend (`:8080`) and notebook UI (`:5173`).
-Click **"Local Dev"** to connect. No AWS account needed.
-
-### 2.2 AWS MicroVM Mode
+> **Important:** Make sure you've completed the [Prerequisites](#1-prerequisites) section before running this command.
 
 ```bash
 ./aws_microvm_run.sh
 ```
 
-Fully self-contained. On first run it:
+This single command runs the entire demo end-to-end. It is fully self-contained — no manual setup steps required. On first run it:
 1. Creates S3 bucket, IAM roles (if missing)
 2. Provisions sample data (DynamoDB, S3, Athena)
 3. Builds MicroVM images in parallel (~4-5 min)
@@ -148,7 +139,7 @@ Fully self-contained. On first run it:
 
 Subsequent runs skip the build and launch in seconds.
 
-### 2.3 Teardown
+### Teardown
 
 ```bash
 bash scripts/teardown.sh
