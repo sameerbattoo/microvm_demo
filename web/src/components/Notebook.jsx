@@ -76,6 +76,7 @@ export default function Notebook({ tab, onUpdateTab, attachedIds = [], theme, on
   const searchInputRef = useRef(null)
   const draggedCellRef = useRef(null)
   const executionQueue = useRef([])
+  const tagSuggestedRef = useRef(false)
   const bottomRef = useRef(null)
 
   // Cmd+F to open search
@@ -335,8 +336,30 @@ export default function Notebook({ tab, onUpdateTab, attachedIds = [], theme, on
       setIsExecuting(false)
       // Refresh variable explorer after execution
       fetchVariables()
+      // Auto-tag: suggest a tag if enough cells have been executed and tag is still 'Drafts'
+      if ((!tab.tag || tab.tag === 'Drafts') && !tagSuggestedRef.current) {
+        tagSuggestedRef.current = true  // prevent re-fire during this attempt
+        // Use a microtask to let state flush before checking outputs
+        setTimeout(() => {
+          const currentCells = prevCellsRef.current || []
+          const executedCount = currentCells.filter(c => c.output || c.html || c.image || c.error).length
+          if (executedCount >= 2) {
+            const cellData = currentCells.slice(0, 4).map(c => ({ type: c.type || 'code', code: (c.code || '').slice(0, 200) }))
+            fetch(`${PROXY_URL}/ai/suggest-tag`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ name: tab.name, description: tab.description || '', cells: cellData }),
+            })
+              .then(r => r.json())
+              .then(data => { if (data.tag && data.tag !== 'Drafts') { onUpdateTab({ tag: data.tag }) } else { tagSuggestedRef.current = false } })
+              .catch(() => { tagSuggestedRef.current = false })
+          } else {
+            tagSuggestedRef.current = false
+          }
+        }, 100)
+      }
     }
-  }, [tab.microvmEndpoint, tab.microvmId, tab.microvmRealEndpoint, tab.status, isExecuting])
+  }, [tab.microvmEndpoint, tab.microvmId, tab.microvmRealEndpoint, tab.status, tab.tag, tab.name, tab.description, isExecuting])
 
   const executeAllCells = useCallback(async () => {
     if (!tab.microvmEndpoint || tab.status !== 'connected') return
@@ -653,10 +676,11 @@ export default function Notebook({ tab, onUpdateTab, attachedIds = [], theme, on
             {theme === 'dark' ? <IconSun width={14} height={14} /> : <IconMoon width={14} height={14} />}
           </button>
         </div>
-        <div className="notebook-identity">
-          <span className="notebook-name-pill"><IconNotebook width={13} height={13} /> {tab.name}</span>
-          {tab.description && <span className="notebook-description">{tab.description}</span>}
-        </div>
+        {tab.description && (
+          <div className="notebook-identity">
+            <span className="notebook-description">{tab.description}</span>
+          </div>
+        )}
         </>
       )}
 

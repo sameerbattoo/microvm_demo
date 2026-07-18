@@ -792,3 +792,57 @@ async def ai_generate_code(request: Request):
         )
 
 
+@app.post("/ai/suggest-tag")
+async def ai_suggest_tag(request: Request):
+    """
+    Suggest a short tag/category for a notebook based on its first few cells.
+    Returns a 1-2 word category tag (e.g. "Analytics", "ML Training", "Data Cleaning").
+    """
+    body = await request.json()
+    notebook_name = body.get("name", "")
+    description = body.get("description", "")
+    cells = body.get("cells", [])
+
+    if not cells:
+        return {"tag": "Drafts"}
+
+    # Build a compact summary of the notebook content
+    cell_summaries = []
+    for i, cell in enumerate(cells[:4]):  # Max 4 cells
+        code = (cell.get("code", "") or "")[:200]
+        cell_type = cell.get("type", "code")
+        cell_summaries.append(f"[{cell_type}] {code}")
+
+    context = "\n".join(cell_summaries)
+
+    desc_line = f'\nDescription: "{description}"' if description else ""
+
+    prompt = f"""Given this notebook titled "{notebook_name}"{desc_line} with these cells:
+{context}
+
+Respond with ONLY a single short category tag (1-2 words) for this notebook.
+Examples: Analytics, ML Training, Data Cleaning, API Integration, Visualization, ETL, Exploration, Finance, Statistics, Web Scraping, NLP, Time Series, Geospatial.
+Tag:"""
+
+    try:
+        client = get_bedrock_client()
+        response = client.converse(
+            modelId=AI_MODEL_ID,
+            messages=[{"role": "user", "content": [{"text": prompt}]}],
+            inferenceConfig={"maxTokens": 10, "temperature": 0.0},
+        )
+
+        output = response["output"]["message"]["content"][0]["text"].strip()
+        # Clean up — take first 2 words max, strip punctuation
+        tag = " ".join(output.split()[:2]).strip(".,;:!\"'")
+        if not tag or len(tag) > 25:
+            tag = "Exploration"
+
+        logger.info(f"AI suggested tag: '{tag}' for notebook '{notebook_name}'")
+        return {"tag": tag}
+
+    except Exception as e:
+        logger.warning(f"AI tag suggestion failed: {e}")
+        return {"tag": "Exploration"}
+
+

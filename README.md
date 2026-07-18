@@ -191,7 +191,7 @@ A unified collapsible sidebar with VS Code-style icon activity bar:
 
 | Panel | Description |
 |-------|-------------|
-| **Notebooks** | Open tabs with connection status dots |
+| **Notebooks** | Open tabs grouped by tag, with connection status dots and AI auto-tagging |
 | **Outline** | Searchable cell list with drag-to-reorder, execution status (✓/✗/●), click to scroll |
 | **Data Sources** | S3 files, DynamoDB tables, Athena tables, Public APIs (8 no-auth sources) — click to insert ready-to-run code |
 | **Variables** | Live variable explorer with smart previews (DataFrames as tables, dicts as key-value, colors as swatches) |
@@ -202,6 +202,13 @@ A unified collapsible sidebar with VS Code-style icon activity bar:
 - **Resizable** — drag right edge (180px–480px), width persists in localStorage
 - **Collapsible** — click active icon to collapse to just the 44px icon strip
 - **Public APIs** include: World Bank, World Countries, CoinGecko, Open-Meteo, USGS Earthquakes, NASA APOD, Open Library, Public Holidays
+- **Notebook Tags** — organize notebooks into collapsible groups:
+  - New notebooks default to "Drafts"
+  - Sample notebooks auto-tagged as "Samples"
+  - **AI auto-tagging** — after 2 cell executions, the LLM suggests a tag (e.g. "Analytics", "Visualization", "ML Training") based on notebook name, description, and cell content
+  - Manual tag edit — click `#` on any notebook to rename its tag
+  - Auto-tag button on the Drafts folder to bulk-tag all draft notebooks via AI
+  - Notebook scope pill shown at the top of Outline, Variables, Packages, and Data Sources panels
 
 ### 3.4 MicroVM Management
 - Launch new MicroVMs from the connection panel (5 memory tiers: 512MB–8GB)

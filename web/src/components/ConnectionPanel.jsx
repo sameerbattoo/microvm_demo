@@ -9,7 +9,7 @@ export default function ConnectionPanel({ tab, onConnect, onUpdateTab, onDismiss
   const [availableInstances, setAvailableInstances] = useState([])
   const [loadingInstances, setLoadingInstances] = useState(false)
   const [launchMemory, setLaunchMemory] = useState(String(tab.microvmMemory || '2048'))
-  const [launchIdleTimeout, setLaunchIdleTimeout] = useState(String(tab.idleTimeoutSeconds || '1800'))
+  const [launchIdleTimeout, setLaunchIdleTimeout] = useState(String(tab.idleTimeoutSeconds || '60'))
   const [launchMaxDuration, setLaunchMaxDuration] = useState(String(tab.maxDurationSeconds || '28800'))
   const [checkpointEnabled, setCheckpointEnabled] = useState(tab.checkpointEnabled ?? true)
   const [imageTiers, setImageTiers] = useState([])

@@ -8,13 +8,14 @@ import './App.css'
 
 let nextTabId = parseInt(localStorage.getItem('microvm-next-tab-id') || '1')
 
-function createTab(name, description) {
+function createTab(name, description, tag) {
   const id = nextTabId++
   localStorage.setItem('microvm-next-tab-id', String(nextTabId))
   return {
     id,
     name: name || `Notebook ${id}`,
     description: description || '',
+    tag: tag || 'Drafts',
     microvmEndpoint: null,
     microvmRealEndpoint: null,
     microvmId: null,
@@ -480,7 +481,7 @@ export default function App() {
       const resp = await fetch(sampleUrl)
       const notebook = await resp.json()
 
-      const tab = createTab(sampleName || notebook.name, notebook.description || '')
+      const tab = createTab(sampleName || notebook.name, notebook.description || '', 'Samples')
       tab._loadedCells = notebook.cells
       setTabs(prev => [...prev, { ...tab }])
       setActiveTabId(tab.id)
@@ -532,6 +533,7 @@ export default function App() {
           onAttachInstance={attachInstance}
           onTerminateAndSave={terminateAndSave}
           onSuspendInstance={suspendInstance}
+          onUpdateTabTag={(tabId, tag) => updateTab(tabId, { tag })}
           onScrollToCell={(idx) => {
             const activeCells = tabs.find(t => t.id === activeTabId)?._cells || []
             const cell = activeCells[idx]
