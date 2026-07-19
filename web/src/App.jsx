@@ -54,7 +54,6 @@ export default function App() {
     return null
   })
   const [instances, setInstances] = useState({})
-  const [uploadedFiles, setUploadedFiles] = useState([])
   const [pollIntervalMs, setPollIntervalMs] = useState(10000)
   const saveTimerRef = useRef(null)
 
@@ -134,11 +133,10 @@ export default function App() {
     }
   }, [])
 
-  // Fetch files from the active MicroVM
+  // Fetch files from the active MicroVM (stored per-tab to avoid cross-VM contamination)
   const fetchFiles = useCallback(async () => {
     const activeTab = tabs.find(t => t.id === activeTabId)
     if (!activeTab || activeTab.status !== 'connected') {
-      setUploadedFiles([])
       return
     }
 
@@ -154,12 +152,14 @@ export default function App() {
       const resp = await fetch(`${activeTab.microvmEndpoint}/files`, { headers })
       if (resp.ok) {
         const data = await resp.json()
-        setUploadedFiles((data.files || []).map(f => ({
+        const files = (data.files || []).map(f => ({
           name: f.name,
           size: f.size,
           variable: f.name.replace(/\.[^.]+$/, '').replace(/[-\s.]/g, '_'),
           status: 'ready',
-        })))
+        }))
+        // Store files on the tab object so each VM has its own file list
+        setTabs(prev => prev.map(t => t.id === activeTabId ? { ...t, _localFiles: files } : t))
       }
     } catch {
       // Ignore — might not be connected yet
@@ -400,7 +400,10 @@ export default function App() {
       : `${(file.size / (1024 * 1024)).toFixed(1)} MB`
 
     // Add to list immediately (uploading state)
-    setUploadedFiles(prev => [...prev, { name: file.name, size, variable: null, status: 'uploading' }])
+    setTabs(prev => prev.map(t => t.id === activeTabId
+      ? { ...t, _localFiles: [...(t._localFiles || []), { name: file.name, size, variable: null, status: 'uploading' }] }
+      : t
+    ))
 
     // Read as base64
     const reader = new FileReader()
@@ -423,14 +426,20 @@ export default function App() {
         })
         const result = await response.json()
 
-        setUploadedFiles(prev => prev.map(f =>
-          f.name === file.name
-            ? { ...f, variable: result.variable_name || null, status: result.success ? 'ready' : 'error' }
-            : f
+        setTabs(prev => prev.map(t => t.id === activeTabId
+          ? { ...t, _localFiles: (t._localFiles || []).map(f =>
+              f.name === file.name
+                ? { ...f, variable: result.variable_name || null, status: result.success ? 'ready' : 'error' }
+                : f
+            ) }
+          : t
         ))
       } catch {
-        setUploadedFiles(prev => prev.map(f =>
-          f.name === file.name ? { ...f, status: 'error', variable: 'failed' } : f
+        setTabs(prev => prev.map(t => t.id === activeTabId
+          ? { ...t, _localFiles: (t._localFiles || []).map(f =>
+              f.name === file.name ? { ...f, status: 'error', variable: 'failed' } : f
+            ) }
+          : t
         ))
       }
     }
@@ -438,8 +447,11 @@ export default function App() {
   }, [tabs, activeTabId])
 
   const deleteFile = useCallback((filename) => {
-    setUploadedFiles(prev => prev.filter(f => f.name !== filename))
-  }, [])
+    setTabs(prev => prev.map(t => t.id === activeTabId
+      ? { ...t, _localFiles: (t._localFiles || []).filter(f => f.name !== filename) }
+      : t
+    ))
+  }, [activeTabId])
 
   const uploadSampleData = useCallback(async (filename) => {
     const activeTab = tabs.find(t => t.id === activeTabId)
@@ -458,7 +470,10 @@ export default function App() {
         ? `${(text.length / 1024).toFixed(1)} KB`
         : `${(text.length / (1024 * 1024)).toFixed(1)} MB`
 
-      setUploadedFiles(prev => [...prev, { name: filename, size, variable: null, status: 'uploading' }])
+      setTabs(prev => prev.map(t => t.id === activeTabId
+        ? { ...t, _localFiles: [...(t._localFiles || []), { name: filename, size, variable: null, status: 'uploading' }] }
+        : t
+      ))
 
       const headers = { 'Content-Type': 'application/json' }
       if (activeTab.microvmId) {
@@ -475,14 +490,20 @@ export default function App() {
       })
       const result = await uploadResp.json()
 
-      setUploadedFiles(prev => prev.map(f =>
-        f.name === filename
-          ? { ...f, variable: result.variable_name || null, status: result.success ? 'ready' : 'error' }
-          : f
+      setTabs(prev => prev.map(t => t.id === activeTabId
+        ? { ...t, _localFiles: (t._localFiles || []).map(f =>
+            f.name === filename
+              ? { ...f, variable: result.variable_name || null, status: result.success ? 'ready' : 'error' }
+              : f
+          ) }
+        : t
       ))
     } catch (err) {
-      setUploadedFiles(prev => prev.map(f =>
-        f.name === filename ? { ...f, status: 'error', variable: 'failed' } : f
+      setTabs(prev => prev.map(t => t.id === activeTabId
+        ? { ...t, _localFiles: (t._localFiles || []).map(f =>
+            f.name === filename ? { ...f, status: 'error', variable: 'failed' } : f
+          ) }
+        : t
       ))
     }
   }, [tabs, activeTabId])
@@ -529,7 +550,7 @@ export default function App() {
           tabs={tabs}
           activeTabId={activeTabId}
           attachedIds={attachedIds}
-          uploadedFiles={uploadedFiles}
+          uploadedFiles={tabs.find(t => t.id === activeTabId)?._localFiles || []}
           onSelectTab={setActiveTabId}
           onNewNotebook={addTab}
           onCloseTab={closeTab}
@@ -623,7 +644,7 @@ export default function App() {
         {showAiChat && (
           <AiChatPanel
             activeTab={tabs.find(t => t.id === activeTabId) || null}
-            uploadedFiles={uploadedFiles}
+            uploadedFiles={tabs.find(t => t.id === activeTabId)?._localFiles || []}
             onClose={() => setShowAiChat(false)}
             onUpdateMessages={(msgs) => updateTab(activeTabId, { _chatMessages: msgs })}
             onUpdateCell={(code) => {

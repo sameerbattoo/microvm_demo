@@ -221,6 +221,12 @@ export default function Sidebar({
     }
   }, [pkgFetched, activeTab?.microvmEndpoint, activeTab?.status])
 
+  // Reset package state when switching tabs (different VM = different packages)
+  useEffect(() => {
+    setPackages([])
+    setPkgFetched(false)
+  }, [activeTabId])
+
   const fetchPackages = useCallback(async () => {
     if (!activeTab?.microvmEndpoint || activeTab?.status !== 'connected') return
     setPkgLoading(true)
