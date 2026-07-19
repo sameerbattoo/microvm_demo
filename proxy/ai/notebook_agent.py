@@ -64,23 +64,48 @@ def _get_direct_client():
 AGENT_TOOLS = [execute_code, get_variables, get_notebook_state, install_package, get_available_data_sources]
 
 
-def get_or_create_agent(session_id: str) -> Agent:
+def get_or_create_agent(session_id: str, context: dict = None) -> Agent:
     """
     Get an existing agent for this session or create a new one.
     Uses SlidingWindowConversationManager to limit context to last 10 messages (5 turns).
     """
+    from datetime import datetime, timezone
+    import os
+
     agent = get_session(session_id)
     if agent is None:
+        # Inject dynamic context into the system prompt
+        now = datetime.now(timezone.utc)
+        aws_region = os.environ.get("AWS_REGION", "us-west-2")
+
+        # Memory tier from context (if available)
+        memory_tier = "Unknown"
+        if context and context.get("memory_mib"):
+            mem_mib = int(context["memory_mib"])
+            memory_tier = f"{mem_mib} MB ({mem_mib / 1024:.1f} GB / {mem_mib / 2048:.1f} vCPU)"
+        elif context and context.get("microvm_id"):
+            # Try to infer from image name suffix (e.g. agent-sandbox-4096)
+            mid = context.get("microvm_id", "")
+            for size in ["512", "1024", "2048", "4096", "8192"]:
+                if size in mid:
+                    memory_tier = f"{size} MB ({int(size) / 1024:.1f} GB / {int(size) / 2048:.1f} vCPU)"
+                    break
+
+        system_prompt = NOTEBOOK_AGENT_PROMPT.format(
+            current_time=now.strftime("%Y-%m-%d %H:%M UTC (%A)"),
+            aws_region=aws_region,
+            memory_tier=memory_tier,
+        )
         agent = Agent(
             model=get_model(),
-            system_prompt=NOTEBOOK_AGENT_PROMPT,
+            system_prompt=system_prompt,
             tools=AGENT_TOOLS,
             conversation_manager=SlidingWindowConversationManager(window_size=AGENT_CONVERSATION_WINDOW_SIZE),
             callback_handler=None,
             trace_attributes={"session.id": session_id},
         )
         save_session(session_id, agent)
-        logger.info(f"Created new agent session: {session_id}")
+        logger.info(f"Created new agent session: {session_id} (region={aws_region}, memory={memory_tier})")
     return agent
 
 
@@ -99,7 +124,7 @@ def chat(session_id: str, message: str, context: dict) -> str:
     # Set execution context so tools can reach the MicroVM
     set_execution_context(context)
 
-    agent = get_or_create_agent(session_id)
+    agent = get_or_create_agent(session_id, context)
     result = agent(message)
 
     # Extract text response
@@ -123,7 +148,7 @@ async def chat_stream(session_id: str, message: str, context: dict):
     # Set execution context so tools can reach the MicroVM
     set_execution_context(context)
 
-    agent = get_or_create_agent(session_id)
+    agent = get_or_create_agent(session_id, context)
 
     async for event in agent.stream_async(message):
         if "data" in event:

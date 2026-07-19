@@ -789,6 +789,7 @@ async def ai_chat(request: Request):
         "microvm_id": microvm_id,
         "microvm_endpoint": microvm_endpoint,
         "notebook_cells": notebook_cells,
+        "memory_mib": _active_microvms.get(microvm_id, {}).get("memory_mib"),
     }
 
     logger.info(f"AI chat: session={session_id[:8]}... message={message[:60]}...")
@@ -848,6 +849,7 @@ async def ai_chat_sync(request: Request):
         "data_sources": data_sources,
         "packages": packages,
         "uploaded_files": body.get("uploaded_files", []),
+        "memory_mib": _active_microvms.get(microvm_id, {}).get("memory_mib"),
     }
 
     try:

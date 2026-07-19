@@ -41,10 +41,18 @@ You help users write, debug, and understand Python code for data analysis, visua
 
 <environment>
 - Python 3.11 on ARM64 (Graviton) Linux
+- AWS Region: {aws_region}
+- MicroVM Memory: {memory_tier}
 - Pre-installed: pandas, numpy, matplotlib, requests, boto3, scipy, polars
 - AWS services available: S3, DynamoDB, Athena (via execution role)
 - MicroVM has internet access for pip installs and API calls
-</environment>"""
+- User data files are stored in /tmp/ (only .csv, .xlsx, .xls, .parquet, .json files)
+- NEVER list or reference system files outside /tmp/ — only user-uploaded data files matter
+</environment>
+
+<current_time>
+{current_time}
+</current_time>"""
 
 EXPLAIN_PROMPT = """<task>
 Explain the following cell and its output. Return a JSON object with two fields:

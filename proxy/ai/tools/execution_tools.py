@@ -43,6 +43,10 @@ def execute_code(code: str) -> str:
     Execute Python code on the connected MicroVM and return the result.
     Use this to test code, verify fixes, or check data before suggesting changes to the user.
 
+    IMPORTANT: When the user asks about files, ONLY look in /tmp/ for data files
+    (.csv, .xlsx, .xls, .parquet, .json). Do NOT run 'ls /' or list system directories.
+    Use: import glob; glob.glob('/tmp/*.csv') + glob.glob('/tmp/*.json') + glob.glob('/tmp/*.parquet')
+
     Args:
         code: Python code to execute.
 
@@ -192,11 +196,12 @@ def install_package(package_name: str) -> str:
 @tool
 def get_available_data_sources() -> str:
     """
-    Get the list of available data sources (S3 files, DynamoDB tables, Athena tables).
+    Get the list of available data sources (S3 files, DynamoDB tables, Athena tables, local files).
     Use this to understand what data the user can access from this notebook.
+    ONLY reports user data files in /tmp/ — never system files.
 
     Returns:
-        Formatted list of available data sources.
+        Formatted list of available data sources with schema info where available.
     """
     data_sources = _context.get("data_sources")
     uploaded_files = _context.get("uploaded_files", [])
@@ -207,9 +212,16 @@ def get_available_data_sources() -> str:
     lines = []
 
     if uploaded_files:
-        lines.append("Local Files (in VM /tmp/):")
+        lines.append("Local Data Files (in /tmp/ on this VM):")
         for f in uploaded_files:
-            lines.append(f"  - {f.get('path', '/tmp/' + f.get('name', ''))} ({f.get('size', '')})")
+            name = f.get('name', '')
+            size = f.get('size', '')
+            schema = f.get('schema', '')
+            line = f"  - /tmp/{name} ({size})"
+            if schema:
+                line += f"\n    Columns: {schema}"
+            lines.append(line)
+        lines.append("")
 
     if data_sources:
         s3 = data_sources.get("s3", [])
@@ -219,16 +231,21 @@ def get_available_data_sources() -> str:
         if s3:
             lines.append("S3 Files:")
             for f in s3:
-                lines.append(f"  - {f.get('key', '')} ({f.get('size', '')})")
+                lines.append(f"  - s3://{f.get('bucket', '')}/{f.get('key', '')} ({f.get('size', '')})")
+            lines.append("")
 
         if dynamo:
             lines.append("DynamoDB Tables:")
             for t in dynamo:
                 lines.append(f"  - {t.get('name', '')} ({t.get('item_count', 0)} items)")
+            lines.append("")
 
         if athena:
-            lines.append("Athena Tables:")
+            lines.append("Athena Tables (query via boto3 or awswrangler):")
             for t in athena:
-                lines.append(f"  - {t.get('database', '')}.{t.get('name', '')} ({t.get('column_count', 0)} cols)")
+                cols = t.get('columns', [])
+                col_info = f" — columns: {', '.join(cols[:10])}" if cols else ""
+                lines.append(f"  - {t.get('database', '')}.{t.get('name', '')} ({t.get('column_count', 0)} cols){col_info}")
+            lines.append("")
 
     return "\n".join(lines) if lines else "No data sources found."
