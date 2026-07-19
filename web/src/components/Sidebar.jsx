@@ -21,6 +21,14 @@ function IconSamples({ width = 16, height = 16 }) {
   )
 }
 
+function IconAI({ width = 16, height = 16 }) {
+  return (
+    <svg width={width} height={height} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M12 2l3 7h7l-5.5 4 2 7L12 16l-6.5 4 2-7L2 9h7z" />
+    </svg>
+  )
+}
+
 const TYPE_ICONS = {
   DataFrame: '📊', Series: '📈', ndarray: '🔢', list: '[ ]', dict: '{ }',
   tuple: '( )', str: 'abc', int: '#', float: '#.', bool: '⊘', NoneType: '∅',
@@ -61,6 +69,7 @@ export default function Sidebar({
   onTerminateAndSave,
   onSuspendInstance,
   onUpdateTabTag,
+  onSyncPackages,
 }) {
   // Activity bar state — which panel is active (null = collapsed)
   const [activePanel, setActivePanel] = useState(() => {
@@ -200,9 +209,9 @@ export default function Sidebar({
     }
   }, [activePanel, dsFetched, fetchDataSources])
 
-  // Lazy-load packages when panel is active
+  // Load packages when connected (runs in background, not tied to panel being active)
   useEffect(() => {
-    if (activePanel === 'packages' && !pkgFetched && activeTab?.microvmEndpoint && activeTab?.status === 'connected') {
+    if (!pkgFetched && activeTab?.microvmEndpoint && activeTab?.status === 'connected') {
       fetchPackages()
     }
     // Clear packages when no active connection
@@ -210,7 +219,7 @@ export default function Sidebar({
       setPackages([])
       setPkgFetched(false)
     }
-  }, [activePanel, pkgFetched, activeTab?.microvmEndpoint, activeTab?.status])
+  }, [pkgFetched, activeTab?.microvmEndpoint, activeTab?.status])
 
   const fetchPackages = useCallback(async () => {
     if (!activeTab?.microvmEndpoint || activeTab?.status !== 'connected') return
@@ -229,7 +238,9 @@ export default function Sidebar({
       if (resp.ok) {
         const data = await resp.json()
         if (data.success && data.output) {
-          setPackages(JSON.parse(data.output.trim()).map(p => ({ name: p.name, version: p.version })))
+          const pkgList = JSON.parse(data.output.trim()).map(p => ({ name: p.name, version: p.version }))
+          setPackages(pkgList)
+          if (onSyncPackages) onSyncPackages(pkgList)
         }
       }
     } catch {}
@@ -398,14 +409,24 @@ export default function Sidebar({
       icon = 'M'
     } else {
       codeCounter++
-      // Code cell — show first meaningful line
-      const firstLine = (cell.code || '').split('\n').find(l => l.trim() && !l.trim().startsWith('#') && !l.trim().startsWith('import')) || 
-                        (cell.code || '').split('\n').find(l => l.trim()) || ''
-      label = firstLine.trim().slice(0, 60) || '(empty)'
+      // Code cell — show the most meaningful line (skip imports and comments)
+      const lines = (cell.code || '').split('\n').filter(l => l.trim())
+      const meaningfulLine = lines.find(l => !l.trim().startsWith('import ') && !l.trim().startsWith('from ') && !l.trim().startsWith('#'))
+      if (meaningfulLine) {
+        label = meaningfulLine.trim().slice(0, 50)
+      } else if (lines.length > 0) {
+        // All imports — show summary
+        const pkgs = lines.filter(l => l.trim().startsWith('import ') || l.trim().startsWith('from '))
+          .map(l => l.replace(/^(import |from )/, '').split(/[\s,.]/)[0])
+          .slice(0, 3)
+        label = `imports: ${pkgs.join(', ')}`
+      } else {
+        label = '(empty)'
+      }
       icon = `${codeCounter}`
     }
 
-    return { id: cell.id, idx, label, icon, cellType, hasOutput: !!(cell.output || cell.html || cell.image), hasError: !!cell.error, isStale: cell.lastExecutedCode != null && cell.code !== cell.lastExecutedCode }
+    return { id: cell.id, idx, label, icon, cellType, hasOutput: !!(cell.output || cell.html || cell.image), hasError: !!cell.error, isStale: cell.lastExecutedCode != null && cell.code !== cell.lastExecutedCode, aiExplanation: cell.aiExplanation || null }
   })
 
   const filteredOutline = outlineSearch
@@ -469,6 +490,7 @@ export default function Sidebar({
                 >
                   <IconPlus width={14} height={14} />
                 </button>
+                <button className="sidebar-panel-close" onClick={() => setActivePanel(null)} title="Close panel"><IconX width={12} height={12} /></button>
               </div>
               <div className="sidebar-panel-body">
                 {tabs.length === 0 && (
@@ -595,6 +617,7 @@ export default function Sidebar({
               <div className="sidebar-panel-header">
                 <span className="sidebar-panel-title">Outline</span>
                 <span className="sidebar-panel-count">{cells.length} cells</span>
+                <button className="sidebar-panel-close" onClick={() => setActivePanel(null)} title="Close panel"><IconX width={12} height={12} /></button>
               </div>
               {activeTab && <div className="sidebar-scope-pill"><IconNotebook width={12} height={12} /> {activeTab.name}</div>}
               <div className="outline-search">
@@ -628,7 +651,7 @@ export default function Sidebar({
                       setOutlineDragOverIdx(null)
                     }}
                     onDragEnd={() => { setOutlineDragIdx(null); setOutlineDragOverIdx(null) }}
-                    title={item.label}
+                    title={item.aiExplanation || item.label}
                   >
                     <span className={`outline-item-icon outline-icon-${item.cellType}`}>
                       {item.cellType === 'markdown' ? 'M' : <>{item.icon}</>}
@@ -654,6 +677,7 @@ export default function Sidebar({
                 <button className="sidebar-panel-action" onClick={handleFileUpload} title="Upload file">
                   <IconUpload width={14} height={14} />
                 </button>
+                <button className="sidebar-panel-close" onClick={() => setActivePanel(null)} title="Close panel"><IconX width={12} height={12} /></button>
               </div>
               {activeTab && <div className="sidebar-scope-pill"><IconNotebook width={12} height={12} /> {activeTab.name}</div>}
               <div className="sidebar-panel-body">
@@ -823,6 +847,7 @@ export default function Sidebar({
             <div className="sidebar-panel-content">
               <div className="sidebar-panel-header">
                 <span className="sidebar-panel-title">Samples</span>
+                <button className="sidebar-panel-close" onClick={() => setActivePanel(null)} title="Close panel"><IconX width={12} height={12} /></button>
               </div>
               <div className="sidebar-panel-body">
                 {samples.map(sample => (
@@ -845,6 +870,7 @@ export default function Sidebar({
               <div className="sidebar-panel-header">
                 <span className="sidebar-panel-title">Variables</span>
                 <span className="sidebar-panel-count">{Object.keys(variables).length}</span>
+                <button className="sidebar-panel-close" onClick={() => setActivePanel(null)} title="Close panel"><IconX width={12} height={12} /></button>
               </div>
               {activeTab && <div className="sidebar-scope-pill"><IconNotebook width={12} height={12} /> {activeTab.name}</div>}
               <div className="sidebar-panel-body">
@@ -903,6 +929,7 @@ export default function Sidebar({
                 <button className="sidebar-panel-action" onClick={() => { setPkgFetched(false); fetchPackages() }} title="Refresh">
                   <IconRefresh width={14} height={14} />
                 </button>
+                <button className="sidebar-panel-close" onClick={() => setActivePanel(null)} title="Close panel"><IconX width={12} height={12} /></button>
               </div>
               {activeTab && <div className="sidebar-scope-pill"><IconNotebook width={12} height={12} /> {activeTab.name}</div>}
               {/* Install input */}
@@ -968,6 +995,7 @@ export default function Sidebar({
                 <button className="sidebar-panel-action" onClick={() => { setVmFetched(false); fetchVmInstances() }} title="Refresh">
                   <IconRefresh width={14} height={14} />
                 </button>
+                <button className="sidebar-panel-close" onClick={() => setActivePanel(null)} title="Close panel"><IconX width={12} height={12} /></button>
               </div>
               <div className="sidebar-panel-body">
                 {/* Total cost summary */}

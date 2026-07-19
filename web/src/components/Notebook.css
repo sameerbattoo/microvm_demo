@@ -10,13 +10,45 @@
 .notebook-toolbar {
   display: flex;
   align-items: center;
-  gap: var(--space-1);
   padding: var(--space-2) var(--space-3);
   background: var(--toolbar-bg);
   border-bottom: 1px solid var(--toolbar-border);
   flex-shrink: 0;
   box-shadow: var(--shadow-sm);
   z-index: 5;
+  min-height: 40px;
+  gap: 0;
+}
+
+.notebook-toolbar::-webkit-scrollbar {
+  display: none;
+}
+
+.toolbar-scrollable {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  flex: 1;
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+  -webkit-mask-image: linear-gradient(to right, black calc(100% - 24px), transparent 100%);
+  mask-image: linear-gradient(to right, black calc(100% - 24px), transparent 100%);
+  padding-right: 24px;
+}
+
+.toolbar-scrollable::-webkit-scrollbar {
+  display: none;
+}
+
+.toolbar-pinned {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  flex-shrink: 0;
+  margin-left: auto;
+  padding-left: var(--space-2);
 }
 
 .toolbar-brand {
@@ -292,6 +324,8 @@
   padding: 4px 10px;
   background: var(--surface-3);
   border-radius: var(--radius-full);
+  flex-shrink: 0;
+  white-space: nowrap;
   border: 1px solid var(--border-subtle);
   cursor: pointer;
   transition: all var(--transition-fast);

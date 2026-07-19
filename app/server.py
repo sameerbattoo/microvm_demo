@@ -388,6 +388,24 @@ async def upload_file(request: Request):
             content={"error": "Provide 'filename' and 'data' (base64-encoded)"},
         )
 
+    # SECURITY: Strip path components to prevent path traversal attacks
+    # e.g. "../../etc/passwd" -> "passwd"
+    filename = os.path.basename(filename)
+    if not filename:
+        return JSONResponse(
+            status_code=400,
+            content={"error": "Invalid filename"},
+        )
+
+    # SECURITY: Validate file extension against allowed types
+    ALLOWED_EXTENSIONS = {".csv", ".xlsx", ".xls", ".parquet", ".json"}
+    ext = os.path.splitext(filename)[1].lower()
+    if ext not in ALLOWED_EXTENSIONS:
+        return JSONResponse(
+            status_code=400,
+            content={"error": f"Unsupported file type: {ext}. Use .csv, .xlsx, .xls, .parquet, or .json"},
+        )
+
     # Determine variable name from filename if not provided
     if not var_name:
         stem = os.path.splitext(filename)[0]
@@ -397,7 +415,9 @@ async def upload_file(request: Request):
         if var_name and var_name[0].isdigit():
             var_name = "df_" + var_name
 
-    ext = os.path.splitext(filename)[1].lower()
+    # SECURITY: Validate var_name is a safe Python identifier
+    if not var_name or not var_name.isidentifier():
+        var_name = "df_upload"
 
     # Decode and save to temp file
     try:
@@ -405,27 +425,37 @@ async def upload_file(request: Request):
     except Exception:
         return JSONResponse(status_code=400, content={"error": "Invalid base64 data"})
 
-    tmp_path = f"/tmp/{filename}"
+    # SECURITY: Use sanitized filename in a fixed /tmp/ directory
+    tmp_path = os.path.join("/tmp", filename)
     with open(tmp_path, "wb") as f:
         f.write(file_bytes)
 
-    # Build the load code based on file type
+    # SECURITY: Build load code using variable injection rather than string interpolation.
+    # We inject the path as a variable into the namespace, then reference it safely.
+    # This prevents code injection via crafted filenames or variable names.
+    path_var = f"__upload_path_{id(tmp_path)}"
+    executor._namespace[path_var] = tmp_path
+
     if ext == ".csv":
-        load_code = f"import pandas as pd; {var_name} = pd.read_csv('{tmp_path}')"
+        load_code = f"import pandas as pd; {var_name} = pd.read_csv({path_var})"
     elif ext in (".xlsx", ".xls"):
-        load_code = f"import pandas as pd; {var_name} = pd.read_excel('{tmp_path}')"
+        load_code = f"import pandas as pd; {var_name} = pd.read_excel({path_var})"
     elif ext == ".parquet":
-        load_code = f"import pandas as pd; {var_name} = pd.read_parquet('{tmp_path}')"
+        load_code = f"import pandas as pd; {var_name} = pd.read_parquet({path_var})"
     elif ext == ".json":
-        load_code = f"import pandas as pd; {var_name} = pd.read_json('{tmp_path}')"
+        load_code = f"import pandas as pd; {var_name} = pd.read_json({path_var})"
     else:
+        # Should not reach here due to earlier validation
         return JSONResponse(
             status_code=400,
-            content={"error": f"Unsupported file type: {ext}. Use .csv, .xlsx, .xls, .parquet, or .json"},
+            content={"error": f"Unsupported file type: {ext}"},
         )
 
     logger.info(f"📄 Uploading {filename} → {var_name}")
     result = executor.execute(load_code)
+
+    # Clean up the injected path variable
+    executor._namespace.pop(path_var, None)
 
     if result.success:
         # Get shape info

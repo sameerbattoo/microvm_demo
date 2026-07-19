@@ -39,7 +39,7 @@ function createCell(type = 'code') {
   }
 }
 
-export default function Notebook({ tab, onUpdateTab, attachedIds = [], theme, onToggleTheme }) {
+export default function Notebook({ tab, onUpdateTab, attachedIds = [], theme, onToggleTheme, aiAvailable = false }) {
   const [cells, setCells] = useState(() => {
     // Restore cells from tab state (persists across tab switches)
     if (tab._cells && Array.isArray(tab._cells) && tab._cells.length > 0) {
@@ -66,7 +66,6 @@ export default function Notebook({ tab, onUpdateTab, attachedIds = [], theme, on
   const [showConnection, setShowConnection] = useState(tab.status !== 'connected')
   const [isExecuting, setIsExecuting] = useState(false)
   const [activeCellId, setActiveCellId] = useState(null)
-  const [aiAvailable, setAiAvailable] = useState(false)
   const [dragOverId, setDragOverId] = useState(null)
   const [showSearch, setShowSearch] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
@@ -77,7 +76,6 @@ export default function Notebook({ tab, onUpdateTab, attachedIds = [], theme, on
   const draggedCellRef = useRef(null)
   const executionQueue = useRef([])
   const tagSuggestedRef = useRef(false)
-  const bottomRef = useRef(null)
 
   // Cmd+F to open search
   useEffect(() => {
@@ -167,6 +165,14 @@ export default function Notebook({ tab, onUpdateTab, attachedIds = [], theme, on
     }
   }, [cells])
 
+  // Sync active cell index to tab so AI chat panel can reference it
+  useEffect(() => {
+    if (activeCellId) {
+      const idx = cells.findIndex(c => c.id === activeCellId)
+      if (idx >= 0) onUpdateTab({ _activeCellIndex: idx })
+    }
+  }, [activeCellId, cells])
+
   // Sync cells from tab._cells when changed externally (e.g. insertCode from sidebar)
   useEffect(() => {
     if (tab._cells && tab._cells !== prevCellsRef.current) {
@@ -204,20 +210,6 @@ export default function Notebook({ tab, onUpdateTab, attachedIds = [], theme, on
     window.addEventListener('insert-code', handler)
     return () => window.removeEventListener('insert-code', handler)
   }, [])
-
-  // Check AI availability when connected
-  useEffect(() => {
-    if (tab.status === 'connected' && tab.microvmEndpoint) {
-      // AI endpoints live on the proxy or local backend
-      const aiBase = tab.microvmEndpoint.includes(PROXY_URL)
-        ? PROXY_URL
-        : tab.microvmEndpoint
-      fetch(`${aiBase}/ai/config`)
-        .then(r => r.json())
-        .then(data => setAiAvailable(data.ai_available === true))
-        .catch(() => setAiAvailable(false))
-    }
-  }, [tab.status, tab.microvmEndpoint])
 
   const fetchVariables = useCallback(async () => {
     if (!tab.microvmEndpoint || tab.status !== 'connected') return
@@ -506,10 +498,50 @@ export default function Notebook({ tab, onUpdateTab, attachedIds = [], theme, on
     setShowConnection(false)
   }, [onUpdateTab])
 
+  // Auto-document: explain all code cells that don't have an AI explanation yet
+  const autoDocumentNotebook = useCallback(async () => {
+    const codeCells = cells.filter(c => c.type !== 'markdown' && c.code?.trim() && !c.aiExplanation)
+    if (codeCells.length === 0) return
+
+    // Process cells sequentially to avoid rate limiting
+    for (const cell of codeCells) {
+      try {
+        const resp = await fetch(`${PROXY_URL}/ai/explain`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            code: cell.code || '',
+            output: (cell.output || '') + (cell.html ? ' [table output]' : ''),
+            microvm_id: tab.microvmId || '',
+            microvm_endpoint: tab.microvmRealEndpoint || '',
+          }),
+        })
+        if (resp.ok) {
+          const data = await resp.json()
+          if (data.explanation) {
+            setCells(prev => prev.map(c => c.id === cell.id ? { ...c, aiExplanation: data.explanation } : c))
+          }
+          // Insert markdown summary above
+          if (data.summary) {
+            setCells(prev => {
+              const idx = prev.findIndex(c => c.id === cell.id)
+              if (idx < 0) return prev
+              const mdText = data.summary.startsWith('#') || data.summary.startsWith('**') ? data.summary : `**${data.summary}**`
+              const newCells = [...prev]
+              newCells.splice(idx, 0, { id: Date.now() + Math.random(), type: 'markdown', code: mdText, output: null, error: null, html: null, image: null })
+              return newCells
+            })
+          }
+        }
+      } catch {}
+    }
+  }, [cells, tab.microvmId, tab.microvmRealEndpoint])
+
   const saveNotebook = useCallback(() => {
     const notebook = {
       name: tab.name,
       description: tab.description || '',
+      tag: tab.tag || null,
       microvmId: tab.microvmId || null,
       savedAt: new Date().toISOString(),
       cells: cells.map(c => ({
@@ -520,6 +552,7 @@ export default function Notebook({ tab, onUpdateTab, attachedIds = [], theme, on
         html: c.html,
         image: c.image,
         executionNumber: c.executionNumber,
+        aiExplanation: c.aiExplanation || null,
       })),
     }
 
@@ -550,6 +583,7 @@ export default function Notebook({ tab, onUpdateTab, attachedIds = [], theme, on
               detail: {
                 name: notebook.name || file.name.replace('.notebook.json', '').replace('.json', ''),
                 description: notebook.description || '',
+                tag: notebook.tag || null,
                 cells: notebook.cells,
               }
             }))
@@ -595,6 +629,7 @@ export default function Notebook({ tab, onUpdateTab, attachedIds = [], theme, on
       {!showConnection && (
         <>
         <div className="notebook-toolbar">
+          <div className="toolbar-scrollable">
           <div className="toolbar-brand">
             <IconZap width={14} height={14} />
             <span>MicroVM</span>
@@ -655,10 +690,21 @@ export default function Notebook({ tab, onUpdateTab, attachedIds = [], theme, on
             <button className="toolbar-btn toolbar-btn-find" onClick={() => { setShowSearch(true); setTimeout(() => searchInputRef.current?.focus(), 50) }} title="Find in notebook (Cmd+F)">
               <IconSearch width={14} height={14} /> Find
             </button>
+            {aiAvailable && (
+              <button
+                className="toolbar-btn toolbar-btn-autodoc"
+                onClick={autoDocumentNotebook}
+                disabled={!tab.microvmEndpoint || tab.status !== 'connected'}
+                title="Auto-annotate all cells with AI explanations"
+              >
+                <IconFile width={14} height={14} /> Annotate
+              </button>
+            )}
           </div>
 
-          <span className="toolbar-divider" />
+          </div>
 
+          <div className="toolbar-pinned">
           <div className="toolbar-status" onClick={() => setShowConnection(true)} title="Click to manage connection">
             <span className={`status-dot status-${tab.status}`} />
             <span className="status-text">
@@ -675,6 +721,7 @@ export default function Notebook({ tab, onUpdateTab, attachedIds = [], theme, on
           <button className="toolbar-theme-btn" onClick={onToggleTheme} title={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}>
             {theme === 'dark' ? <IconSun width={14} height={14} /> : <IconMoon width={14} height={14} />}
           </button>
+          </div>
         </div>
         {tab.description && (
           <div className="notebook-identity">
@@ -739,6 +786,21 @@ export default function Notebook({ tab, onUpdateTab, attachedIds = [], theme, on
             onInterrupt={interruptExecution}
             onCodeChange={(code) => updateCellCode(cell.id, code)}
             onAddBelow={(type) => addCellBelow(cell.id, type)}
+            onInsertAbove={(summary) => {
+              const cellAbove = index > 0 ? cells[index - 1] : null
+              if (!cellAbove || cellAbove.type !== 'markdown') {
+                setCells(prev => {
+                  const newCells = [...prev]
+                  // Format as markdown bold heading
+                  const mdText = summary.startsWith('#') ? summary : `**${summary}**`
+                  newCells.splice(index, 0, { id: Date.now(), type: 'markdown', code: mdText, output: null, error: null, html: null, image: null })
+                  return newCells
+                })
+              }
+            }}
+            onSetAiExplanation={(explanation) => {
+              setCells(prev => prev.map(c => c.id === cell.id ? { ...c, aiExplanation: explanation } : c))
+            }}
             onTypeChange={(newType) => changeCellType(cell.id, newType)}
             onDelete={() => deleteCell(cell.id)}
             onDragStart={() => handleDragStart(cell.id)}
@@ -748,7 +810,8 @@ export default function Notebook({ tab, onUpdateTab, attachedIds = [], theme, on
             searchQuery={showSearch ? searchQuery : ''}
             searchActiveOccurrence={searchActiveOccurrenceMap[cell.id] ?? -1}
             notebookContext={cells}
-            microvmEndpoint={tab.microvmEndpoint}
+            microvmId={tab.microvmId}
+            microvmRealEndpoint={tab.microvmRealEndpoint}
             aiAvailable={aiAvailable}
           />
         ))}
@@ -760,7 +823,6 @@ export default function Notebook({ tab, onUpdateTab, attachedIds = [], theme, on
             + Text
           </button>
         </div>
-        <div ref={bottomRef} />
       </div>
 
       </div>

@@ -74,9 +74,9 @@ fi
 echo "   AWS CLI version: $AWS_CLI_VERSION ✓"
 
 echo ">> Checking Python dependencies..."
-$PYTHON -m pip install --quiet "fastapi" "uvicorn" "httpx" "boto3>=1.43.40" 2>/dev/null || \
-  $PYTHON -m pip install --quiet --break-system-packages "fastapi" "uvicorn" "httpx" "boto3>=1.43.40" 2>/dev/null || \
-  echo "   ⚠ Could not install Python deps automatically. Please install: pip3 install fastapi uvicorn httpx 'boto3>=1.43.40'"
+$PYTHON -m pip install --quiet -r "$ROOT_DIR/requirements-proxy.txt" 2>/dev/null || \
+  $PYTHON -m pip install --quiet --break-system-packages -r "$ROOT_DIR/requirements-proxy.txt" 2>/dev/null || \
+  echo "   ⚠ Could not install Python deps automatically. Please run: pip3 install -r requirements-proxy.txt"
 
 if ! command -v npm &>/dev/null; then
   echo "❌ npm not found."

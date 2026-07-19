@@ -98,7 +98,7 @@ export default function ConnectionPanel({ tab, onConnect, onUpdateTab, onDismiss
           idleTimeoutSeconds: parseInt(launchIdleTimeout),
           maxDurationSeconds: parseInt(launchMaxDuration),
           checkpointEnabled: true,
-          sessionId: `${tab.sessionId}-restored-${Date.now()}`,
+          sessionId: `${tab.sessionId}-restored-${crypto.randomUUID()}`,
           restoreFromSession: tab.sessionId,
         }),
       })
@@ -142,7 +142,7 @@ export default function ConnectionPanel({ tab, onConnect, onUpdateTab, onDismiss
           idleTimeoutSeconds: parseInt(launchIdleTimeout),
           maxDurationSeconds: parseInt(launchMaxDuration),
           checkpointEnabled,
-          sessionId: `${tab.name.replace(/\s+/g, '-').toLowerCase()}-${Date.now()}`,
+          sessionId: crypto.randomUUID(),
         }),
       })
 

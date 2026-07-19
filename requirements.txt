@@ -1,26 +1,30 @@
+# MicroVM sandbox dependencies (baked into the Lambda MicroVM image)
+# IMPORTANT: Use exact pins for reproducible, fast builds.
+# These versions have prebuilt wheels for Linux/AL2023 (aarch64/x86_64).
+
 # Sandbox server
 fastapi==0.115.12
 uvicorn==0.34.2
-httpx            # Async HTTP client (used by proxy for MicroVM forwarding)
+httpx==0.28.1
 
 # Pre-baked data science packages (available immediately on launch)
-pandas
-numpy
-polars
-matplotlib
-requests
-psutil
+pandas==2.2.3
+numpy==2.2.6
+polars==1.30.0
+matplotlib==3.10.3
+requests==2.32.3
+psutil==7.0.0
 
 # File format support
-openpyxl        # Excel (.xlsx) read/write
-xlrd            # Legacy Excel (.xls) read
-pyarrow         # Parquet read/write
+openpyxl==3.1.5
+xlrd==2.0.2
+pyarrow==19.0.1
 
 # Statistical analysis
-scipy
+scipy==1.15.3
 
-# AWS SDK (for DynamoDB, S3 access from within the MicroVM + Bedrock AI)
-boto3
+# AWS SDK (for DynamoDB, S3 access from within the MicroVM)
+boto3==1.43.51
 
 # Session checkpoint/restore (namespace serialization)
-dill
+dill==0.4.0

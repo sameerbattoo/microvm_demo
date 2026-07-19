@@ -47,6 +47,18 @@ class SandboxExecutor:
         self._created_at = datetime.now(timezone.utc)
         self._exec_thread: threading.Thread | None = None
         self._exec_thread_id: int | None = None
+        # Pre-import heavy packages to reduce first-cell execution time
+        self._preload_packages()
+
+    def _preload_packages(self):
+        """Pre-import heavy packages into the interpreter cache (not the namespace).
+        This makes the first user cell that imports these packages much faster."""
+        import importlib
+        for pkg in ['pandas', 'numpy', 'matplotlib', 'matplotlib.pyplot', 'boto3', 'requests']:
+            try:
+                importlib.import_module(pkg)
+            except ImportError:
+                pass
 
     def interrupt(self) -> bool:
         """
@@ -302,6 +314,31 @@ class SandboxExecutor:
 
     def install_package(self, package: str) -> ExecutionResult:
         """Install a pip package into the sandbox runtime."""
+        import re
+
+        # SECURITY: Validate package name to prevent command injection and flag injection.
+        # Valid pip package names: letters, digits, hyphens, dots, underscores.
+        # Optionally with version specifier (e.g. pandas==2.0, requests>=2.28).
+        PACKAGE_NAME_PATTERN = re.compile(
+            r'^[a-zA-Z0-9]([a-zA-Z0-9._-]*[a-zA-Z0-9])?'  # package name
+            r'(\[([a-zA-Z0-9._-]+,?\s*)*\])?'  # optional extras like [dev,test]
+            r'([><=!~]=?[a-zA-Z0-9.*]+)?$'  # optional version specifier
+        )
+
+        package = package.strip()
+        if not package or not PACKAGE_NAME_PATTERN.match(package):
+            return ExecutionResult(
+                success=False,
+                error=f"Invalid package name: '{package}'. Use a valid PyPI package name (e.g. 'pandas', 'requests>=2.28').",
+            )
+
+        # SECURITY: Reject anything that looks like pip flags
+        if package.startswith('-') or '--' in package or ' ' in package:
+            return ExecutionResult(
+                success=False,
+                error=f"Invalid package name: '{package}'. Package names cannot contain flags or spaces.",
+            )
+
         try:
             result = subprocess.run(
                 [sys.executable, "-m", "pip", "install", "--quiet", package],

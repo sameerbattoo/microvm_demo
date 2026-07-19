@@ -1,9 +1,10 @@
-import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
+import { useState, useRef, useEffect, useMemo } from 'react'
 import Prism from 'prismjs'
 import 'prismjs/components/prism-python'
 import { marked } from 'marked'
+import { sanitizeHtml, sanitizeMarkdown } from '../services/sanitize'
 import MarkdownCell from './MarkdownCell'
-import { IconPlay, IconPlus, IconTrash, IconSparkles, IconCode, IconCheck, IconX, IconStop, IconChevronDown, IconChevronRight, IconGripVertical } from './Icons'
+import { IconPlay, IconPlus, IconTrash, IconX, IconStop, IconChevronDown, IconChevronRight, IconGripVertical } from './Icons'
 import { PROXY_URL } from '../config'
 import './Cell.css'
 
@@ -32,6 +33,8 @@ export default function Cell({
   onInterrupt,
   onCodeChange,
   onAddBelow,
+  onInsertAbove,
+  onSetAiExplanation,
   onDelete,
   onTypeChange,
   onDragStart,
@@ -41,25 +44,25 @@ export default function Cell({
   searchQuery,
   searchActiveOccurrence,
   notebookContext,
-  microvmEndpoint,
+  microvmId,
+  microvmRealEndpoint,
   aiAvailable,
 }) {
-  const aiInputRef = useRef(null)
   const textareaRef = useRef(null)
-  const [mode, setMode] = useState('code') // 'code' | 'ai'
   const [codeCollapsed, setCodeCollapsed] = useState(false)
   const [outputCollapsed, setOutputCollapsed] = useState(false)
-  const [aiPrompt, setAiPrompt] = useState('')
-  const [aiGenerating, setAiGenerating] = useState(false)
-  const [aiPreview, setAiPreview] = useState(null) // generated code awaiting accept/discard
-  const [aiError, setAiError] = useState(null)
+  const [aiResult, setAiResult] = useState(
+    cell.aiExplanation ? { type: 'explain', content: cell.aiExplanation, loading: false } : null
+  )
+  const [generating, setGenerating] = useState(false)
+  const aiAbortRef = useRef(null) // { type: 'explain'|'fix', content: string, loading: boolean }
 
-  // Focus AI input when switching to AI mode
+  // Sync aiResult when cell.aiExplanation changes externally (e.g. from Annotate button)
   useEffect(() => {
-    if (mode === 'ai' && aiInputRef.current) {
-      aiInputRef.current.focus()
+    if (cell.aiExplanation && (!aiResult || aiResult.content !== cell.aiExplanation)) {
+      setAiResult({ type: 'explain', content: cell.aiExplanation, loading: false })
     }
-  }, [mode])
+  }, [cell.aiExplanation])
 
   // Auto-resize textarea
   useEffect(() => {
@@ -68,7 +71,7 @@ export default function Cell({
       el.style.height = 'auto'
       el.style.height = `${el.scrollHeight}px`
     }
-  }, [cell.code, mode, codeCollapsed])
+  }, [cell.code, codeCollapsed])
 
   const highlightedHtml = useMemo(() => {
     if (!cell.code) return ''
@@ -89,9 +92,17 @@ export default function Cell({
   }, [cell.code, searchQuery, searchActiveOccurrence])
 
   const handleKeyDown = (e) => {
-    // Shift+Enter to execute
+    // Shift+Enter to execute (or generate if content looks like NLP)
     if (e.key === 'Enter' && e.shiftKey) {
       e.preventDefault()
+      const code = (cell.code || '').trim()
+      if (code && aiAvailable && isConnected) {
+        const looksLikeCode = /^(import |from |def |class |for |while |if |#|[a-zA-Z_]\w*\s*[=([]|print\(|plt\.|pd\.|np\.)/.test(code) || code.includes('=') || code.includes('(')
+        if (!looksLikeCode && !generating) {
+          handleGenerate()
+          return
+        }
+      }
       onExecute()
     }
     // Tab to indent
@@ -107,75 +118,115 @@ export default function Cell({
     }
   }
 
-  const handleAiGenerate = async () => {
-    if (!aiPrompt.trim() || !microvmEndpoint) return
-
-    setAiGenerating(true)
-    setAiError(null)
-    setAiPreview(null)
-
-    // AI endpoints live on the proxy or local backend
-    const aiBase = microvmEndpoint.includes(PROXY_URL)
-      ? PROXY_URL
-      : microvmEndpoint
-
+  const handleAiExplain = async () => {
+    setAiResult({ type: 'explain', content: '', loading: true })
+    const controller = new AbortController()
+    aiAbortRef.current = controller
     try {
-      // Build context from prior cells
-      const context = notebookContext || []
-      const variables = []
+      const resp = await fetch(`${PROXY_URL}/ai/explain`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        signal: controller.signal,
+        body: JSON.stringify({
+          code: cell.code || '',
+          output: (cell.output || '') + (cell.html ? ' [table output]' : ''),
+          microvm_id: microvmId || '',
+          microvm_endpoint: microvmRealEndpoint || '',
+        }),
+      })
+      if (resp.ok) {
+        const data = await resp.json()
+        const explanation = data.explanation || 'No explanation'
+        setAiResult({ type: 'explain', content: explanation, loading: false })
+        if (onSetAiExplanation) onSetAiExplanation(explanation)
+        // Insert a short markdown summary above if no markdown cell exists above
+        if (onInsertAbove && data.summary) {
+          onInsertAbove(data.summary)
+        }
+      } else {
+        setAiResult({ type: 'explain', content: 'Failed to get explanation', loading: false })
+      }
+    } catch (err) {
+      if (err.name !== 'AbortError') {
+        setAiResult({ type: 'explain', content: `Error: ${err.message}`, loading: false })
+      }
+    }
+  }
 
-      const response = await fetch(`${aiBase}/ai/generate`, {
+  const handleAiFix = async () => {
+    setAiResult({ type: 'fix', content: '', loading: true })
+    const controller = new AbortController()
+    aiAbortRef.current = controller
+    try {
+      const resp = await fetch(`${PROXY_URL}/ai/fix`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        signal: controller.signal,
+        body: JSON.stringify({
+          code: cell.code || '',
+          error: cell.error || '',
+          microvm_id: microvmId || '',
+          microvm_endpoint: microvmRealEndpoint || '',
+        }),
+      })
+      if (resp.ok) {
+        const data = await resp.json()
+        setAiResult({ type: 'fix', content: data.fixed_code || '', loading: false })
+      } else {
+        setAiResult({ type: 'fix', content: 'Failed to fix error', loading: false })
+      }
+    } catch (err) {
+      if (err.name !== 'AbortError') {
+        setAiResult({ type: 'fix', content: `Error: ${err.message}`, loading: false })
+      }
+    }
+  }
+
+  const handleAiCancel = () => {
+    if (aiAbortRef.current) aiAbortRef.current.abort()
+    setAiResult(null)
+  }
+
+  const handleApplyFix = () => {
+    if (aiResult?.type === 'fix' && aiResult.content) {
+      onCodeChange(aiResult.content)
+      setAiResult(null)
+    }
+  }
+
+  const handleGenerate = async () => {
+    if (!cell.code?.trim() || generating) return
+    setGenerating(true)
+    try {
+      const resp = await fetch(`${PROXY_URL}/ai/chat/sync`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          prompt: aiPrompt,
-          notebook_context: context.slice(0, index).map((c, i) => ({
-            code: c.code || '',
-            output: c.output || '',
-            html: c.html || '',
-            index: i,
+          session_id: 'oneshot-generate',
+          message: `Generate Python code for the following request. Return ONLY the code, no explanations:\n\n${cell.code}`,
+          active_cell_index: index,
+          cells: (notebookContext || []).slice(0, index).map(c => ({
+            type: c.type || 'code',
+            code: (c.code || '').slice(0, 200),
+            output: (c.output || '').slice(0, 100),
           })),
-          current_cell_code: cell.code || '',
-          cell_index: index,
-          variables,
+          microvm_id: microvmId || '',
+          microvm_endpoint: microvmRealEndpoint || '',
         }),
       })
-
-      const result = await response.json()
-
-      if (result.success && result.code) {
-        setAiPreview(result.code)
-      } else {
-        setAiError(result.error || 'Failed to generate code')
+      if (resp.ok) {
+        const data = await resp.json()
+        let code = data.response || ''
+        // Strip markdown fences if present
+        if (code.includes('```python')) {
+          code = code.split('```python')[1]?.split('```')[0]?.trim() || code
+        } else if (code.startsWith('```') && code.endsWith('```')) {
+          code = code.split('\n').slice(1, -1).join('\n').trim()
+        }
+        if (code) onCodeChange(code)
       }
-    } catch (err) {
-      setAiError(`Connection error: ${err.message}`)
-    }
-
-    setAiGenerating(false)
-  }
-
-  const handleAiAccept = () => {
-    onCodeChange(aiPreview)
-    setAiPreview(null)
-    setAiPrompt('')
-    setMode('code')
-  }
-
-  const handleAiDiscard = () => {
-    setAiPreview(null)
-  }
-
-  const handleAiKeyDown = (e) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault()
-      handleAiGenerate()
-    }
-    if (e.key === 'Escape') {
-      setMode('code')
-      setAiPreview(null)
-      setAiError(null)
-    }
+    } catch {}
+    setGenerating(false)
   }
 
   const statusColor =
@@ -208,7 +259,7 @@ export default function Cell({
 
   return (
     <div
-      className={`cell ${statusColor} ${mode === 'ai' ? 'cell-ai-mode' : ''} ${isActive ? 'cell-active' : ''} ${isDragOver ? 'cell-drag-over' : ''} ${hasSearchMatch ? 'cell-search-match' : ''}`}
+      className={`cell ${statusColor} ${isActive ? 'cell-active' : ''} ${isDragOver ? 'cell-drag-over' : ''} ${hasSearchMatch ? 'cell-search-match' : ''}`}
       data-cell-id={cell.id}
       onClick={onFocus}
       onDragOver={(e) => { e.preventDefault(); onDragOver?.() }}
@@ -251,36 +302,14 @@ export default function Cell({
           </div>
         )}
 
-        {/* Mode toggle — only show if AI is available */}
-        {aiAvailable && (
-          <div className="cell-mode-bar">
-            <div className="cell-mode-toggle">
-              <button
-                className={`mode-toggle-btn ${mode === 'code' ? 'mode-toggle-active' : ''}`}
-                onClick={() => { setMode('code'); setAiPreview(null); setAiError(null); }}
-                title="Code mode"
-              >
-                <IconCode width={11} height={11} /> Code
-              </button>
-              <button
-                className={`mode-toggle-btn mode-toggle-ai ${mode === 'ai' ? 'mode-toggle-active' : ''}`}
-                onClick={() => setMode('ai')}
-                title="AI generate mode (describe what you want)"
-              >
-                <IconSparkles width={11} height={11} /> AI
-              </button>
-            </div>
-          </div>
-        )}
-
-        {/* Code mode — normal editor */}
-        {(mode === 'code' || !aiAvailable) && !codeCollapsed && (
+        {/* Code editor */}
+        {!codeCollapsed && (
           <div className="cell-input">
             <div className="cell-editor-wrapper">
               <pre
                 className="cell-editor-highlight"
                 aria-hidden="true"
-                dangerouslySetInnerHTML={{ __html: highlightedHtml + '\n' }}
+                dangerouslySetInnerHTML={{ __html: sanitizeHtml(highlightedHtml + '\n') }}
               />
               <textarea
                 ref={textareaRef}
@@ -288,7 +317,7 @@ export default function Cell({
                 value={cell.code}
                 onChange={(e) => onCodeChange(e.target.value)}
                 onKeyDown={handleKeyDown}
-                placeholder="Type Python code... (Shift+Enter to run)"
+                placeholder="Type Python code or describe what you want in plain English... (Shift+Enter runs code or generates from NLP)"
                 spellCheck={false}
                 rows={1}
               />
@@ -321,69 +350,42 @@ export default function Cell({
               <button className="cell-action-btn cell-delete-btn" onClick={(e) => { e.stopPropagation(); onDelete() }} title="Delete cell">
                 <IconTrash width={14} height={14} />
               </button>
-            </div>
-          </div>
-        )}
-
-        {/* AI mode — prompt input + preview */}
-        {mode === 'ai' && aiAvailable && (
-          <div className="cell-ai">
-            <div className="ai-prompt-area">
-              <textarea
-                ref={aiInputRef}
-                className="ai-prompt-input"
-                value={aiPrompt}
-                onChange={(e) => setAiPrompt(e.target.value)}
-                onKeyDown={handleAiKeyDown}
-                placeholder="Describe what you want this cell to do... (Enter to generate, Esc to cancel)"
-                spellCheck={false}
-                rows={2}
-              />
-              <div className="ai-prompt-actions">
-                <button
-                  className="ai-generate-btn"
-                  onClick={handleAiGenerate}
-                  disabled={!aiPrompt.trim() || aiGenerating || !isConnected}
-                >
-                                    {aiGenerating ? 'Generating...' : <><IconSparkles width={13} height={13} /> Generate</>}
-                </button>
-              </div>
-            </div>
-
-            {/* AI preview — show generated code with accept/discard */}
-            {aiPreview && (
-              <div className="ai-preview">
-                <div className="ai-preview-header">
-                  <span className="ai-preview-label">Generated Code</span>
-                  <div className="ai-preview-actions">
-                    <button className="ai-accept-btn" onClick={handleAiAccept}>
-                      <IconCheck width={12} height={12} /> Accept
+              {isConnected && aiAvailable && cell.code?.trim() && (() => {
+                // Heuristic: detect if cell content looks like code or natural language
+                const code = cell.code.trim()
+                const looksLikeCode = /^(import |from |def |class |for |while |if |#|[a-zA-Z_]\w*\s*[=([]|print\(|plt\.|pd\.|np\.)/.test(code) || code.includes('=') || code.includes('(')
+                
+                if (cell.error) {
+                  return (
+                    <button
+                      className="cell-action-btn cell-ai-action-btn cell-ai-fix-btn"
+                      onClick={(e) => { e.stopPropagation(); handleAiFix() }}
+                      disabled={aiResult?.loading}
+                      title="Fix error with AI"
+                    >🔧</button>
+                  )
+                }
+                if (!looksLikeCode) {
+                  return (
+                    <button
+                      className={`cell-action-btn cell-ai-action-btn cell-generate-btn ${generating ? 'cell-generating' : ''}`}
+                      onClick={(e) => { e.stopPropagation(); handleGenerate() }}
+                      disabled={generating}
+                      title="Generate code from description (AI)"
+                    >
+                      {generating ? <span className="cell-gen-spinner" /> : '✨'}
                     </button>
-                    <button className="ai-discard-btn" onClick={handleAiDiscard}>
-                      <IconX width={12} height={12} /> Discard
-                    </button>
-                  </div>
-                </div>
-                <pre className="ai-preview-code">{aiPreview}</pre>
-              </div>
-            )}
-
-            {/* AI error */}
-            {aiError && (
-              <div className="ai-error">{aiError}</div>
-            )}
-
-            {/* Cell actions in AI mode */}
-            <div className="cell-actions cell-actions-ai">
-              <button className="cell-action-btn" onClick={(e) => { e.stopPropagation(); onAddBelow('code') }} title="Add code cell below">
-                <IconPlus width={14} height={14} />
-              </button>
-              <button className="cell-action-btn cell-add-md-btn" onClick={(e) => { e.stopPropagation(); onAddBelow('markdown') }} title="Add text cell below">
-                M
-              </button>
-              <button className="cell-action-btn cell-delete-btn" onClick={(e) => { e.stopPropagation(); onDelete() }} title="Delete cell">
-                <IconTrash width={14} height={14} />
-              </button>
+                  )
+                }
+                return (
+                  <button
+                    className="cell-action-btn cell-ai-action-btn"
+                    onClick={(e) => { e.stopPropagation(); handleAiExplain() }}
+                    disabled={aiResult?.loading}
+                    title="Explain with AI"
+                  >💡</button>
+                )
+              })()}
             </div>
           </div>
         )}
@@ -408,7 +410,7 @@ export default function Cell({
                 )}
                 {cell.output && <pre className="output-text">{cell.output}</pre>}
                 {cell.html && (
-                  <div className="output-html" dangerouslySetInnerHTML={{ __html: cell.html }} />
+                  <div className="output-html" dangerouslySetInnerHTML={{ __html: sanitizeHtml(cell.html) }} />
                 )}
                 {cell.error && <pre className="output-error">{cell.error}</pre>}
                 {cell.executionTime != null && (
@@ -417,6 +419,37 @@ export default function Cell({
               </div>
             )}
               </>
+            )}
+          </div>
+        )}
+
+        {/* AI Result (explain or fix preview) — shown outside output section */}
+        {aiResult?.loading && (
+          <div className="cell-ai-result cell-ai-loading">
+            <span className="cell-ai-spinner" />
+            <span className="cell-ai-loading-text">{aiResult.type === 'fix' ? 'Fixing...' : 'Explaining...'}</span>
+            <button className="cell-ai-cancel-btn" onClick={handleAiCancel}>Cancel</button>
+          </div>
+        )}
+        {aiResult && !aiResult.loading && (
+          <div className={`cell-ai-result cell-ai-result-${aiResult.type}`}>
+            <div className="cell-ai-result-header">
+              <span className="cell-ai-badge">✨ AI</span>
+              <button className="cell-ai-dismiss" onClick={() => { setAiResult(null); if (onSetAiExplanation) onSetAiExplanation(null) }}>
+                <IconX width={10} height={10} />
+              </button>
+            </div>
+            {aiResult.type === 'explain' && (
+              <div className="cell-ai-explain-text" dangerouslySetInnerHTML={{ __html: sanitizeMarkdown(marked.parse(aiResult.content, { breaks: true })) }} />
+            )}
+            {aiResult.type === 'fix' && aiResult.content && (
+              <div className="cell-ai-fix-preview">
+                <pre className="cell-ai-fix-code">{aiResult.content}</pre>
+                <div className="cell-ai-fix-actions">
+                  <button className="cell-ai-apply-btn" onClick={handleApplyFix}>Apply Fix</button>
+                  <button className="cell-ai-dismiss-btn" onClick={() => setAiResult(null)}>Dismiss</button>
+                </div>
+              </div>
             )}
           </div>
         )}

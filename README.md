@@ -111,14 +111,15 @@ aws --version
 | `MicroVMSandboxBuildRole` | Used during MicroVM image build to pull artifacts from S3 | S3 read on artifact bucket |
 | `MicroVMSandboxExecRole` | Attached to running MicroVMs — gives your notebook code access to AWS services | S3 (read/write), DynamoDB (scan/query), Athena (query), Glue (catalog read), STS |
 
-### 1.5 Optional (for AI Code Generation)
+### 1.5 Optional (for AI Features)
 
 | Requirement | Notes |
 |------------|-------|
 | Amazon Bedrock access | Model access enabled for Claude Sonnet in your region |
 | `bedrock:InvokeModel` permission | On the operator's credentials (proxy calls Bedrock, not the MicroVM) |
+| strands-agents | Auto-installed from `requirements-proxy.txt` |
 
-> AI features auto-detect credentials. If Bedrock is not configured, the AI toggle is simply hidden in the UI — everything else works normally.
+> AI features auto-detect credentials. If Bedrock is not configured, AI buttons (Chat, Explain, Fix, Generate, Annotate) are simply hidden in the UI — everything else works normally.
 
 ---
 
@@ -153,7 +154,10 @@ Terminates all running/suspended MicroVMs and deletes all images. S3 bucket, IAM
 
 ### 3.1 Notebook UI
 - Code cells with `Shift+Enter` execution
-- **AI-powered code generation** — Toggle cells to AI mode, describe what you want in plain English, and generate Python code using Amazon Bedrock (Claude Sonnet)
+- **AI Chat panel** — right-side conversational AI assistant (opens by default with each notebook)
+- **AI Explain / Fix / Generate** — contextual buttons on each cell
+- **Auto-Annotate** — one-click AI documentation for all cells in a notebook
+- **NLP-to-Code** — type natural language in new cells, AI auto-detects and generates Python
 - **Run All** — Execute all cells sequentially with one click
 - Sequential execution queue (prevents race conditions)
 - Inline DataFrame table rendering (truncated at 50 rows) with smart enhancements:
@@ -164,18 +168,30 @@ Terminates all running/suspended MicroVMs and deletes all images. S3 bucket, IAM
   - Booleans as color-coded badges; NaN/None styled as muted italic
   - Long text truncated with hover tooltip
 - Inline matplotlib/chart image display
-- Save/Open notebooks (preserves code, output, tables, and charts)
+- Save/Open notebooks (preserves code, output, tables, charts, and AI explanations)
 - Tab support for multiple notebooks (cells persist across tab switches)
 - **Notebook name pill** in toolbar — always shows which notebook is active
 - Delete any cell (including the last one — replaced with a fresh empty cell)
 
-### 3.2 AI Code Generation
-- Each cell has a **Code | AI** mode toggle
-- In AI mode, describe what you want in natural language and hit Enter
-- The AI receives **full notebook context** — all prior cells, their outputs, and cell position
-- Generated code shows in a preview panel with Accept/Discard buttons
-- Uses **Amazon Bedrock Converse API** with Claude Sonnet (configurable model)
-- Auto-detects AWS credential availability — AI toggle hidden when no credentials are configured
+### 3.2 AI Features (Powered by Strands Agents SDK)
+
+All AI features use **Amazon Bedrock** (Claude Sonnet) and are powered by the **Strands Agents SDK** for agentic workflows. AI capabilities auto-detect — if Bedrock credentials are not configured, AI buttons are simply hidden.
+
+| Feature | How It Works |
+|---------|-------------|
+| **AI Chat** | Right-side panel (opens by default). Full conversational agent with notebook context, installed packages, and data sources injected into the prompt. Uses `SlidingWindowConversationManager` (last 10 messages). Responses support markdown, code blocks with "Insert Cell" / "Replace Active Cell" buttons. |
+| **AI Explain** | Click ✨ on any code cell (appears after writing code). Makes a direct Bedrock `converse()` call — returns a collapsible explanation card below the cell. Also provides the explanation as tooltip text in the Outline panel. |
+| **AI Fix** | Click 🔧 on any cell with an error. Sends code + error to Bedrock, returns a suggested fix with "Apply Fix" button. |
+| **Auto-Annotate** | Toolbar button ("Annotate"). Iterates all code cells sequentially, calls `/ai/explain` for each, inserts a markdown summary cell above and shows the explanation card in each cell. |
+| **NLP-to-Code** | In a new empty code cell, type a natural language description (e.g. "load sales data from S3 and plot revenue by month") and click the ✨ sparkle button. The AI detects it's natural language and generates Python code. |
+
+**Architecture:**
+- The Strands Agent runs in the **proxy** (not inside the MicroVM) — avoids image bloat and rebuild cycles
+- Agent tools: `execute_code`, `read_notebook_state`, `install_package`
+- Chat endpoint streams responses via SSE (`/ai/chat`)
+- Explain/Fix use direct `converse()` calls for speed (no full agent loop)
+- Per-notebook conversation history (stored on tab, survives tab switches)
+- Session ID = UUID (`crypto.randomUUID()`) for AgentCore compatibility
 
 ### 3.3 Activity Bar Sidebar
 A unified collapsible sidebar with VS Code-style icon activity bar:
@@ -280,9 +296,11 @@ A unified collapsible sidebar with VS Code-style icon activity bar:
 │                      │           │  POST /launch    — provision VM   │
 │  Sidebar + Cells     │           │  POST /terminate — destroy VM     │
 │                      │           │  POST /resume    — wake suspended │
-│  AI Mode (per cell)  │           │  GET  /instances — list + cost    │
-│                      │           │  */proxy/*       — auth + forward │
-│                      │           │  POST /ai/generate — AI code gen  │
+│  AI Chat (right)     │           │  GET  /instances — list + cost    │
+│  Explain/Fix/Gen     │           │  */proxy/*       — auth + forward │
+│                      │           │  POST /ai/chat   — Strands Agent  │
+│                      │           │  POST /ai/explain— direct Bedrock │
+│                      │           │  POST /ai/fix    — direct Bedrock │
 │                      │           │  GET  /datasources — S3/DDB/Athena│
 └──────────────────────┘           └────────────┬──────────┬───────────┘
                                                 │          │
@@ -291,7 +309,7 @@ A unified collapsible sidebar with VS Code-style icon activity bar:
            ┌──────────────────┐  ┌──────────────────┐  ┌──────────────────┐
            │  MicroVM (Tab 1) │  │  MicroVM (Tab 2) │  │  Amazon Bedrock  │
            │  Firecracker VM  │  │  Firecracker VM  │  │  Claude Sonnet   │
-           │  FastAPI+Executor│  │  FastAPI+Executor│  │  (Converse API)  │
+           │  FastAPI+Executor│  │  FastAPI+Executor│  │  (Strands Agent) │
            └──────────────────┘  └──────────────────┘  └──────────────────┘
 ```
 
@@ -345,12 +363,12 @@ A unified collapsible sidebar with VS Code-style icon activity bar:
 - **Add cell** — `+ Cell` button or `+` on any cell
 - **Delete cell** — 🗑 button; deleting the last cell replaces it with a fresh empty cell
 
-### 5.2 AI Code Generation
-- Click the **AI** toggle on any cell to switch to AI mode
-- Type a natural language description (e.g. "Load the CSV and plot revenue by month")
-- Press `Enter` to generate, `Esc` to cancel
-- Review the generated code in the preview panel
-- Click **Accept** to insert or **Discard** to try again
+### 5.2 AI Features
+- **Chat** — The AI panel opens automatically with each notebook. Ask questions, request code, or get analysis. Code in responses has "Insert Cell" buttons.
+- **Explain** — Click ✨ on a code cell to get a plain-English explanation card.
+- **Fix** — When a cell has an error, click 🔧 to get an AI-suggested fix with one-click apply.
+- **Generate** — In a new empty cell, type what you want in natural language and click ✨ to convert to Python.
+- **Annotate** — Click the Annotate toolbar button to auto-document all code cells with AI explanations and markdown summaries.
 
 ### 5.3 Rich Output
 - **DataFrames** — Type `df` or `df.head()` as the last line → renders as a styled table (max 50 rows with truncation note)
@@ -426,16 +444,27 @@ ATHENA_DB="microvm_demo_db"        # Athena database name
 ATHENA_WORKGROUP="microvm-demo"    # Athena workgroup (has default S3 output)
 ```
 
-### 6.4 AI Code Generation
+### 6.4 AI Configuration
 
-Set environment variables before running:
+AI is configured via constants in `proxy/ai/constants.py`:
 
-```bash
-export BEDROCK_MODEL_ID="us.anthropic.claude-sonnet-4-6"  # default model
-export BEDROCK_REGION="us-west-2"                          # Bedrock region
+```python
+CHAT_MODEL_ID = "us.anthropic.claude-sonnet-4-20250514"  # Full agent chat
+EXPLAIN_MODEL_ID = "us.anthropic.claude-sonnet-4-20250514"  # Explain/Fix (direct calls)
+MAX_TOKENS_CHAT = 4096
+MAX_TOKENS_EXPLAIN = 2048
+TEMPERATURE_CHAT = 0.7
+TEMPERATURE_EXPLAIN = 0.3
+CONVERSATION_WINDOW_SIZE = 10  # Sliding window for chat history
 ```
 
-AI mode auto-detects AWS credentials. If not configured, cells operate in code-only mode.
+Set environment variables to override the region:
+
+```bash
+export AWS_REGION="us-west-2"  # Bedrock region (same as MicroVM region)
+```
+
+AI features auto-detect AWS credentials. If Bedrock is not available, AI buttons are hidden in the UI — everything else works normally.
 
 ### 6.5 Frontend Port Configuration
 
@@ -543,9 +572,17 @@ scipy (statistics), boto3 (AWS SDK)
 │   └── executor.py         # Stateful Python executor with rich output, interrupt, variable inspection,
 │                           # smart DataFrame enhancement (clickable URLs, number formatting, etc.)
 ├── proxy/
-│   ├── server.py           # Token proxy: launch, terminate, resume, auth, datasources, cost tracking
-│   ├── ai_utils.py         # AI code generation: system prompt builder, code extraction
-│   └── cost_tracker.py     # CostTracker class: per-MicroVM cost estimation
+│   ├── server.py           # Token proxy: launch, terminate, resume, auth, datasources, cost tracking, AI endpoints
+│   ├── cost_tracker.py     # CostTracker class: per-MicroVM cost estimation
+│   └── ai/                 # AI module (Strands Agents SDK)
+│       ├── __init__.py
+│       ├── constants.py    # All AI config constants (model IDs, tokens, temperatures)
+│       ├── prompts.py      # XML-structured system prompts for agent, explain, fix
+│       ├── sessions.py     # Per-notebook session management (SlidingWindowConversationManager)
+│       ├── notebook_agent.py  # Strands Agent definition with tools
+│       └── tools/
+│           ├── __init__.py
+│           └── execution_tools.py  # Agent tools: execute_code, read_notebook_state, install_package
 ├── web/
 │   └── src/
 │       ├── main.jsx
@@ -555,15 +592,17 @@ scipy (statistics), boto3 (AWS SDK)
 │       ├── theme.css            # Design tokens (light + dark themes)
 │       ├── syntax-theme.css     # Python syntax highlighting
 │       ├── components/
-│       │   ├── Cell.jsx         # Code cell: collapse, drag, timer, search highlight, staleness
+│       │   ├── Cell.jsx         # Code cell: collapse, drag, timer, AI explain/fix/generate buttons
 │       │   ├── Cell.css
 │       │   ├── MarkdownCell.jsx     # Markdown/text cell: edit/render modes
 │       │   ├── ConnectionPanel.jsx  # MicroVM connection + launch (dynamic tiers, idle/max config)
 │       │   ├── ConnectionPanel.css
-│       │   ├── Notebook.jsx     # Toolbar, cell management, search, drag-reorder, execution
+│       │   ├── Notebook.jsx     # Toolbar, cell management, search, drag-reorder, annotate
 │       │   ├── Notebook.css
+│       │   ├── AiChatPanel.jsx  # Right-side AI chat panel (per-notebook messages, SSE streaming)
+│       │   ├── AiChatPanel.css
 │       │   ├── Sidebar.jsx      # Activity bar + collapsible panels:
-│       │   │                    #   • Notebooks — open tabs with status
+│       │   │                    #   • Notebooks — open tabs with status + tag grouping
 │       │   │                    #   • Outline — searchable cell list with drag-reorder
 │       │   │                    #   • Data Sources — S3, DynamoDB, Athena, Public APIs
 │       │   │                    #   • Variables — live variable explorer with smart previews
@@ -571,12 +610,13 @@ scipy (statistics), boto3 (AWS SDK)
 │       │   │                    #   • Samples — prebuilt notebook templates
 │       │   │                    #   • MicroVMs — instance cards with cost breakdown
 │       │   ├── Sidebar.css
-│       │   ├── VariablePreviewRenderer.jsx  # Smart type-aware variable preview (colors, URLs, dicts, etc.)
+│       │   ├── VariablePreviewRenderer.jsx  # Smart type-aware variable preview
 │       │   ├── Icons.jsx        # SVG icon components (35+)
 │       │   ├── Modal.jsx        # Reusable confirm/input modals
 │       │   └── Modal.css
 │       └── services/
-│           └── microvm.js       # MicroVM client service
+│           ├── microvm.js       # MicroVM client service
+│           └── sanitize.js      # HTML sanitization (DOMPurify) for XSS prevention
 ├── tests/
 │   ├── test_interrupt_execution.py  # E2E: interrupt long-running cells (7 scenarios)
 │   ├── test_microvm_lifecycle.py    # E2E: full state machine + checkpoint/restore (15 scenarios)
@@ -589,7 +629,8 @@ scipy (statistics), boto3 (AWS SDK)
 │   └── teardown.sh             # Terminate MicroVMs + delete images
 ├── iam/                    # IAM trust and permission policies
 ├── Dockerfile              # MicroVM image (al2023-minimal, Python 3.11)
-├── requirements.txt        # Python deps
+├── requirements.txt        # MicroVM sandbox Python deps (exact pins for fast image builds)
+├── requirements-proxy.txt  # Proxy server deps (Strands Agents, FastAPI, boto3)
 ├── dev_run.sh              # One-command local dev (auto-detects python/python3)
 ├── aws_microvm_run.sh      # One-command AWS mode (auto-detects python/python3)
 └── README.md

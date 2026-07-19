@@ -95,7 +95,7 @@ create_image() {
 # Build each size tier — kick off all creates in parallel
 NEEDS_WAIT=()
 for MEM in $IMAGE_SIZES; do
-  VCPU=$(awk "BEGIN {printf \"%.2g\", $MEM / 2048}")
+  VCPU=$(echo "$MEM" | awk '{printf "%.2g", $1 / 2048}')
   TIER_NAME="${IMAGE_NAME}-${MEM}"
   TIER_ARN="arn:aws:lambda:${AWS_REGION}:${ACCOUNT_ID}:microvm-image:${TIER_NAME}"
 
@@ -195,6 +195,7 @@ rm -f app.zip
 echo ""
 echo "✅ All images ready:"
 for MEM in $IMAGE_SIZES; do
-  VCPU=$(awk "BEGIN {printf \"%.2g\", $MEM / 2048}")
-  echo "   ${IMAGE_NAME}-${MEM}: $(awk "BEGIN {printf \"%.1f\", $MEM/1024}") GB / ${VCPU} vCPU"
+  VCPU=$(echo "$MEM" | awk '{printf "%.2g", $1 / 2048}')
+  GB=$(echo "$MEM" | awk '{printf "%.1f", $1 / 1024}')
+  echo "   ${IMAGE_NAME}-${MEM}: ${GB} GB / ${VCPU} vCPU"
 done

@@ -57,7 +57,38 @@ EGRESS_CONNECTOR = os.environ.get("MICROVM_EGRESS_CONNECTOR",
     f"arn:aws:lambda:{AWS_REGION}:aws:network-connector:aws-network-connector:INTERNET_EGRESS")
 
 # Token cache: microvm_id -> {"token": str, "expires_at": float}
-_token_cache: dict[str, dict] = {}
+# SECURITY: Bounded to prevent memory exhaustion via cache flooding
+from collections import OrderedDict
+
+TOKEN_CACHE_MAX_SIZE = 100  # Max number of MicroVM tokens to cache
+
+
+class BoundedTokenCache:
+    """LRU-bounded token cache to prevent unbounded memory growth."""
+
+    def __init__(self, max_size: int = TOKEN_CACHE_MAX_SIZE):
+        self._cache: OrderedDict[str, dict] = OrderedDict()
+        self._max_size = max_size
+
+    def get(self, key: str) -> dict | None:
+        if key in self._cache:
+            self._cache.move_to_end(key)  # Mark as recently used
+            return self._cache[key]
+        return None
+
+    def set(self, key: str, value: dict):
+        if key in self._cache:
+            self._cache.move_to_end(key)
+        self._cache[key] = value
+        # Evict oldest entries if over capacity
+        while len(self._cache) > self._max_size:
+            self._cache.popitem(last=False)
+
+    def __len__(self):
+        return len(self._cache)
+
+
+_token_cache = BoundedTokenCache()
 
 # Cached artifacts bucket name (discovered once, reused)
 _artifacts_bucket: str | None = None
@@ -84,7 +115,6 @@ _active_microvms: dict[str, dict] = {}  # id -> {"endpoint": str, "launched_at":
 
 # Cost tracker instance (persists across page refreshes, resets on proxy restart)
 from proxy.cost_tracker import CostTracker
-from proxy.ai_utils import build_ai_system_prompt, extract_code
 _cost_tracker = CostTracker()
 
 # AWS client (uses default credentials from environment/profile)
@@ -114,10 +144,10 @@ def get_auth_token(microvm_id: str) -> str:
     )
 
     token = response["authToken"]["X-aws-proxy-auth"]
-    _token_cache[microvm_id] = {
+    _token_cache.set(microvm_id, {
         "token": token,
         "expires_at": time.time() + (25 * 60),  # Cache for 25 min (token lasts 30)
-    }
+    })
     return token
 
 
@@ -198,6 +228,10 @@ async def launch_microvm(request: Request):
     body = await request.json() if await request.body() else {}
     notebook_name = body.get("name", f"notebook-{int(time.time())}")
     memory_mib = body.get("memoryMiB", 4096)
+    # Validate memory is within supported range
+    valid_memories = [512, 1024, 2048, 4096, 8192]
+    if memory_mib not in valid_memories:
+        memory_mib = min(valid_memories, key=lambda x: abs(x - memory_mib))
     idle_timeout_sec = body.get("idleTimeoutSeconds", 1800)       # Default: 30 min
     max_duration_sec = body.get("maxDurationSeconds", 28800)      # Default: 8 hours
     checkpoint_enabled = body.get("checkpointEnabled", False)     # Enable S3 checkpoint on terminate
@@ -663,8 +697,20 @@ async def list_datasources():
 
 
 # ============================================================
-# AI CODE GENERATION (runs locally on the proxy, calls Bedrock)
+# AI NOTEBOOK AGENT (Strands Agents SDK + Bedrock)
 # ============================================================
+
+from proxy.ai.constants import (
+    TAG_TEMPERATURE, TAG_MAX_TOKENS, TAG_MAX_LENGTH, MAX_CELLS_FOR_TAG,
+    BEDROCK_MAX_RETRIES, BEDROCK_READ_TIMEOUT, BEDROCK_CONNECT_TIMEOUT,
+)
+from proxy.ai.notebook_agent import (
+    chat as agent_chat,
+    chat_stream as agent_chat_stream,
+    explain as agent_explain,
+    fix_error as agent_fix_error,
+    new_thread as agent_new_thread,
+)
 
 AI_MODEL_ID = os.environ.get("BEDROCK_MODEL_ID", "us.anthropic.claude-sonnet-4-6")
 AI_REGION = os.environ.get("BEDROCK_REGION", AWS_REGION)
@@ -673,20 +719,14 @@ _bedrock_client = None
 
 
 def get_bedrock_client():
-    """
-    Get a Bedrock Runtime client with retry and timeout configuration.
-    Uses boto3's built-in exponential backoff with jitter for transient errors.
-    """
+    """Get a Bedrock Runtime client for lightweight calls (tag suggestion)."""
     global _bedrock_client
     if _bedrock_client is None:
         from botocore.config import Config
         bedrock_config = Config(
-            retries={
-                'max_attempts': 5,
-                'mode': 'standard',  # exponential backoff with jitter for 429/5xx
-            },
-            read_timeout=120,       # 2 min read timeout for large model responses
-            connect_timeout=10,     # 10s connection timeout
+            retries={'max_attempts': BEDROCK_MAX_RETRIES, 'mode': 'standard'},
+            read_timeout=BEDROCK_READ_TIMEOUT,
+            connect_timeout=BEDROCK_CONNECT_TIMEOUT,
         )
         _bedrock_client = boto3.client(
             "bedrock-runtime",
@@ -698,7 +738,7 @@ def get_bedrock_client():
 
 @app.get("/ai/config")
 async def ai_config():
-    """Return AI configuration and availability (checks for valid AWS credentials)."""
+    """Return AI configuration and availability."""
     ai_available = False
     try:
         session = boto3.Session(region_name=AI_REGION)
@@ -715,79 +755,190 @@ async def ai_config():
     }
 
 
-@app.post("/ai/generate")
-async def ai_generate_code(request: Request):
+@app.post("/ai/chat")
+async def ai_chat(request: Request):
     """
-    Generate Python code from a natural language prompt using Amazon Bedrock.
-    Receives full notebook context for accurate code generation.
+    Conversational chat with the notebook AI agent.
+    Streams response via Server-Sent Events (SSE).
     """
-    body = await request.json()
+    from starlette.responses import StreamingResponse
 
-    prompt = body.get("prompt", "").strip()
-    if not prompt:
+    body = await request.json()
+    session_id = body.get("session_id", "")
+    message = body.get("message", "").strip()
+    notebook_cells = body.get("cells", [])
+    microvm_id = body.get("microvm_id", "")
+    microvm_endpoint = body.get("microvm_endpoint", "")
+
+    if not message:
         return Response(
             status_code=400,
-            content='{"error": "No prompt provided"}',
+            content='{"error": "No message provided"}',
             media_type="application/json",
         )
 
-    notebook_context = body.get("notebook_context", [])
-    current_cell_code = body.get("current_cell_code", "")
-    cell_index = body.get("cell_index", 0)
-    variables = body.get("variables", [])
-
-    logger.info(f"--- /ai/generate request ---")
-    logger.info(f"  prompt: {prompt}")
-    logger.info(f"  cell_index: {cell_index}")
-    logger.info(f"  current_cell_code: {current_cell_code[:80]}...")
-    logger.info(f"  notebook_context cells: {len(notebook_context)}")
-    for i, ctx in enumerate(notebook_context):
-        code_preview = (ctx.get('code', '') or '')[:80].replace('\n', '\\n')
-        logger.info(f"    [{i}] code: {code_preview}...")
-    logger.info(f"  variables: {variables}")
-    logger.info(f"---")
-
-    system_prompt = build_ai_system_prompt(notebook_context, cell_index, variables, current_cell_code)
-
-    try:
-        client = get_bedrock_client()
-
-        response = client.converse(
-            modelId=AI_MODEL_ID,
-            system=[{"text": system_prompt}],
-            messages=[
-                {
-                    "role": "user",
-                    "content": [{"text": prompt}],
-                }
-            ],
-            inferenceConfig={
-                "maxTokens": 2048,
-                "temperature": 0.2,
-            },
+    if not session_id:
+        return Response(
+            status_code=400,
+            content='{"error": "No session_id provided"}',
+            media_type="application/json",
         )
 
-        output_message = response["output"]["message"]
-        generated_text = ""
-        for block in output_message["content"]:
-            if "text" in block:
-                generated_text += block["text"]
+    context = {
+        "proxy_url": f"http://localhost:{os.environ.get('PROXY_PORT', '8081')}",
+        "microvm_id": microvm_id,
+        "microvm_endpoint": microvm_endpoint,
+        "notebook_cells": notebook_cells,
+    }
 
-        code = extract_code(generated_text)
+    logger.info(f"AI chat: session={session_id[:8]}... message={message[:60]}...")
 
-        logger.info(f"AI generated code (model={AI_MODEL_ID}, prompt_len={len(prompt)}, code_len={len(code)})")
+    async def event_stream():
+        try:
+            async for event in agent_chat_stream(session_id, message, context):
+                yield f"data: {json.dumps(event)}\n\n"
+            yield f"data: {json.dumps({'type': 'done'})}\n\n"
+        except Exception as e:
+            logger.error(f"AI chat stream error: {e}")
+            yield f"data: {json.dumps({'type': 'error', 'content': str(e)})}\n\n"
 
-        return {
-            "success": True,
-            "code": code,
-            "model_id": AI_MODEL_ID,
-        }
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
 
+
+@app.post("/ai/chat/sync")
+async def ai_chat_sync(request: Request):
+    """
+    Non-streaming chat with the notebook AI agent.
+    Returns full response as JSON (for simpler clients).
+    """
+    body = await request.json()
+    session_id = body.get("session_id", "")
+    message = body.get("message", "").strip()
+    notebook_cells = body.get("cells", [])
+    microvm_id = body.get("microvm_id", "")
+    microvm_endpoint = body.get("microvm_endpoint", "")
+    active_cell_index = body.get("active_cell_index")
+    packages = body.get("packages", [])
+    data_sources = body.get("data_sources")
+
+    if not message or not session_id:
+        return Response(
+            status_code=400,
+            content='{"error": "session_id and message required"}',
+            media_type="application/json",
+        )
+
+    # Prepend active cell context to the message if available
+    if active_cell_index is not None and notebook_cells and active_cell_index < len(notebook_cells):
+        active_cell = notebook_cells[active_cell_index]
+        cell_context = f"[User is currently focused on Cell {active_cell_index} which contains: {(active_cell.get('code', ''))[:150]}]\n\n"
+        message = cell_context + message
+
+    # Add installed packages info if available
+    pkg_list = body.get("packages", [])
+    if pkg_list:
+        pkg_names = [p.get("name", "") for p in pkg_list[:30]]  # Top 30 packages
+        message = f"[Installed packages: {', '.join(pkg_names)}]\n\n" + message
+
+    context = {
+        "proxy_url": f"http://localhost:{os.environ.get('PROXY_PORT', '8081')}",
+        "microvm_id": microvm_id,
+        "microvm_endpoint": microvm_endpoint,
+        "notebook_cells": notebook_cells,
+        "data_sources": data_sources,
+        "packages": packages,
+        "uploaded_files": body.get("uploaded_files", []),
+    }
+
+    try:
+        response_text = await asyncio.to_thread(agent_chat, session_id, message, context)
+        return {"response": response_text, "session_id": session_id}
     except Exception as e:
-        logger.error(f"AI generation failed: {e}")
+        logger.error(f"AI chat error: {e}")
         return Response(
             status_code=500,
-            content=f'{{"error": "AI generation failed: {str(e)}"}}',
+            content=f'{{"error": "AI chat failed: {str(e)}"}}',
+            media_type="application/json",
+        )
+
+
+@app.delete("/ai/chat/{session_id}")
+async def ai_clear_chat(session_id: str):
+    """Clear conversation history for a session (new thread)."""
+    agent_new_thread(session_id)
+    return {"status": "cleared", "session_id": session_id}
+
+
+@app.post("/ai/explain")
+async def ai_explain_output(request: Request):
+    """
+    One-shot: explain a cell's output in plain language.
+    No conversation memory — each call is independent.
+    """
+    body = await request.json()
+    code = body.get("code", "")
+    output = body.get("output", "")
+    microvm_id = body.get("microvm_id", "")
+    microvm_endpoint = body.get("microvm_endpoint", "")
+
+    if not code and not output:
+        return Response(
+            status_code=400,
+            content='{"error": "code and/or output required"}',
+            media_type="application/json",
+        )
+
+    context = {
+        "proxy_url": f"http://localhost:{os.environ.get('PROXY_PORT', '8081')}",
+        "microvm_id": microvm_id,
+        "microvm_endpoint": microvm_endpoint,
+    }
+
+    try:
+        result = await asyncio.to_thread(agent_explain, code, output, context)
+        return {"explanation": result.get("explanation", ""), "summary": result.get("summary", "")}
+    except Exception as e:
+        logger.error(f"AI explain error: {e}")
+        return Response(
+            status_code=500,
+            content=f'{{"error": "Explain failed: {str(e)}"}}',
+            media_type="application/json",
+        )
+
+
+@app.post("/ai/fix")
+async def ai_fix_error(request: Request):
+    """
+    One-shot: fix a cell's error and return corrected code.
+    No conversation memory — each call is independent.
+    """
+    body = await request.json()
+    code = body.get("code", "")
+    error = body.get("error", "")
+    microvm_id = body.get("microvm_id", "")
+    microvm_endpoint = body.get("microvm_endpoint", "")
+
+    if not code or not error:
+        return Response(
+            status_code=400,
+            content='{"error": "code and error required"}',
+            media_type="application/json",
+        )
+
+    context = {
+        "proxy_url": f"http://localhost:{os.environ.get('PROXY_PORT', '8081')}",
+        "microvm_id": microvm_id,
+        "microvm_endpoint": microvm_endpoint,
+    }
+
+    try:
+        fixed_code = await asyncio.to_thread(agent_fix_error, code, error, context)
+        return {"fixed_code": fixed_code}
+    except Exception as e:
+        logger.error(f"AI fix error: {e}")
+        return Response(
+            status_code=500,
+            content=f'{{"error": "Fix failed: {str(e)}"}}',
             media_type="application/json",
         )
 
@@ -808,7 +959,7 @@ async def ai_suggest_tag(request: Request):
 
     # Build a compact summary of the notebook content
     cell_summaries = []
-    for i, cell in enumerate(cells[:4]):  # Max 4 cells
+    for i, cell in enumerate(cells[:MAX_CELLS_FOR_TAG]):  # Max cells for classification
         code = (cell.get("code", "") or "")[:200]
         cell_type = cell.get("type", "code")
         cell_summaries.append(f"[{cell_type}] {code}")
@@ -829,13 +980,13 @@ Tag:"""
         response = client.converse(
             modelId=AI_MODEL_ID,
             messages=[{"role": "user", "content": [{"text": prompt}]}],
-            inferenceConfig={"maxTokens": 10, "temperature": 0.0},
+            inferenceConfig={"maxTokens": TAG_MAX_TOKENS, "temperature": TAG_TEMPERATURE},
         )
 
         output = response["output"]["message"]["content"][0]["text"].strip()
         # Clean up — take first 2 words max, strip punctuation
         tag = " ".join(output.split()[:2]).strip(".,;:!\"'")
-        if not tag or len(tag) > 25:
+        if not tag or len(tag) > TAG_MAX_LENGTH:
             tag = "Exploration"
 
         logger.info(f"AI suggested tag: '{tag}' for notebook '{notebook_name}'")

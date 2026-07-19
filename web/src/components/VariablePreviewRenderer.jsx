@@ -2,6 +2,7 @@
  * Smart variable preview renderer for the Variable Explorer.
  * Renders different data types with appropriate visual representations.
  */
+import { sanitizeHtml } from '../services/sanitize'
 
 // Check if a string looks like a hex color
 const isHexColor = (s) => /^['"]?#[0-9a-fA-F]{3,8}['"]?$/.test(s.trim())
@@ -46,7 +47,7 @@ function parseDictItems(value) {
 export default function VariablePreviewRenderer({ info }) {
   // HTML preview (DataFrames, Series)
   if (info.preview_type === 'html') {
-    return <div className="var-preview-html" dangerouslySetInnerHTML={{ __html: info.preview }} />
+    return <div className="var-preview-html" dangerouslySetInnerHTML={{ __html: sanitizeHtml(info.preview) }} />
   }
 
   const value = info.preview || info.value || ''

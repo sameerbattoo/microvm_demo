@@ -1,6 +1,7 @@
 import { useState, useCallback, useEffect, useRef } from 'react'
 import Notebook from './components/Notebook'
 import Sidebar from './components/Sidebar'
+import AiChatPanel from './components/AiChatPanel'
 import { ConfirmModal, InputModal } from './components/Modal'
 import { IconZap, IconSun, IconMoon } from './components/Icons'
 import { PROXY_URL } from './config'
@@ -75,6 +76,7 @@ export default function App() {
         executionNumber: c.executionNumber || null,
         executionTime: c.executionTime || null,
         lastExecutedCode: c.lastExecutedCode || null,
+        aiExplanation: c.aiExplanation || null,
       }))
       return { ...tab, _cells: cells.length > 0 ? cells : undefined }
     })
@@ -114,6 +116,8 @@ export default function App() {
 
   // Modal state
   const [modal, setModal] = useState(null)
+  const [showAiChat, setShowAiChat] = useState(true)
+  const [aiAvailable, setAiAvailable] = useState(false)
   const [newNotebookName, setNewNotebookName] = useState('')
   const [newNotebookDesc, setNewNotebookDesc] = useState('')
 
@@ -178,6 +182,12 @@ export default function App() {
         }
       })
       .catch(() => {})
+
+    // Check AI availability
+    fetch(`${PROXY_URL}/ai/config`)
+      .then(r => r.json())
+      .then(data => setAiAvailable(data.ai_available === true))
+      .catch(() => setAiAvailable(false))
   }, [])
 
   // Auto-reconnect tabs that have a saved microvmId
@@ -260,6 +270,7 @@ export default function App() {
     setTabs(prev => [...prev, tab])
     setActiveTabId(tab.id)
     setModal(null)
+    setShowAiChat(true)
   }, [newNotebookName, newNotebookDesc])
 
   const closeTab = useCallback((tabId) => {
@@ -485,6 +496,7 @@ export default function App() {
       tab._loadedCells = notebook.cells
       setTabs(prev => [...prev, { ...tab }])
       setActiveTabId(tab.id)
+      setShowAiChat(true)
     } catch (err) {
       alert(`Failed to load sample: ${err.message}`)
     }
@@ -493,8 +505,8 @@ export default function App() {
   // Listen for "Open Notebook" events from Notebook toolbar (creates a new tab)
   useEffect(() => {
     const handler = (e) => {
-      const { name, description, cells } = e.detail
-      const tab = createTab(name, description)
+      const { name, description, tag, cells } = e.detail
+      const tab = createTab(name, description, tag || undefined)
       tab._loadedCells = cells
       setTabs(prev => [...prev, { ...tab }])
       setActiveTabId(tab.id)
@@ -534,6 +546,7 @@ export default function App() {
           onTerminateAndSave={terminateAndSave}
           onSuspendInstance={suspendInstance}
           onUpdateTabTag={(tabId, tag) => updateTab(tabId, { tag })}
+          onSyncPackages={(pkgList) => { if (activeTabId) updateTab(activeTabId, { _packages: pkgList }) }}
           onScrollToCell={(idx) => {
             const activeCells = tabs.find(t => t.id === activeTabId)?._cells || []
             const cell = activeCells[idx]
@@ -603,10 +616,43 @@ export default function App() {
               attachedIds={attachedIds}
               theme={theme}
               onToggleTheme={toggleTheme}
+              aiAvailable={aiAvailable}
             />
           ))}
         </main>
+        {showAiChat && (
+          <AiChatPanel
+            activeTab={tabs.find(t => t.id === activeTabId) || null}
+            uploadedFiles={uploadedFiles}
+            onClose={() => setShowAiChat(false)}
+            onUpdateMessages={(msgs) => updateTab(activeTabId, { _chatMessages: msgs })}
+            onUpdateCell={(code) => {
+              const tab = tabs.find(t => t.id === activeTabId)
+              if (!tab || !tab._cells || tab._activeCellIndex == null) return
+              const newCells = [...tab._cells]
+              newCells[tab._activeCellIndex] = { ...newCells[tab._activeCellIndex], code }
+              updateTab(activeTabId, { _cells: newCells })
+            }}
+            onInsertCells={(codeBlocks) => {
+              const tab = tabs.find(t => t.id === activeTabId)
+              if (!tab || !tab._cells) return
+              const insertIdx = (tab._activeCellIndex ?? tab._cells.length - 1) + 1
+              const newCells = [...tab._cells]
+              codeBlocks.forEach((code, i) => {
+                newCells.splice(insertIdx + i, 0, { id: Date.now() + i, type: 'code', code, output: null, error: null, html: null, image: null })
+              })
+              updateTab(activeTabId, { _cells: newCells })
+            }}
+          />
+        )}
       </div>
+
+      {/* AI Chat toggle button (bottom-right) */}
+      {!showAiChat && tabs.length > 0 && aiAvailable && (
+        <button className="ai-fab" onClick={() => setShowAiChat(true)} title="Open AI Assistant">
+          ✨
+        </button>
+      )}
 
       {/* Modals */}
       {modal?.type === 'newNotebook' && (

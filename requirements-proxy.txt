@@ -1,0 +1,14 @@
+# Proxy server dependencies (runs on your machine, NOT inside the MicroVM)
+
+# Web framework
+fastapi>=0.139.0
+uvicorn>=0.51.0
+
+# HTTP client (for forwarding requests to MicroVMs)
+httpx>=0.28.1
+
+# AWS SDK (for Lambda MicroVM API, Bedrock, S3, DynamoDB, Athena, Glue)
+boto3>=1.43.51
+
+# AI Agent framework (Strands Agents SDK — powers the notebook AI assistant)
+strands-agents>=1.48.0

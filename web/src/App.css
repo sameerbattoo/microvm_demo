@@ -164,3 +164,30 @@
   font-size: 11px;
   color: var(--text-primary);
 }
+
+
+/* AI Chat floating action button */
+.ai-fab {
+  position: fixed;
+  bottom: 20px;
+  right: 20px;
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  background: var(--accent-primary);
+  color: white;
+  border: none;
+  font-size: 20px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 4px 12px rgba(99, 144, 240, 0.4);
+  transition: all 0.2s ease;
+  z-index: 100;
+}
+
+.ai-fab:hover {
+  transform: scale(1.1);
+  box-shadow: 0 6px 20px rgba(99, 144, 240, 0.5);
+}

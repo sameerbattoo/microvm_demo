@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect } from 'react'
 import { marked } from 'marked'
+import { sanitizeMarkdown } from '../services/sanitize'
 import { IconCode, IconCheck, IconPlus, IconTrash, IconGripVertical } from './Icons'
 import './Cell.css'
 
@@ -77,7 +78,7 @@ export default function MarkdownCell({
           <div
             className="md-rendered"
             onDoubleClick={() => setMdEditing(true)}
-            dangerouslySetInnerHTML={{ __html: cell.code ? marked.parse(cell.code) : '<p class="md-placeholder">Double-click to edit markdown</p>' }}
+            dangerouslySetInnerHTML={{ __html: cell.code ? sanitizeMarkdown(marked.parse(cell.code)) : '<p class="md-placeholder">Double-click to edit markdown</p>' }}
           />
         )}
         <div className="cell-actions md-actions">
