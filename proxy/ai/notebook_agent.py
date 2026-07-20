@@ -95,6 +95,9 @@ def get_or_create_agent(session_id: str, context: dict = None) -> Agent:
             current_time=now.strftime("%Y-%m-%d %H:%M UTC (%A)"),
             aws_region=aws_region,
             memory_tier=memory_tier,
+            athena_workgroup=os.environ.get("ATHENA_WORKGROUP", "microvm-demo"),
+            athena_db=os.environ.get("ATHENA_DB", "microvm_demo_db"),
+            s3_bucket=os.environ.get("ARTIFACT_BUCKET", f"microvm-sandbox-artifacts-{os.environ.get('ACCOUNT_ID', 'unknown')}-{aws_region}"),
         )
         agent = Agent(
             model=get_model(),

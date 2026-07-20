@@ -4,7 +4,7 @@ import 'prismjs/components/prism-python'
 import { marked } from 'marked'
 import { sanitizeHtml, sanitizeMarkdown } from '../services/sanitize'
 import MarkdownCell from './MarkdownCell'
-import { IconPlay, IconPlus, IconTrash, IconX, IconStop, IconChevronDown, IconChevronRight, IconGripVertical } from './Icons'
+import { IconPlay, IconPlus, IconTrash, IconX, IconStop, IconChevronDown, IconChevronRight, IconGripVertical, IconEraser } from './Icons'
 import { PROXY_URL } from '../config'
 import './Cell.css'
 
@@ -36,6 +36,7 @@ export default function Cell({
   onInsertAbove,
   onSetAiExplanation,
   onDelete,
+  onClearOutput,
   onTypeChange,
   onDragStart,
   onDragOver,
@@ -91,19 +92,24 @@ export default function Cell({
     return html
   }, [cell.code, searchQuery, searchActiveOccurrence])
 
+  // Smart execute: detects NLP vs code and routes accordingly
+  const smartExecute = () => {
+    const code = (cell.code || '').trim()
+    if (code && aiAvailable && isConnected) {
+      const looksLikeCode = /^(import |from |def |class |for |while |if |#|[a-zA-Z_]\w*\s*[=([]|print\(|plt\.|pd\.|np\.)/.test(code) || code.includes('=') || code.includes('(')
+      if (!looksLikeCode && !generating) {
+        handleGenerate()
+        return
+      }
+    }
+    onExecute()
+  }
+
   const handleKeyDown = (e) => {
     // Shift+Enter to execute (or generate if content looks like NLP)
     if (e.key === 'Enter' && e.shiftKey) {
       e.preventDefault()
-      const code = (cell.code || '').trim()
-      if (code && aiAvailable && isConnected) {
-        const looksLikeCode = /^(import |from |def |class |for |while |if |#|[a-zA-Z_]\w*\s*[=([]|print\(|plt\.|pd\.|np\.)/.test(code) || code.includes('=') || code.includes('(')
-        if (!looksLikeCode && !generating) {
-          handleGenerate()
-          return
-        }
-      }
-      onExecute()
+      smartExecute()
     }
     // Tab to indent
     if (e.key === 'Tab') {
@@ -323,18 +329,18 @@ export default function Cell({
               />
             </div>
             <div className="cell-actions">
-              {cell.status === 'running' ? (
+              {cell.status === 'running' || generating ? (
                 <button
                   className="cell-run-btn cell-stop-btn"
-                  onClick={onInterrupt}
-                  title="Stop execution"
+                  onClick={generating ? () => {} : onInterrupt}
+                  title={generating ? 'Generating code...' : 'Stop execution'}
                 >
-                  <IconStop width={12} height={12} />
+                  {generating ? <span className="cell-gen-spinner" /> : <IconStop width={12} height={12} />}
                 </button>
               ) : (
                 <button
                   className="cell-run-btn"
-                  onClick={onExecute}
+                  onClick={smartExecute}
                   disabled={!isConnected || cell.status === 'running'}
                   title="Run cell (Shift+Enter)"
                 >
@@ -351,10 +357,6 @@ export default function Cell({
                 <IconTrash width={14} height={14} />
               </button>
               {isConnected && aiAvailable && cell.code?.trim() && (() => {
-                // Heuristic: detect if cell content looks like code or natural language
-                const code = cell.code.trim()
-                const looksLikeCode = /^(import |from |def |class |for |while |if |#|[a-zA-Z_]\w*\s*[=([]|print\(|plt\.|pd\.|np\.)/.test(code) || code.includes('=') || code.includes('(')
-                
                 if (cell.error) {
                   return (
                     <button
@@ -365,26 +367,20 @@ export default function Cell({
                     >🔧</button>
                   )
                 }
-                if (!looksLikeCode) {
+                // Show explain button only when content looks like actual code
+                const code = cell.code.trim()
+                const looksLikeCode = /^(import |from |def |class |for |while |if |#|[a-zA-Z_]\w*\s*[=([]|print\(|plt\.|pd\.|np\.)/.test(code) || code.includes('=') || code.includes('(')
+                if (looksLikeCode) {
                   return (
                     <button
-                      className={`cell-action-btn cell-ai-action-btn cell-generate-btn ${generating ? 'cell-generating' : ''}`}
-                      onClick={(e) => { e.stopPropagation(); handleGenerate() }}
-                      disabled={generating}
-                      title="Generate code from description (AI)"
-                    >
-                      {generating ? <span className="cell-gen-spinner" /> : '✨'}
-                    </button>
+                      className="cell-action-btn cell-ai-action-btn"
+                      onClick={(e) => { e.stopPropagation(); handleAiExplain() }}
+                      disabled={aiResult?.loading}
+                      title="Explain with AI"
+                    >💡</button>
                   )
                 }
-                return (
-                  <button
-                    className="cell-action-btn cell-ai-action-btn"
-                    onClick={(e) => { e.stopPropagation(); handleAiExplain() }}
-                    disabled={aiResult?.loading}
-                    title="Explain with AI"
-                  >💡</button>
-                )
+                return null
               })()}
             </div>
           </div>
@@ -402,6 +398,11 @@ export default function Cell({
                 <div className="cell-output-collapse-bar" onClick={() => setOutputCollapsed(true)}>
                   <IconChevronDown width={10} height={10} />
                   <span>Output</span>
+                  {onClearOutput && (
+                    <button className="cell-output-clear-btn" onClick={(e) => { e.stopPropagation(); onClearOutput() }} title="Clear output">
+                      <IconEraser width={11} height={11} /> Clear
+                    </button>
+                  )}
                 </div>
                 {cell.image && (
                   <div className="output-image">

@@ -34,22 +34,21 @@
       "Resource": "arn:aws:s3:::microvm-sandbox-artifacts-*/sessions/*"
     },
     {
-      "Sid": "S3ListBuckets",
-      "Effect": "Allow",
-      "Action": "s3:ListAllMyBuckets",
-      "Resource": "*"
-    },
-    {
       "Sid": "DynamoDBReadAccess",
       "Effect": "Allow",
       "Action": [
         "dynamodb:Scan",
         "dynamodb:Query",
         "dynamodb:GetItem",
-        "dynamodb:DescribeTable",
-        "dynamodb:ListTables"
+        "dynamodb:DescribeTable"
       ],
       "Resource": "arn:aws:dynamodb:*:*:table/microvm-demo-*"
+    },
+    {
+      "Sid": "DynamoDBListTables",
+      "Effect": "Allow",
+      "Action": "dynamodb:ListTables",
+      "Resource": "*"
     },
     {
       "Sid": "AthenaQueryAccess",
@@ -58,19 +57,17 @@
         "athena:StartQueryExecution",
         "athena:GetQueryExecution",
         "athena:GetQueryResults",
-        "athena:GetWorkGroup",
-        "athena:ListDatabases",
-        "athena:ListTableMetadata",
-        "athena:GetTableMetadata"
+        "athena:GetWorkGroup"
       ],
-      "Resource": "*"
+      "Resource": [
+        "arn:aws:athena:*:*:workgroup/microvm-demo"
+      ]
     },
     {
       "Sid": "GlueCatalogAccess",
       "Effect": "Allow",
       "Action": [
         "glue:GetDatabase",
-        "glue:GetDatabases",
         "glue:GetTable",
         "glue:GetTables"
       ],

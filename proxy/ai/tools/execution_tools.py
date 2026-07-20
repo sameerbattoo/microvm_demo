@@ -244,7 +244,12 @@ def get_available_data_sources() -> str:
             lines.append("Athena Tables (query via boto3 or awswrangler):")
             for t in athena:
                 cols = t.get('columns', [])
-                col_info = f" — columns: {', '.join(cols[:10])}" if cols else ""
+                # Columns can be dicts ({"name": "x", "type": "y"}) or strings
+                if cols and isinstance(cols[0], dict):
+                    col_names = [c.get('name', '') for c in cols[:10]]
+                else:
+                    col_names = cols[:10]
+                col_info = f" — columns: {', '.join(col_names)}" if col_names else ""
                 lines.append(f"  - {t.get('database', '')}.{t.get('name', '')} ({t.get('column_count', 0)} cols){col_info}")
             lines.append("")
 

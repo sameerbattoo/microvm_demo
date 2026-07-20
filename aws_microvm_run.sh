@@ -136,15 +136,16 @@ if ! aws iam get-role --role-name "$EXEC_ROLE_NAME" --profile "$AWS_CLI_PROFILE"
     --role-name "$EXEC_ROLE_NAME" \
     --assume-role-policy-document file://"$ROOT_DIR/iam/exec-role-trust.json" \
     --profile "$AWS_CLI_PROFILE" >/dev/null
-
-  aws iam put-role-policy \
-    --role-name "$EXEC_ROLE_NAME" \
-    --policy-name "ExecPolicy" \
-    --policy-document file://"$ROOT_DIR/iam/exec-role-permissions.json" \
-    --profile "$AWS_CLI_PROFILE"
 else
   echo "   Exec role exists ✓"
 fi
+
+# Always update the exec role policy (picks up permission changes)
+aws iam put-role-policy \
+  --role-name "$EXEC_ROLE_NAME" \
+  --policy-name "ExecPolicy" \
+  --policy-document file://"$ROOT_DIR/iam/exec-role-permissions.json" \
+  --profile "$AWS_CLI_PROFILE"
 
 # --- Setup sample data (DynamoDB + S3) ---
 bash "$ROOT_DIR/scripts/setup_sample_data.sh"
@@ -179,6 +180,7 @@ echo ">> Starting token proxy on http://localhost:$PROXY_PORT"
   POLL_INTERVAL_MS="$POLL_INTERVAL_MS" \
   ATHENA_DB="$ATHENA_DB" \
   ATHENA_WORKGROUP="$ATHENA_WORKGROUP" \
+  ARTIFACT_BUCKET="$ARTIFACT_BUCKET" \
   $PYTHON -m uvicorn proxy.server:app --host 0.0.0.0 --port "$PROXY_PORT" --log-level warning) &
 PROXY_PID=$!
 sleep 1

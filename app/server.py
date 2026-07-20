@@ -360,6 +360,74 @@ async def health():
     }
 
 
+@app.get("/metrics")
+async def metrics():
+    """
+    Real-time system metrics for this MicroVM.
+    Uses psutil to report CPU, memory, disk, and network utilization.
+    Reports process-level memory (more relevant for notebooks than system-level).
+    """
+    import psutil
+    import time
+
+    # CPU usage (non-blocking, uses last-interval comparison)
+    cpu_percent = psutil.cpu_percent(interval=None)
+
+    # Memory — process-level RSS is more meaningful than system virtual_memory
+    mem = psutil.virtual_memory()
+    proc = psutil.Process()
+    proc_mem = proc.memory_info()
+    # Process RSS as percentage of total allocated memory
+    proc_mem_pct = (proc_mem.rss / mem.total * 100) if mem.total > 0 else 0
+    effective_mem_pct = max(mem.percent, proc_mem_pct)
+
+    # Disk (/tmp is where user data lives)
+    try:
+        disk = psutil.disk_usage('/tmp')
+    except Exception:
+        disk = None
+
+    # Network I/O (cumulative since boot)
+    net = psutil.net_io_counters()
+
+    # Process info
+    proc_count = len(psutil.pids())
+
+    # Uptime
+    uptime_sec = time.time() - psutil.boot_time()
+
+    # Executor stats
+    stats = executor.get_stats()
+
+    return {
+        "cpu": {
+            "percent": round(cpu_percent, 1),
+            "count": psutil.cpu_count() or 1,
+        },
+        "memory": {
+            "total_mb": round(mem.total / (1024 * 1024), 1),
+            "used_mb": round(proc_mem.rss / (1024 * 1024), 1),
+            "percent": round(effective_mem_pct, 1),
+        },
+        "disk": {
+            "total_mb": round(disk.total / (1024 * 1024), 1) if disk else 0,
+            "used_mb": round(disk.used / (1024 * 1024), 1) if disk else 0,
+            "free_mb": round(disk.free / (1024 * 1024), 1) if disk else 0,
+            "percent": round(disk.percent, 1) if disk else 0,
+        },
+        "network": {
+            "bytes_sent": net.bytes_sent,
+            "bytes_recv": net.bytes_recv,
+        },
+        "processes": proc_count,
+        "uptime_sec": round(uptime_sec, 0),
+        "executor": {
+            "execution_count": stats.get("execution_count", 0),
+            "variables_count": stats.get("variables_count", 0),
+        },
+    }
+
+
 @app.post("/upload")
 async def upload_file(request: Request):
     """

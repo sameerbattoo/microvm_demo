@@ -418,43 +418,62 @@
 
 /* Tag groups */
 .nb-tag-group {
-  margin-bottom: var(--space-1);
+  margin-bottom: var(--space-2);
+}
+
+.nb-tag-group > .sidebar-item {
+  padding-left: 32px;
 }
 
 .nb-tag-header {
   display: flex;
   align-items: center;
-  gap: var(--space-1);
-  padding: 4px var(--space-3);
+  gap: 6px;
+  padding: 6px var(--space-3);
   cursor: pointer;
   user-select: none;
-  transition: color var(--transition-fast);
+  transition: all var(--transition-fast);
+  border-radius: var(--radius-sm);
 }
 
 .nb-tag-header:hover {
   color: var(--text-primary);
+  background: var(--surface-3);
+}
+
+.nb-tag-icon {
+  color: var(--accent-primary);
+  opacity: 0.8;
+  flex-shrink: 0;
 }
 
 .nb-tag-chevron {
   font-size: 9px;
   color: var(--text-muted);
   width: 10px;
+  flex-shrink: 0;
 }
 
 .nb-tag-name {
-  font-size: var(--font-size-xs);
-  font-weight: 600;
+  font-size: 11px;
+  font-weight: 700;
   text-transform: uppercase;
-  letter-spacing: 0.4px;
-  color: var(--text-muted);
+  letter-spacing: 0.6px;
+  color: var(--text-secondary);
+  flex: 1;
+}
+
+.nb-tag-header:hover .nb-tag-name {
+  color: var(--text-primary);
 }
 
 .nb-tag-count {
   font-size: 9px;
   color: var(--text-muted);
   background: var(--surface-4);
-  padding: 0 5px;
-  border-radius: 6px;
+  padding: 1px 6px;
+  border-radius: 8px;
+  font-weight: 500;
 }
 
 .nb-tag-autotag-btn {
@@ -466,7 +485,6 @@
   border-radius: var(--radius-sm);
   display: flex;
   align-items: center;
-  margin-left: auto;
   transition: all var(--transition-fast);
 }
 
@@ -913,41 +931,64 @@
 }
 
 .vm-detail-section {
-  padding: var(--space-2) 0;
-  border-bottom: 1px solid var(--border-subtle);
+  padding: var(--space-2) var(--space-3);
+  margin: var(--space-2) 0;
+  background: var(--surface-2);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-subtle);
 }
 
 .vm-detail-section:last-of-type {
-  border-bottom: none;
+  border-bottom: 1px solid var(--border-subtle);
 }
 
 .vm-detail-section-title {
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 700;
   text-transform: uppercase;
-  letter-spacing: 0.5px;
+  letter-spacing: 0.6px;
   color: var(--text-muted);
-  margin-bottom: var(--space-1);
+  margin-bottom: var(--space-2);
+  padding-bottom: var(--space-1);
+  border-bottom: 1px solid var(--border-subtle);
   display: flex;
   align-items: center;
   gap: 6px;
 }
 
 .vm-detail-section-title svg {
-  opacity: 0.7;
+  opacity: 0.8;
+}
+
+/* Color-code the section icons */
+.vm-detail-section:nth-child(1) .vm-detail-section-title {
+  color: var(--accent-primary);
+}
+
+.vm-detail-section:nth-child(2) .vm-detail-section-title {
+  color: var(--accent-warning);
+}
+
+.vm-detail-section:nth-child(3) .vm-detail-section-title {
+  color: var(--accent-success);
+}
+
+.vm-detail-section:nth-child(4) .vm-detail-section-title {
+  color: #f9e2af;
 }
 
 .vm-detail-row {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 2px 0;
+  padding: 3px 0;
   font-size: var(--font-size-xs);
 }
 
 .vm-detail-row-sub {
   padding-left: var(--space-3);
-  opacity: 0.75;
+  opacity: 0.7;
+  font-size: 10px;
 }
 
 .vm-detail-label {
@@ -976,14 +1017,69 @@
 
 .vm-detail-total {
   border-top: 1px solid var(--border-subtle);
-  margin-top: var(--space-1);
-  padding-top: var(--space-1);
+  margin-top: var(--space-2);
+  padding-top: var(--space-2);
   font-weight: 600;
 }
 
 .vm-detail-total .vm-detail-value {
   color: var(--text-primary);
   font-weight: 700;
+  font-size: 12px;
+}
+
+/* VM Metrics Gauges */
+.vm-metrics-gauges {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: var(--space-2);
+}
+
+.vm-metric-gauge {
+  display: grid;
+  grid-template-columns: 32px 1fr 36px;
+  align-items: center;
+  gap: 6px;
+}
+
+.vm-metric-label {
+  font-size: 10px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+
+.vm-metric-value {
+  font-size: 10px;
+  font-family: var(--font-mono);
+  color: var(--text-secondary);
+  text-align: right;
+}
+
+.vm-metric-bar {
+  height: 6px;
+  background: var(--surface-4);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.vm-metric-fill {
+  height: 100%;
+  border-radius: 3px;
+  transition: width 0.5s ease;
+}
+
+.vm-metric-cpu {
+  background: linear-gradient(90deg, #89b4fa, #b4befe);
+}
+
+.vm-metric-mem {
+  background: linear-gradient(90deg, #a6e3a1, #f9e2af);
+}
+
+.vm-metric-disk {
+  background: linear-gradient(90deg, #f9e2af, #f38ba8);
 }
 
 .vm-detail-actions {

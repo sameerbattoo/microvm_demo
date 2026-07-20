@@ -30,6 +30,7 @@ import json
 import logging
 import httpx
 import boto3
+from datetime import datetime, timezone
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -87,6 +88,10 @@ class BoundedTokenCache:
     def __len__(self):
         return len(self._cache)
 
+    def pop(self, key: str, default=None):
+        """Remove and return a cached entry."""
+        return self._cache.pop(key, default)
+
 
 _token_cache = BoundedTokenCache()
 
@@ -116,6 +121,40 @@ _active_microvms: dict[str, dict] = {}  # id -> {"endpoint": str, "launched_at":
 # Cost tracker instance (persists across page refreshes, resets on proxy restart)
 from proxy.cost_tracker import CostTracker
 _cost_tracker = CostTracker()
+
+# Initialize SQLite database
+from proxy.db import init_db, notebook_list, notebook_get, notebook_create, notebook_update, notebook_delete
+from proxy.db import vm_session_create, vm_session_update_state, vm_session_update_cost, vm_session_get
+from proxy.db import metrics_record, metrics_get_latest, metrics_get_history, metrics_cleanup
+from proxy.db import ai_session_get, ai_session_save, ai_session_delete
+init_db()
+
+
+# Background task: poll metrics from running VMs every 10s
+_metrics_task = None
+
+
+async def _poll_metrics_loop():
+    """
+    Background loop — intentionally does NOT poll VMs directly.
+    Metrics are fetched on-demand via /instances/metrics endpoint
+    (called by the frontend only for the active VM).
+    
+    This loop only does housekeeping: cleanup old metrics data.
+    """
+    while True:
+        await asyncio.sleep(60)  # Cleanup every 60s
+        try:
+            metrics_cleanup(hours=24)
+        except Exception:
+            pass
+
+
+@app.on_event("startup")
+async def _start_metrics_polling():
+    """Start the background metrics polling task on server startup."""
+    global _metrics_task
+    _metrics_task = asyncio.create_task(_poll_metrics_loop())
 
 # AWS client (uses default credentials from environment/profile)
 # IMPORTANT: Requires boto3 >= 1.43.40 for lambda-microvms service client
@@ -199,7 +238,34 @@ async def proxy_request(path: str, request: Request):
                 content=body,
             )
 
-        # Track last successful activity for this VM (used to detect auto-resume)
+            # Retry with backoff on 502 — VM may be auto-resuming from suspended state
+            if response.status_code == 502:
+                for retry in range(2):
+                    wait = 2 + retry
+                    logger.info(f"Got 502 from {microvm_id}, retry {retry + 1}/2 in {wait}s...")
+                    await asyncio.sleep(wait)
+                    response = await client.request(
+                        method=request.method,
+                        url=target_url,
+                        headers=headers,
+                        content=body,
+                    )
+                    if response.status_code != 502:
+                        break
+
+            # Track health: count consecutive failures
+            if response.status_code >= 502:
+                health = _active_microvms.get(microvm_id, {})
+                strikes = health.get("_502_strikes", 0) + 1
+                if microvm_id in _active_microvms:
+                    _active_microvms[microvm_id]["_502_strikes"] = strikes
+                logger.warning(f"VM {microvm_id} unhealthy: {strikes} consecutive 502s")
+            else:
+                # Reset strike counter on success
+                if microvm_id in _active_microvms:
+                    _active_microvms[microvm_id]["_502_strikes"] = 0
+
+        # Track last successful activity for this VM
         if response.status_code < 500 and microvm_id in _active_microvms:
             _active_microvms[microvm_id]["last_active"] = time.time()
 
@@ -210,6 +276,10 @@ async def proxy_request(path: str, request: Request):
         )
     except Exception as e:
         logger.error(f"Proxy request failed: {e}")
+        # Track strike for connection errors too
+        if microvm_id in _active_microvms:
+            strikes = _active_microvms[microvm_id].get("_502_strikes", 0) + 1
+            _active_microvms[microvm_id]["_502_strikes"] = strikes
         return Response(
             content=f'{{"error": "Proxy request failed: {str(e)}"}}',
             status_code=502,
@@ -290,6 +360,17 @@ async def launch_microvm(request: Request):
 
         # Start cost tracking from launch
         _cost_tracker.record(microvm_id, "RUNNING", memory_mib=memory_mib)
+
+        # Record VM session in SQLite
+        vm_session_create(
+            microvm_id=microvm_id,
+            notebook_id=notebook_name,  # Frontend can update with real notebook ID later
+            session_id=session_id,
+            memory_mib=memory_mib,
+            endpoint=endpoint,
+            idle_timeout_sec=idle_timeout_sec,
+            max_duration_sec=max_duration_sec,
+        )
 
         logger.info(f"MicroVM launched: {microvm_id} at {endpoint}")
 
@@ -384,15 +465,14 @@ async def list_instances():
             instances[microvm_id] = {
                 "endpoint": endpoint,
                 "name": local_info.get("name", ""),
-                "state": state if not (state == "SUSPENDED" and local_info.get("last_active", 0) > time.time() - 60) else "RUNNING",
+                "state": state,
                 "launched_at": local_info.get("launched_at"),
                 "memory_mib": memory_mib,
                 "idle_timeout_sec": local_info.get("idle_timeout_sec"),
                 "max_duration_sec": local_info.get("max_duration_sec"),
                 "cost": _cost_tracker.get_cost(microvm_id),
-            }
-
-            # Track state transitions for cost
+                "unhealthy": local_info.get("_502_strikes", 0) >= 3,
+            }            # Track state transitions for cost
             _cost_tracker.record(microvm_id, state, memory_mib=memory_mib)
 
         # Include VMs from _active_microvms that aren't yet in the AWS list (just launched)
@@ -415,6 +495,59 @@ async def list_instances():
     except Exception as e:
         logger.error(f"Failed to list instances: {e}")
         return {"instances": _active_microvms, "total_cost": _cost_tracker.get_total_cost()}
+
+
+@app.get("/instances/metrics")
+async def get_instance_metrics(microvm_id: str = None):
+    """
+    Fetch real-time metrics from a specific running MicroVM.
+    If microvm_id is provided, fetches only that VM (doesn't wake others).
+    If not provided, returns cached latest metrics from DB (no VM calls).
+    
+    IMPORTANT: Only call this for the VM the user is actively viewing.
+    Calling /metrics on a VM counts as traffic and prevents it from suspending.
+    """
+    # If no specific VM requested, return cached data from DB (no VM traffic)
+    if not microvm_id:
+        result = {}
+        for mid in _active_microvms:
+            latest = metrics_get_latest(mid)
+            if latest:
+                result[mid] = latest
+        return {"metrics": result}
+
+    # Fetch live metrics from a specific VM
+    info = _active_microvms.get(microvm_id)
+    if not info or not info.get("endpoint"):
+        return {"metrics": {}}
+
+    try:
+        token = get_auth_token(microvm_id)
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.get(
+                f"https://{info['endpoint']}/metrics",
+                headers={"X-aws-proxy-auth": token},
+            )
+            if resp.status_code == 200:
+                m = resp.json()
+                # Store in DB for history/sparklines
+                metrics_record(
+                    microvm_id=microvm_id,
+                    cpu_pct=m.get("cpu", {}).get("percent", 0),
+                    mem_pct=m.get("memory", {}).get("percent", 0),
+                    mem_used_mb=m.get("memory", {}).get("used_mb", 0),
+                    disk_pct=m.get("disk", {}).get("percent", 0),
+                    disk_used_mb=m.get("disk", {}).get("used_mb", 0),
+                    net_bytes_sent=m.get("network", {}).get("bytes_sent", 0),
+                    net_bytes_recv=m.get("network", {}).get("bytes_recv", 0),
+                    processes=m.get("processes", 0),
+                    uptime_sec=m.get("uptime_sec", 0),
+                )
+                return {"metrics": {microvm_id: m}}
+    except Exception:
+        pass
+
+    return {"metrics": {}}
 
 
 @app.post("/resume/{microvm_id}")
@@ -453,6 +586,86 @@ async def health():
         "active_instances": len(_active_microvms),
         "poll_interval_ms": POLL_INTERVAL_MS,
     }
+
+
+# ============================================================
+# NOTEBOOK CRUD (backed by SQLite)
+# ============================================================
+
+@app.get("/notebooks")
+async def api_notebook_list():
+    """List all notebooks."""
+    return {"notebooks": notebook_list()}
+
+
+@app.get("/notebooks/{notebook_id}")
+async def api_notebook_get(notebook_id: str):
+    """Get a single notebook by ID."""
+    nb = notebook_get(notebook_id)
+    if not nb:
+        return Response(status_code=404, content='{"error": "Notebook not found"}', media_type="application/json")
+    return nb
+
+
+@app.post("/notebooks")
+async def api_notebook_create(request: Request):
+    """Create a new notebook."""
+    body = await request.json()
+    notebook_id = body.get("id", str(int(datetime.now(timezone.utc).timestamp() * 1000)))
+    name = body.get("name", f"Notebook {notebook_id}")
+    description = body.get("description", "")
+    tag = body.get("tag", "Drafts")
+    cells = body.get("cells", [])
+    result = notebook_create(notebook_id, name, description, tag, cells)
+    return result
+
+
+@app.put("/notebooks/{notebook_id}")
+async def api_notebook_update(notebook_id: str, request: Request):
+    """Update a notebook (partial update — only send changed fields)."""
+    body = await request.json()
+    # Map 'cells' list to cells_json for DB storage
+    if "cells" in body:
+        body["cells_json"] = json.dumps(body.pop("cells"))
+    success = notebook_update(notebook_id, **body)
+    if not success:
+        # Notebook doesn't exist yet — create it (upsert behavior)
+        name = body.get("name", f"Notebook {notebook_id}")
+        desc = body.get("description", "")
+        tag = body.get("tag", "Drafts")
+        cells = json.loads(body.get("cells_json", "[]"))
+        notebook_create(notebook_id, name, desc, tag, cells)
+    return {"success": True}
+
+
+@app.delete("/notebooks/{notebook_id}")
+async def api_notebook_delete(notebook_id: str):
+    """Delete a notebook."""
+    success = notebook_delete(notebook_id)
+    return {"success": success}
+
+
+# ============================================================
+# METRICS HISTORY (for sparkline charts)
+# ============================================================
+
+@app.get("/instances/metrics/history/{microvm_id}")
+async def api_metrics_history(microvm_id: str, minutes: int = 5):
+    """Get metrics time-series for a VM (for sparkline charts)."""
+    history = metrics_get_history(microvm_id, minutes)
+    latest = metrics_get_latest(microvm_id)
+    return {"history": history, "latest": latest}
+
+
+@app.get("/instances/metrics/latest")
+async def api_metrics_latest():
+    """Get latest metrics snapshot for all running VMs."""
+    result = {}
+    for mid in _active_microvms:
+        latest = metrics_get_latest(mid)
+        if latest:
+            result[mid] = latest
+    return {"metrics": result}
 
 
 @app.get("/image-tiers")

@@ -293,6 +293,11 @@
   background: var(--accent-danger-subtle);
 }
 
+.cell-clear-btn:hover {
+  color: var(--accent-warning);
+  background: rgba(249, 226, 175, 0.1);
+}
+
 /* ---- Cell output ---- */
 .cell-output {
   border-top: 1px solid var(--border-subtle);
@@ -1162,6 +1167,31 @@
 .cell-output-collapse-bar:hover {
   color: var(--text-secondary);
   background: var(--surface-1);
+}
+
+.cell-output-clear-btn {
+  margin-left: auto;
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 10px;
+  opacity: 0;
+  transition: all var(--transition-fast);
+}
+
+.cell-output-collapse-bar:hover .cell-output-clear-btn {
+  opacity: 1;
+}
+
+.cell-output-clear-btn:hover {
+  color: var(--accent-warning);
+  background: rgba(249, 226, 175, 0.1);
 }
 
 .cell-output-collapsed {

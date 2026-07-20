@@ -5,6 +5,7 @@ import AiChatPanel from './components/AiChatPanel'
 import { ConfirmModal, InputModal } from './components/Modal'
 import { IconZap, IconSun, IconMoon } from './components/Icons'
 import { PROXY_URL } from './config'
+import { fetchNotebooks, saveNotebook as apiSaveNotebook, createNotebook as apiCreateNotebook, deleteNotebook as apiDeleteNotebook, migrateFromLocalStorage } from './services/notebooks'
 import './App.css'
 
 let nextTabId = parseInt(localStorage.getItem('microvm-next-tab-id') || '1')
@@ -32,8 +33,15 @@ export default function App() {
       if (saved) {
         const parsed = JSON.parse(saved)
         if (Array.isArray(parsed) && parsed.length > 0) {
+          // Deduplicate by ID (guard against corrupted localStorage)
+          const seen = new Set()
+          const deduped = parsed.filter(t => {
+            if (seen.has(t.id)) return false
+            seen.add(t.id)
+            return true
+          })
           // Keep microvmId for reconnection, reset transient connection state
-          return parsed.map(t => ({
+          return deduped.map(t => ({
             ...t,
             status: 'disconnected',
             microvmEndpoint: null,
@@ -54,8 +62,21 @@ export default function App() {
     return null
   })
   const [instances, setInstances] = useState({})
+  const [vmMetrics, setVmMetrics] = useState({})  // microvm_id -> latest metrics
   const [pollIntervalMs, setPollIntervalMs] = useState(10000)
   const saveTimerRef = useRef(null)
+
+  // Fetch metrics for a specific VM (called after cell execution, not on a timer)
+  const refreshMetrics = useCallback(async (microvmId) => {
+    if (!microvmId) return
+    try {
+      const resp = await fetch(`${PROXY_URL}/instances/metrics?microvm_id=${microvmId}`)
+      if (resp.ok) {
+        const data = await resp.json()
+        if (data.metrics) setVmMetrics(prev => ({ ...prev, ...data.metrics }))
+      }
+    } catch {}
+  }, [])
 
   // Persist tabs to localStorage (debounced 1.5s to avoid thrashing during typing)
   useEffect(() => {
@@ -95,6 +116,71 @@ export default function App() {
     return () => { if (saveTimerRef.current) clearTimeout(saveTimerRef.current) }
   }, [tabs])
 
+  // Also persist to API (debounced, non-blocking)
+  const apiSaveTimerRef = useRef(null)
+  useEffect(() => {
+    if (apiSaveTimerRef.current) clearTimeout(apiSaveTimerRef.current)
+    apiSaveTimerRef.current = setTimeout(() => {
+      tabs.forEach(tab => {
+        const cells = (tab._cells || []).map(c => ({
+          type: c.type || 'code',
+          code: c.code || '',
+          output: c.output || null,
+          error: c.error || null,
+          html: c.html || null,
+          image: null,
+          aiExplanation: c.aiExplanation || null,
+        }))
+        apiSaveNotebook({
+          id: String(tab.id),
+          name: tab.name,
+          description: tab.description || '',
+          tag: tab.tag || 'Drafts',
+          cells,
+          session_id: tab.sessionId || null,
+          microvm_id: tab.microvmId || null,
+          checkpoint_enabled: tab.checkpointEnabled || false,
+        }).catch(() => {})  // Non-blocking — localStorage is the safety net
+      })
+    }, 3000)
+    return () => { if (apiSaveTimerRef.current) clearTimeout(apiSaveTimerRef.current) }
+  }, [tabs])
+
+  // On first mount: try to load notebooks from API, migrate localStorage if needed
+  useEffect(() => {
+    async function loadFromApi() {
+      // Try migration first (if localStorage has data but API doesn't)
+      if (!localStorage.getItem('microvm-notebooks-migrated')) {
+        await migrateFromLocalStorage()
+      }
+
+      // Fetch from API
+      const apiNotebooks = await fetchNotebooks()
+      if (apiNotebooks && apiNotebooks.length > 0 && tabs.length === 0) {
+        // API has notebooks but local state is empty — load from API
+        const loaded = apiNotebooks.map(nb => ({
+          id: nb.id.includes('-') ? nb.id : parseInt(nb.id) || nb.id,
+          name: nb.name,
+          description: nb.description || '',
+          tag: nb.tag || 'Drafts',
+          _cells: nb.cells || [],
+          microvmEndpoint: null,
+          microvmRealEndpoint: null,
+          microvmId: nb.microvm_id || null,
+          status: 'disconnected',
+          mode: null,
+          sessionId: nb.session_id || null,
+          checkpointEnabled: nb.checkpoint_enabled || false,
+        }))
+        setTabs(loaded)
+        if (loaded.length > 0 && !activeTabId) {
+          setActiveTabId(loaded[0].id)
+        }
+      }
+    }
+    loadFromApi()
+  }, [])  // eslint-disable-line react-hooks/exhaustive-deps
+
   useEffect(() => {
     localStorage.setItem('microvm-active-tab', JSON.stringify(activeTabId))
   }, [activeTabId])
@@ -126,7 +212,45 @@ export default function App() {
       const resp = await fetch(`${PROXY_URL}/instances`)
       if (resp.ok) {
         const data = await resp.json()
-        setInstances(data.instances || {})
+        const inst = data.instances || {}
+        setInstances(inst)
+
+        // Sync VM state onto connected tabs so the status pill reflects actual state
+        // Also auto-connect tabs that are resuming (status='connecting') when VM becomes RUNNING
+        setTabs(prev => {
+          let changed = false
+          const updated = prev.map(tab => {
+            if (tab.microvmId && inst[tab.microvmId]) {
+              const vmState = inst[tab.microvmId].state || 'UNKNOWN'
+              const endpoint = inst[tab.microvmId].endpoint
+
+              // Auto-connect: tab is waiting for resume and VM is now RUNNING
+              if (tab.status === 'connecting' && vmState === 'RUNNING' && endpoint) {
+                changed = true
+                return {
+                  ...tab,
+                  _vmState: vmState,
+                  microvmEndpoint: `${PROXY_URL}/proxy`,
+                  microvmRealEndpoint: endpoint,
+                  microvmMemory: inst[tab.microvmId].memory_mib || tab.microvmMemory,
+                  status: 'connected',
+                  mode: 'microvm',
+                }
+              }
+
+              if (tab._vmState !== vmState) {
+                changed = true
+                return { ...tab, _vmState: vmState }
+              }
+            } else if (tab.microvmId && tab._vmState && !inst[tab.microvmId]) {
+              // VM no longer in instances (terminated)
+              changed = true
+              return { ...tab, _vmState: 'TERMINATED' }
+            }
+            return tab
+          })
+          return changed ? updated : prev
+        })
       }
     } catch {
       // Proxy not available
@@ -169,7 +293,11 @@ export default function App() {
   useEffect(() => {
     fetchInstances()
     const interval = setInterval(fetchInstances, pollIntervalMs)
-    return () => clearInterval(interval)
+
+    // Metrics are NOT polled continuously — that would keep VMs awake.
+    // Instead, metrics are fetched on-demand after cell execution via refreshMetrics().
+
+    return () => { clearInterval(interval) }
   }, [fetchInstances, pollIntervalMs])
 
   // Fetch poll interval from proxy config
@@ -202,8 +330,9 @@ export default function App() {
         setTabs(prev => prev.map(tab => {
           if (tab.microvmId && tab.status === 'disconnected') {
             const inst = runningInstances[tab.microvmId]
-            if (inst && inst.state === 'RUNNING' && inst.endpoint) {
-              // Auto-reconnect with memory spec from API
+            // Connect if VM exists in any active state (RUNNING or SUSPENDED)
+            // Suspended VMs auto-resume on traffic — no manual action needed
+            if (inst && (inst.state === 'RUNNING' || inst.state === 'SUSPENDED') && inst.endpoint) {
               return {
                 ...tab,
                 microvmEndpoint: `${PROXY_URL}/proxy`,
@@ -213,7 +342,10 @@ export default function App() {
                 mode: 'microvm',
               }
             }
-            // VM not running — keep microvmId as hint but stay disconnected
+            // VM terminated or gone — clear the microvmId so user can launch fresh
+            if (!inst) {
+              return { ...tab, microvmId: null }
+            }
           }
           return tab
         }))
@@ -515,6 +647,16 @@ export default function App() {
 
       const tab = createTab(sampleName || notebook.name, notebook.description || '', 'Samples')
       tab._loadedCells = notebook.cells
+      tab._cells = notebook.cells.map((c, i) => ({
+        id: Date.now() + i,
+        type: c.type || 'code',
+        code: c.code || '',
+        output: c.output || null,
+        error: c.error || null,
+        html: c.html || null,
+        image: c.image || null,
+        aiExplanation: c.aiExplanation || null,
+      }))
       setTabs(prev => [...prev, { ...tab }])
       setActiveTabId(tab.id)
       setShowAiChat(true)
@@ -529,6 +671,16 @@ export default function App() {
       const { name, description, tag, cells } = e.detail
       const tab = createTab(name, description, tag || undefined)
       tab._loadedCells = cells
+      tab._cells = (cells || []).map((c, i) => ({
+        id: Date.now() + i,
+        type: c.type || 'code',
+        code: c.code || '',
+        output: c.output || null,
+        error: c.error || null,
+        html: c.html || null,
+        image: c.image || null,
+        aiExplanation: c.aiExplanation || null,
+      }))
       setTabs(prev => [...prev, { ...tab }])
       setActiveTabId(tab.id)
     }
@@ -568,6 +720,9 @@ export default function App() {
           onSuspendInstance={suspendInstance}
           onUpdateTabTag={(tabId, tag) => updateTab(tabId, { tag })}
           onSyncPackages={(pkgList) => { if (activeTabId) updateTab(activeTabId, { _packages: pkgList }) }}
+          onSyncDataSources={(ds) => { if (activeTabId) updateTab(activeTabId, { _dataSources: ds }) }}
+          instances={instances}
+          vmMetrics={vmMetrics}
           onScrollToCell={(idx) => {
             const activeCells = tabs.find(t => t.id === activeTabId)?._cells || []
             const cell = activeCells[idx]
@@ -629,17 +784,28 @@ export default function App() {
               </div>
             </div>
           )}
-          {tabs.filter(tab => tab.id === activeTabId).map(tab => (
+          {(() => {
+            const tab = tabs.find(t => t.id === activeTabId)
+            if (!tab) return null
+            // Inject live VM state from instances (avoids stale prop issues)
+            const liveTab = tab.microvmId && instances[tab.microvmId]
+              ? { ...tab, _vmState: instances[tab.microvmId].state }
+              : tab
+            return (
             <Notebook
-              key={tab.id}
-              tab={tab}
-              onUpdateTab={(updates) => updateTab(tab.id, updates)}
+              key={liveTab.id}
+              tab={liveTab}
+              instances={instances}
+              onUpdateTab={(updates) => updateTab(liveTab.id, updates)}
+              onNewNotebook={addTab}
               attachedIds={attachedIds}
               theme={theme}
               onToggleTheme={toggleTheme}
               aiAvailable={aiAvailable}
+              onRefreshMetrics={() => refreshMetrics(liveTab.microvmId)}
             />
-          ))}
+            )
+          })()}
         </main>
         {showAiChat && (
           <AiChatPanel

@@ -3,6 +3,7 @@ import { IconPlus, IconX, IconNotebook } from './Icons'
 import { PROXY_URL } from '../config'
 import { marked } from 'marked'
 import { sanitizeMarkdown } from '../services/sanitize'
+import { useSpeechToText } from '../hooks/useSpeechToText'
 import './AiChatPanel.css'
 
 export default function AiChatPanel({ activeTab, uploadedFiles = [], onClose, onUpdateCell, onInsertCells, onUpdateMessages }) {
@@ -14,6 +15,36 @@ export default function AiChatPanel({ activeTab, uploadedFiles = [], onClose, on
   const endRef = useRef(null)
   const isResizing = useRef(false)
   const chatAbortRef = useRef(null)
+
+  // Speech-to-text (Whisper in browser)
+  const {
+    isListening,
+    isProcessing,
+    isModelLoading,
+    transcript,
+    error: speechError,
+    recordingDuration,
+    startListening,
+    stopListening,
+    resetTranscript,
+    isSupported: speechSupported,
+  } = useSpeechToText({
+    silenceTimeout: 2000,
+    onSilenceDetected: () => stopListening(),
+  })
+
+  // When transcript arrives after recording stops, put it in input and auto-send
+  useEffect(() => {
+    if (transcript && !isListening && !isProcessing) {
+      setInput(transcript)
+      resetTranscript()
+      // Auto-submit after a brief delay
+      setTimeout(() => {
+        const btn = document.querySelector('.ai-panel-send')
+        if (btn && !btn.disabled) btn.click()
+      }, 100)
+    }
+  }, [transcript, isListening, isProcessing])
 
   // Abort pending request on unmount
   useEffect(() => {
@@ -174,23 +205,60 @@ export default function AiChatPanel({ activeTab, uploadedFiles = [], onClose, on
       </div>
 
       <div className="ai-panel-input-area">
-        <textarea
-          className="ai-panel-input"
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend() } }}
-          placeholder="Ask the AI assistant..."
-          rows={2}
-          disabled={loading || !activeTab}
-        />
-        <button
-          className="ai-panel-send"
-          onClick={handleSend}
-          disabled={!input.trim() || loading || !activeTab}
-          title="Send (Enter)"
-        >
-          <svg width={16} height={16} viewBox="0 0 24 24" fill="currentColor"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>
-        </button>
+        {/* Listening indicator with waveform */}
+        {(isListening || isProcessing || isModelLoading) && (
+          <div className={`ai-speech-status ${isListening ? 'ai-speech-listening' : 'ai-speech-processing'}`}>
+            {isModelLoading ? (
+              <><span className="ai-speech-spinner" /> Loading speech model (first time only)...</>
+            ) : isProcessing ? (
+              <><span className="ai-speech-spinner" /> Transcribing...</>
+            ) : (
+              <div className="ai-speech-listening-row">
+                <div className="ai-speech-waves">
+                  <span className="ai-wave-bar" /><span className="ai-wave-bar" /><span className="ai-wave-bar" /><span className="ai-wave-bar" /><span className="ai-wave-bar" />
+                </div>
+                <span>Listening...</span>
+                <span className="ai-speech-timer">{Math.floor(recordingDuration / 60)}:{(recordingDuration % 60).toString().padStart(2, '0')}</span>
+              </div>
+            )}
+          </div>
+        )}
+        {speechError && <div className="ai-speech-error">{speechError}</div>}
+        <div className="ai-panel-input-row">
+          <textarea
+            className="ai-panel-input"
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend() } }}
+            placeholder={isListening ? 'Listening...' : 'Ask the AI assistant...'}
+            rows={2}
+            disabled={loading || !activeTab || isListening}
+          />
+          <div className="ai-panel-buttons">
+            {speechSupported && (
+              <button
+                className={`ai-panel-mic ${isListening ? 'ai-panel-mic-active' : ''}`}
+                onClick={() => isListening ? stopListening() : startListening()}
+                disabled={loading || isModelLoading || isProcessing || !activeTab}
+                title={isListening ? 'Stop recording' : 'Voice input (Whisper)'}
+              >
+                <svg width={16} height={16} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/>
+                  <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+                  <line x1="12" y1="19" x2="12" y2="22"/>
+                </svg>
+              </button>
+            )}
+            <button
+              className="ai-panel-send"
+              onClick={handleSend}
+              disabled={!input.trim() || loading || !activeTab}
+              title="Send (Enter)"
+            >
+              <svg width={16} height={16} viewBox="0 0 24 24" fill="currentColor"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>
+            </button>
+          </div>
+        </div>
       </div>
     </div>
   )

@@ -70,6 +70,9 @@ export default function Sidebar({
   onSuspendInstance,
   onUpdateTabTag,
   onSyncPackages,
+  onSyncDataSources,
+  instances = {},
+  vmMetrics = {},
 }) {
   // Activity bar state — which panel is active (null = collapsed)
   const [activePanel, setActivePanel] = useState(() => {
@@ -196,6 +199,8 @@ export default function Sidebar({
         setAthenaTables(data.athena || [])
         setArtifactBucket(data.artifact_bucket || '')
         setAthenaWorkgroup(data.athena_workgroup || 'microvm-demo')
+        // Sync to tab so AI chat can access data source info
+        if (onSyncDataSources) onSyncDataSources(data)
       }
     } catch {}
     setDsLoading(false)
@@ -208,6 +213,13 @@ export default function Sidebar({
       fetchDataSources()
     }
   }, [activePanel, dsFetched, fetchDataSources])
+
+  // Also fetch data sources on connect (so AI chat always has the info)
+  useEffect(() => {
+    if (!dsFetched && activeTab?.status === 'connected') {
+      fetchDataSources()
+    }
+  }, [activeTab?.status, dsFetched, fetchDataSources])
 
   // Load packages when connected (runs in background, not tied to panel being active)
   useEffect(() => {
@@ -524,7 +536,10 @@ export default function Sidebar({
                         className="nb-tag-header"
                         onClick={() => setCollapsedTags(prev => ({ ...prev, [tag]: !prev[tag] }))}
                       >
-                        <span className="nb-tag-chevron">{collapsedTags[tag] ? '▸' : '▾'}</span>
+                        <span className="nb-tag-chevron">{collapsedTags[tag] ? <svg width={16} height={16} viewBox="0 0 24 24" fill="currentColor"><path d="M9 6l6 6-6 6z"/></svg> : <svg width={16} height={16} viewBox="0 0 24 24" fill="currentColor"><path d="M6 9l6 6 6-6z"/></svg>}</span>
+                        <svg className="nb-tag-icon" width={12} height={12} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                          <line x1="4" y1="9" x2="20" y2="9"/><line x1="4" y1="15" x2="20" y2="15"/><line x1="10" y1="3" x2="8" y2="21"/><line x1="16" y1="3" x2="14" y2="21"/>
+                        </svg>
                         <span className="nb-tag-name">{tag}</span>
                         {tag === 'Drafts' && (
                           <button
@@ -1087,6 +1102,47 @@ export default function Sidebar({
                                   <span className="vm-detail-value">{formatDuration(inst.max_duration_sec)}</span>
                                 </div>
                               )}
+                            </div>
+                          )}
+
+                          {/* Live Metrics */}
+                          {vmMetrics[id] && state === 'RUNNING' && (
+                            <div className="vm-detail-section">
+                              <div className="vm-detail-section-title">
+                                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+                                Resources
+                              </div>
+                              <div className="vm-metrics-gauges">
+                                <div className="vm-metric-gauge">
+                                  <div className="vm-metric-bar">
+                                    <div className="vm-metric-fill vm-metric-cpu" style={{ width: `${Math.min(vmMetrics[id].cpu?.percent || 0, 100)}%` }} />
+                                  </div>
+                                  <span className="vm-metric-label">CPU</span>
+                                  <span className="vm-metric-value">{(vmMetrics[id].cpu?.percent || 0).toFixed(0)}%</span>
+                                </div>
+                                <div className="vm-metric-gauge">
+                                  <div className="vm-metric-bar">
+                                    <div className="vm-metric-fill vm-metric-mem" style={{ width: `${Math.min(vmMetrics[id].memory?.percent || 0, 100)}%` }} />
+                                  </div>
+                                  <span className="vm-metric-label">Mem</span>
+                                  <span className="vm-metric-value" title={`${(vmMetrics[id].memory?.used_mb || 0).toFixed(0)} MB used`}>{(vmMetrics[id].memory?.percent || 0).toFixed(0)}%</span>
+                                </div>
+                                <div className="vm-metric-gauge">
+                                  <div className="vm-metric-bar">
+                                    <div className="vm-metric-fill vm-metric-disk" style={{ width: `${Math.min(vmMetrics[id].disk?.percent || 0, 100)}%` }} />
+                                  </div>
+                                  <span className="vm-metric-label">Disk</span>
+                                  <span className="vm-metric-value">{(vmMetrics[id].disk?.percent || 0).toFixed(0)}%</span>
+                                </div>
+                              </div>
+                              <div className="vm-detail-row">
+                                <span className="vm-detail-label">Uptime</span>
+                                <span className="vm-detail-value">{formatDuration(vmMetrics[id].uptime_sec || 0)}</span>
+                              </div>
+                              <div className="vm-detail-row">
+                                <span className="vm-detail-label">Processes</span>
+                                <span className="vm-detail-value">{vmMetrics[id].processes || 0}</span>
+                              </div>
                             </div>
                           )}
 

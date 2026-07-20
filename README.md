@@ -221,24 +221,26 @@ A unified collapsible sidebar with VS Code-style icon activity bar:
 - Launch new MicroVMs from the connection panel (5 memory tiers: 512MB–8GB)
 - **Idle suspend** configurable: 1 min, 2 min, 5 min, 15 min, 30 min, 1 hr, 2 hr
 - **Max lifetime** configurable: 1 hr, 2 hr, 4 hr, 8 hr
-- Instance cards in sidebar show: spec, session, lifecycle, real-time cost breakdown with rates
+- Instance cards in sidebar show: spec, session, lifecycle, real-time resources, cost breakdown
+- **Live Resources** — CPU, Memory, Disk gauge bars update after each cell execution (using `psutil` inside the VM)
+- **Connection status pill** — toolbar shows actual VM state: 🟢 Running, 🟠 Suspended, 🔴 Disconnected
 - Attach existing running instances to notebooks
 - Resume suspended instances (auto-resume on traffic ~1s)
 - Terminate instances (with optional S3 checkpoint)
-- Live state refresh every 10–15 seconds
+- Live state refresh every 10–15 seconds (via AWS API — does NOT prevent VM suspension)
 - Auto-reconnect on page refresh
 - Badge on activity bar icon shows running VM count
 
 ### 3.5 Cost Tracking
 - **Real-time estimated cost** per MicroVM displayed in the Instances panel
-- Tracks time in RUNNING and SUSPENDED states via the proxy
-- **Hover tooltip** on any cost figure shows detailed breakdown:
+- Tracks time in RUNNING and SUSPENDED states via the proxy (uses AWS control-plane API, not VM traffic)
+- Cost breakdown shows:
   - Running duration and cost
   - Suspended duration and cost
-  - Memory tier
-  - Pricing rates applied
+  - Memory tier and pricing rates
+  - Total cost
 - **Session total** in the panel footer (aggregated across all tracked MicroVMs)
-- Persists across page refreshes (tracked in proxy process memory)
+- Persists across proxy restarts (stored in SQLite database)
 - Uses published Lambda MicroVM pricing: `$0.0000133/GB-sec` (running), `$0.0000000309/GB-sec` (suspended)
 
 ### 3.6 Session Checkpoint & Restore
@@ -302,6 +304,16 @@ A unified collapsible sidebar with VS Code-style icon activity bar:
 │                      │           │  POST /ai/explain— direct Bedrock │
 │                      │           │  POST /ai/fix    — direct Bedrock │
 │                      │           │  GET  /datasources — S3/DDB/Athena│
+│                      │           │  CRUD /notebooks — notebook store │
+│                      │           │  GET  /instances/metrics —ondemand│
+│                      │           │                                   │
+│                      │           │  ┌─────────────────────────────┐  │
+│                      │           │  │  SQLite (proxy/data/microvm.db)│
+│                      │           │  │  • notebooks                │  │
+│                      │           │  │  • vm_sessions + state_log  │  │
+│                      │           │  │  • vm_metrics (time-series) │  │
+│                      │           │  │  • ai_sessions              │  │
+│                      │           │  └─────────────────────────────┘  │
 └──────────────────────┘           └────────────┬──────────┬───────────┘
                                                 │          │
                                    HTTPS + JWE  │          │ Bedrock
@@ -310,6 +322,7 @@ A unified collapsible sidebar with VS Code-style icon activity bar:
            │  MicroVM (Tab 1) │  │  MicroVM (Tab 2) │  │  Amazon Bedrock  │
            │  Firecracker VM  │  │  Firecracker VM  │  │  Claude Sonnet   │
            │  FastAPI+Executor│  │  FastAPI+Executor│  │  (Strands Agent) │
+           │  GET /metrics    │  │  GET /metrics    │  │                  │
            └──────────────────┘  └──────────────────┘  └──────────────────┘
 ```
 
@@ -522,12 +535,40 @@ The executor automatically detects:
 
 ### 7.7 Cost Tracking Implementation
 - `proxy/cost_tracker.py` — `CostTracker` class records state transitions per MicroVM
-- State observations come from the `/instances` polling loop (every 15 seconds)
+- State observations come from the `/instances` polling loop (every 15 seconds) — calls AWS control-plane API, NOT the VM
 - Initial `RUNNING` state recorded at launch time
 - Cost formula: `memory_gb × seconds_in_state × rate_per_gb_sec`
 - Rates: `$0.0000133/GB-sec` (running), `$0.0000000309/GB-sec` (suspended)
-- Persists across page refreshes (in-memory on the proxy process)
-- Resets on proxy restart (acceptable — proxy restart = fresh session)
+- Persists across proxy restarts (stored in SQLite)
+
+### 7.8 SQLite Database (`proxy/db.py`)
+
+All persistent state is stored in `proxy/data/microvm.db` (auto-created on first run):
+
+| Table | Purpose |
+|-------|---------|
+| `notebooks` | Notebook CRUD — replaces browser localStorage as source of truth |
+| `vm_sessions` | VM lifecycle tracking — links VMs to notebooks, stores costs |
+| `vm_metrics` | Time-series resource data (CPU, memory, disk) polled after each cell execution |
+| `vm_state_log` | Audit trail of state transitions (RUNNING → SUSPENDED → TERMINATED) |
+| `ai_sessions` | AI chat history per notebook |
+
+- **Notebook persistence**: Frontend saves to both localStorage (offline fallback) and SQLite API (source of truth)
+- **Auto-migration**: On first load, localStorage notebooks are migrated to SQLite
+- **Metrics on-demand**: Resource metrics are fetched from the VM only after cell execution (not continuously) to avoid preventing idle suspension
+- API endpoints: `GET/POST/PUT/DELETE /notebooks`, `GET /instances/metrics/history/:id`
+
+### 7.9 Live Resource Monitoring
+
+Each MicroVM exposes a `GET /metrics` endpoint (powered by `psutil`):
+- **CPU %** — process CPU utilization since last measurement
+- **Memory %** — Python process RSS as percentage of allocated memory
+- **Disk %** — `/tmp` usage (where user data files live)
+- **Network** — cumulative bytes sent/received
+- **Processes** — active process count
+- **Uptime** — seconds since VM boot
+
+Metrics are fetched on-demand (after each cell execution), NOT continuously polled. This ensures idle VMs properly suspend after their timeout.
 
 ### 7.8 Session Checkpoint & Restore
 
@@ -572,8 +613,11 @@ scipy (statistics), boto3 (AWS SDK)
 │   └── executor.py         # Stateful Python executor with rich output, interrupt, variable inspection,
 │                           # smart DataFrame enhancement (clickable URLs, number formatting, etc.)
 ├── proxy/
-│   ├── server.py           # Token proxy: launch, terminate, resume, auth, datasources, cost tracking, AI endpoints
+│   ├── server.py           # Token proxy: launch, terminate, resume, auth, datasources, cost tracking, AI endpoints, notebook CRUD, metrics
 │   ├── cost_tracker.py     # CostTracker class: per-MicroVM cost estimation
+│   ├── db.py               # SQLite database: schema, CRUD helpers for all tables
+│   ├── data/               # SQLite database file (auto-created, gitignored)
+│   │   └── microvm.db
 │   └── ai/                 # AI module (Strands Agents SDK)
 │       ├── __init__.py
 │       ├── constants.py    # All AI config constants (model IDs, tokens, temperatures)
@@ -616,6 +660,7 @@ scipy (statistics), boto3 (AWS SDK)
 │       │   └── Modal.css
 │       └── services/
 │           ├── microvm.js       # MicroVM client service
+│           ├── notebooks.js     # Notebook API client (CRUD, migration, metrics)
 │           └── sanitize.js      # HTML sanitization (DOMPurify) for XSS prevention
 ├── tests/
 │   ├── test_interrupt_execution.py  # E2E: interrupt long-running cells (7 scenarios)

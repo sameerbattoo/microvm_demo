@@ -6,6 +6,44 @@
   position: relative;
 }
 
+/* Resuming overlay */
+.notebook-resuming {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--surface-1);
+  z-index: 10;
+}
+
+.notebook-resuming-content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+}
+
+.notebook-resuming-spinner {
+  width: 32px;
+  height: 32px;
+  border: 3px solid var(--border-subtle);
+  border-top-color: var(--accent-primary);
+  border-radius: 50%;
+  animation: toolbar-spin 0.8s linear infinite;
+}
+
+.notebook-resuming-text {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.notebook-resuming-hint {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
 /* ---- Toolbar ---- */
 .notebook-toolbar {
   display: flex;
@@ -102,6 +140,16 @@
   border: 1px solid var(--border-subtle);
 }
 
+.toolbar-group-cells {
+  background: rgba(137, 180, 250, 0.06);
+  border-color: rgba(137, 180, 250, 0.2);
+}
+
+.toolbar-group-notebook {
+  background: rgba(166, 227, 161, 0.06);
+  border-color: rgba(166, 227, 161, 0.2);
+}
+
 .toolbar-divider {
   width: 1px;
   height: 20px;
@@ -147,6 +195,25 @@
   background: var(--accent-warning-subtle);
   color: var(--accent-warning);
   border-color: rgba(226, 184, 107, 0.3);
+}
+
+.toolbar-btn-loading {
+  opacity: 0.8;
+  pointer-events: none;
+}
+
+.toolbar-spinner {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border: 2px solid var(--text-muted);
+  border-top-color: var(--accent-primary);
+  border-radius: 50%;
+  animation: toolbar-spin 0.6s linear infinite;
+}
+
+@keyframes toolbar-spin {
+  to { transform: rotate(360deg); }
 }
 
 .toolbar-btn-packages:hover {
@@ -357,6 +424,17 @@
 .status-connecting, .status-launching {
   background: var(--accent-warning);
   animation: pulse-disconnect 1s ease-in-out infinite;
+}
+
+.status-suspended {
+  background: #f9a825 !important;
+  box-shadow: 0 0 6px rgba(249, 168, 37, 0.4) !important;
+  animation: pulse-disconnect 3s ease-in-out infinite;
+}
+
+.status-terminated {
+  background: var(--accent-danger) !important;
+  box-shadow: 0 0 6px rgba(243, 139, 168, 0.3) !important;
 }
 
 @keyframes pulse-disconnect {

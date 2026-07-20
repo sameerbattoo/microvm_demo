@@ -1,7 +1,7 @@
 import { useState, useCallback, useRef, useEffect, useMemo } from 'react'
 import Cell from './Cell'
 import ConnectionPanel from './ConnectionPanel'
-import { IconPlus, IconPlayAll, IconPlay, IconTrash, IconSave, IconFolderOpen, IconStop, IconFile, IconSearch, IconChevronUp, IconChevronDown, IconX, IconZap, IconSun, IconMoon, IconCode, IconNotebook } from './Icons'
+import { IconPlus, IconPlayAll, IconPlay, IconTrash, IconSave, IconFolderOpen, IconStop, IconFile, IconSearch, IconChevronUp, IconChevronDown, IconX, IconZap, IconSun, IconMoon, IconCode, IconNotebook, IconEraser } from './Icons'
 import { PROXY_URL } from '../config'
 import './Notebook.css'
 
@@ -39,7 +39,7 @@ function createCell(type = 'code') {
   }
 }
 
-export default function Notebook({ tab, onUpdateTab, attachedIds = [], theme, onToggleTheme, aiAvailable = false }) {
+export default function Notebook({ tab, instances = {}, onUpdateTab, onNewNotebook, onRefreshMetrics, attachedIds = [], theme, onToggleTheme, aiAvailable = false }) {
   const [cells, setCells] = useState(() => {
     // Restore cells from tab state (persists across tab switches)
     if (tab._cells && Array.isArray(tab._cells) && tab._cells.length > 0) {
@@ -65,6 +65,14 @@ export default function Notebook({ tab, onUpdateTab, attachedIds = [], theme, on
   })
   const [showConnection, setShowConnection] = useState(tab.status !== 'connected')
   const [isExecuting, setIsExecuting] = useState(false)
+  const [isAnnotating, setIsAnnotating] = useState(false)
+
+  // Sync connection panel visibility when tab status changes
+  useEffect(() => {
+    if (tab.status === 'connected') {
+      setShowConnection(false)
+    }
+  }, [tab.status])
   const [activeCellId, setActiveCellId] = useState(null)
   const [dragOverId, setDragOverId] = useState(null)
   const [showSearch, setShowSearch] = useState(false)
@@ -326,8 +334,9 @@ export default function Notebook({ tab, onUpdateTab, attachedIds = [], theme, on
         await next()
       }
       setIsExecuting(false)
-      // Refresh variable explorer after execution
+      // Refresh variable explorer and metrics after execution
       fetchVariables()
+      if (onRefreshMetrics) onRefreshMetrics()
       // Auto-tag: suggest a tag if enough cells have been executed and tag is still 'Drafts'
       if ((!tab.tag || tab.tag === 'Drafts') && !tagSuggestedRef.current) {
         tagSuggestedRef.current = true  // prevent re-fire during this attempt
@@ -362,6 +371,12 @@ export default function Notebook({ tab, onUpdateTab, attachedIds = [], theme, on
       }
     }
   }, [cells, tab.microvmEndpoint, tab.status, executeCell])
+
+  const clearAllOutputs = useCallback(() => {
+    setCells(prev => prev.map(c => c.type === 'markdown' ? c : {
+      ...c, output: null, error: null, html: null, image: null, executionNumber: null, executionTime: null, status: 'idle'
+    }))
+  }, [])
 
   const runActiveCell = useCallback(() => {
     if (activeCellId) {
@@ -503,6 +518,7 @@ export default function Notebook({ tab, onUpdateTab, attachedIds = [], theme, on
     const codeCells = cells.filter(c => c.type !== 'markdown' && c.code?.trim() && !c.aiExplanation)
     if (codeCells.length === 0) return
 
+    setIsAnnotating(true)
     // Process cells sequentially to avoid rate limiting
     for (const cell of codeCells) {
       try {
@@ -535,6 +551,7 @@ export default function Notebook({ tab, onUpdateTab, attachedIds = [], theme, on
         }
       } catch {}
     }
+    setIsAnnotating(false)
   }, [cells, tab.microvmId, tab.microvmRealEndpoint])
 
   const saveNotebook = useCallback(() => {
@@ -617,7 +634,7 @@ export default function Notebook({ tab, onUpdateTab, attachedIds = [], theme, on
 
   return (
     <div className="notebook">
-      {showConnection && (
+      {showConnection && tab.status !== 'connecting' && (
         <ConnectionPanel
           tab={tab}
           onConnect={handleConnect}
@@ -637,7 +654,7 @@ export default function Notebook({ tab, onUpdateTab, attachedIds = [], theme, on
 
           <span className="toolbar-divider" />
 
-          <div className="toolbar-group">
+          <div className="toolbar-group toolbar-group-cells" title="Cell actions">
             <button className="toolbar-btn" onClick={() => addCellAtEnd('code')} title="Add code cell">
               <IconPlus width={14} height={14} /> Code
             </button>
@@ -680,43 +697,66 @@ export default function Notebook({ tab, onUpdateTab, attachedIds = [], theme, on
 
           <span className="toolbar-divider" />
 
-          <div className="toolbar-group">
+          <div className="toolbar-group toolbar-group-notebook" title="Notebook actions">
             <button className="toolbar-btn toolbar-btn-save" onClick={saveNotebook} title="Save notebook">
               <IconSave width={14} height={14} /> Save
             </button>
             <button className="toolbar-btn toolbar-btn-open" onClick={loadNotebook} title="Open notebook">
               <IconFolderOpen width={14} height={14} /> Open
             </button>
+            {onNewNotebook && (
+              <button className="toolbar-btn" onClick={onNewNotebook} title="New notebook">
+                <IconNotebook width={14} height={14} /> New
+              </button>
+            )}
             <button className="toolbar-btn toolbar-btn-find" onClick={() => { setShowSearch(true); setTimeout(() => searchInputRef.current?.focus(), 50) }} title="Find in notebook (Cmd+F)">
               <IconSearch width={14} height={14} /> Find
             </button>
             {aiAvailable && (
               <button
-                className="toolbar-btn toolbar-btn-autodoc"
+                className={`toolbar-btn toolbar-btn-autodoc ${isAnnotating ? 'toolbar-btn-loading' : ''}`}
                 onClick={autoDocumentNotebook}
-                disabled={!tab.microvmEndpoint || tab.status !== 'connected'}
+                disabled={!tab.microvmEndpoint || tab.status !== 'connected' || isAnnotating}
                 title="Auto-annotate all cells with AI explanations"
               >
-                <IconFile width={14} height={14} /> Annotate
+                {isAnnotating ? <span className="toolbar-spinner" /> : <IconFile width={14} height={14} />} {isAnnotating ? 'Annotating...' : 'Annotate'}
               </button>
             )}
+            <button
+              className="toolbar-btn"
+              onClick={clearAllOutputs}
+              disabled={!cells.some(c => c.output || c.error || c.html || c.image)}
+              title="Clear all cell outputs"
+            >
+              <IconEraser width={14} height={14} /> Clear
+            </button>
           </div>
 
           </div>
 
           <div className="toolbar-pinned">
-          <div className="toolbar-status" onClick={() => setShowConnection(true)} title="Click to manage connection">
-            <span className={`status-dot status-${tab.status}`} />
-            <span className="status-text">
-              {tab.status === 'connected' ? 'Connected' :
-               tab.status === 'connecting' ? 'Connecting...' :
-               tab.status === 'launching' ? 'Launching...' :
-               'Disconnected'}
-            </span>
-            {tab.microvmId && tab.status === 'connected' && (
-              <span className="status-id" title={tab.microvmId}>{tab.microvmId.slice(-12)}</span>
-            )}
-          </div>
+          {(() => {
+            // VM state is injected fresh from App via tab._vmState
+            const vmState = tab._vmState || (tab.microvmId && instances[tab.microvmId] ? instances[tab.microvmId].state : null)
+            const isSuspended = vmState === 'SUSPENDED'
+            const isTerminated = vmState === 'TERMINATED'
+            return (
+              <div className="toolbar-status" onClick={() => setShowConnection(true)} title="Click to manage connection">
+                <span className={`status-dot ${isSuspended ? 'status-suspended' : isTerminated ? 'status-terminated' : `status-${tab.status}`}`} />
+                <span className="status-text">
+                  {isSuspended ? 'Suspended' :
+                   isTerminated ? 'Terminated' :
+                   tab.status === 'connected' ? 'Running' :
+                   tab.status === 'connecting' ? 'Connecting...' :
+                   tab.status === 'launching' ? 'Launching...' :
+                   'Disconnected'}
+                </span>
+                {tab.microvmId && tab.status === 'connected' && (
+                  <span className="status-id" title={tab.microvmId}>{tab.microvmId.slice(-12)}</span>
+                )}
+              </div>
+            )
+          })()}
 
           <button className="toolbar-theme-btn" onClick={onToggleTheme} title={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}>
             {theme === 'dark' ? <IconSun width={14} height={14} /> : <IconMoon width={14} height={14} />}
@@ -803,6 +843,7 @@ export default function Notebook({ tab, onUpdateTab, attachedIds = [], theme, on
             }}
             onTypeChange={(newType) => changeCellType(cell.id, newType)}
             onDelete={() => deleteCell(cell.id)}
+            onClearOutput={() => setCells(prev => prev.map(c => c.id === cell.id ? { ...c, output: null, error: null, html: null, image: null, executionNumber: null, executionTime: null, status: 'idle' } : c))}
             onDragStart={() => handleDragStart(cell.id)}
             onDragOver={() => handleDragOver(cell.id)}
             onDrop={() => handleDrop(cell.id)}

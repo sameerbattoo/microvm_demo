@@ -14,6 +14,15 @@ const iconProps = {
   strokeLinejoin: 'round',
 }
 
+export function IconEraser(props) {
+  return (
+    <svg {...iconProps} {...props}>
+      <path d="M7 21h10" />
+      <path d="M5.5 13.5L12 7l5 5-6.5 6.5a2.12 2.12 0 0 1-3 0L5.5 16.5a2.12 2.12 0 0 1 0-3z" />
+    </svg>
+  )
+}
+
 export function IconPlay(props) {
   return (
     <svg {...iconProps} {...props}>

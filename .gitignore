@@ -2,6 +2,9 @@
 .microvm
 app.zip
 
+# Proxy data (SQLite database — auto-created at runtime)
+proxy/data/
+
 # Python
 __pycache__/
 *.pyc
