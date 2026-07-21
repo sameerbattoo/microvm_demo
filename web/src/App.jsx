@@ -243,16 +243,17 @@ export default function App() {
               }
             } else if (tab.microvmId && !inst[tab.microvmId]) {
               // VM not in instances → terminated (either by service or manually)
-              if (tab.status !== 'disconnected' && tab.status !== 'launching') {
+              const updates = {
+                status: 'disconnected',
+                microvmEndpoint: null,
+                microvmRealEndpoint: null,
+                // If checkpoint was enabled, mark session as saved so "Restore" button appears
+                sessionSaved: tab.checkpointEnabled ? true : tab.sessionSaved,
+              }
+              // Only mark as changed if something actually needs updating
+              if (tab.status !== 'disconnected' || (tab.checkpointEnabled && !tab.sessionSaved)) {
                 changed = true
-                return {
-                  ...tab,
-                  status: 'disconnected',
-                  microvmEndpoint: null,
-                  microvmRealEndpoint: null,
-                  // If checkpoint was enabled, mark session as saved so "Restore" button appears
-                  sessionSaved: tab.checkpointEnabled ? true : tab.sessionSaved,
-                }
+                return { ...tab, ...updates }
               }
             }
             return tab

@@ -16,17 +16,27 @@ from ..constants import (
 )
 
 # Thread-local context so concurrent agent sessions don't leak between each other
+# Also maintain a module-level fallback for cases where tools run in the async event loop thread
 _thread_context = threading.local()
+_fallback_context: dict = {}
+_fallback_lock = threading.Lock()
 
 
 def set_execution_context(context: dict):
-    """Set the execution context for the current thread (endpoint, microvm_id, etc.)."""
+    """Set the execution context for the current thread AND module-level fallback."""
+    global _fallback_context
     _thread_context.context = context.copy()
+    with _fallback_lock:
+        _fallback_context = context.copy()
 
 
 def _get_context() -> dict:
-    """Get the current thread's execution context."""
-    return getattr(_thread_context, 'context', {})
+    """Get the current execution context (thread-local first, fallback if not set)."""
+    ctx = getattr(_thread_context, 'context', None)
+    if ctx:
+        return ctx
+    with _fallback_lock:
+        return _fallback_context
 
 
 def _get_headers() -> dict:

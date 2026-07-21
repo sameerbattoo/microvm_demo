@@ -181,6 +181,29 @@
 
 .ai-msg-md strong { color: var(--text-primary); }
 
+.ai-msg-md table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 8px 0;
+  font-size: 12px;
+}
+
+.ai-msg-md th, .ai-msg-md td {
+  border: 1px solid var(--border-subtle);
+  padding: 4px 8px;
+  text-align: left;
+}
+
+.ai-msg-md th {
+  background: var(--surface-3);
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.ai-msg-md tr:nth-child(even) {
+  background: var(--surface-1);
+}
+
 .ai-msg-md h1, .ai-msg-md h2, .ai-msg-md h3 {
   margin: 8px 0 4px;
   color: var(--text-primary);

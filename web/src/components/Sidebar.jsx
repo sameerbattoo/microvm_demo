@@ -249,11 +249,10 @@ export default function Sidebar({
   }, [])
 
   useEffect(() => {
-    if (activePanel === 'microvms') return // MicroVMsPanel handles its own polling
     const interval = setInterval(fetchVmBadge, 15000)
     fetchVmBadge() // initial fetch
     return () => clearInterval(interval)
-  }, [activePanel, fetchVmBadge])
+  }, [fetchVmBadge])
 
   const formatDuration = (secs) => {
     if (!secs || secs < 60) return `${secs || 0}s`
