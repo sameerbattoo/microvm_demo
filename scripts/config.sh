@@ -18,7 +18,8 @@ export IMAGE_ARN="arn:aws:lambda:${AWS_REGION}:${ACCOUNT_ID}:microvm-image:${IMA
 export BASE_IMAGE_ARN="arn:aws:lambda:${AWS_REGION}:aws:microvm-image:al2023-1"
 
 # Size tiers (image name suffix → memory in MiB)
-export IMAGE_SIZES="512 1024 2048 4096 8192"
+# Note: 512 excluded — not enough memory for pandas+numpy+matplotlib snapshot
+export IMAGE_SIZES="1024 2048 4096 8192"
 
 # IAM role names
 export BUILD_ROLE_NAME="MicroVMSandboxBuildRole"
@@ -35,6 +36,24 @@ export ARTIFACT_KEY="images/${IMAGE_NAME}.zip"
 
 # Polling interval for MicroVM state refresh (milliseconds)
 export POLL_INTERVAL_MS="10000"
+
+# Storage backend configuration
+# Supported: "sqlite", "mysql", "postgres" (only sqlite implemented currently)
+export STORAGE_BACKEND="sqlite"
+# SQLite: path is relative to proxy/data/ by default (no connection string needed)
+# MySQL:  export STORAGE_CONNECTION="mysql://user:pass@host:3306/microvm_db"
+# Postgres: export STORAGE_CONNECTION="postgresql://user:pass@host:5432/microvm_db"
+export STORAGE_CONNECTION=""
+
+# Pricing (per GB-second, Lambda MicroVM rates)
+export PRICE_RUNNING_PER_GB_SEC="0.0000133"
+export PRICE_SUSPENDED_PER_GB_SEC="0.0000000309"
+
+# Metrics retention (hours) — how long VM metrics are kept in the DB
+export METRICS_RETENTION_HOURS="168"
+
+# S3 session checkpoint retention (days)
+export S3_CHECKPOINT_RETENTION_DAYS="30"
 
 # Port configuration
 export PROXY_PORT="8081"

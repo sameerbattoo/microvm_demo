@@ -20,6 +20,7 @@
   flex-direction: column;
   overflow: hidden;
   min-height: 0;
+  min-width: 0;
   position: relative;
   background: var(--surface-2);
 }

@@ -11,13 +11,14 @@ a fresh session.
 Pricing is based on published Lambda MicroVM rates (us-west-2, 2026).
 """
 
+import os
 import time
 from dataclasses import dataclass, field
 
 
-# Pricing constants (per GB-second)
-PRICE_RUNNING_PER_GB_SEC = 0.0000133       # compute while RUNNING
-PRICE_SUSPENDED_PER_GB_SEC = 0.0000000309  # snapshot storage while SUSPENDED
+# Pricing constants (per GB-second) — override via env vars
+PRICE_RUNNING_PER_GB_SEC = float(os.environ.get("PRICE_RUNNING_PER_GB_SEC", "0.0000133"))
+PRICE_SUSPENDED_PER_GB_SEC = float(os.environ.get("PRICE_SUSPENDED_PER_GB_SEC", "0.0000000309"))
 
 
 @dataclass

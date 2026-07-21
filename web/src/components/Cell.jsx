@@ -45,6 +45,7 @@ export default function Cell({
   searchQuery,
   searchActiveOccurrence,
   notebookContext,
+  notebookName,
   microvmId,
   microvmRealEndpoint,
   aiAvailable,
@@ -398,11 +399,54 @@ export default function Cell({
                 <div className="cell-output-collapse-bar" onClick={() => setOutputCollapsed(true)}>
                   <IconChevronDown width={10} height={10} />
                   <span>Output</span>
-                  {onClearOutput && (
-                    <button className="cell-output-clear-btn" onClick={(e) => { e.stopPropagation(); onClearOutput() }} title="Clear output">
-                      <IconEraser width={11} height={11} /> Clear
-                    </button>
-                  )}
+                  <div className="cell-output-actions" onClick={(e) => e.stopPropagation()}>
+                    <div className="cell-output-export-wrap">
+                      <button className="cell-output-action-btn" title="Export output" onClick={(e) => {
+                        e.stopPropagation()
+                        const menu = e.currentTarget.nextElementSibling
+                        menu.style.display = menu.style.display === 'block' ? 'none' : 'block'
+                      }}>
+                        <svg width={11} height={11} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg> Export
+                      </button>
+                      <div className="cell-output-export-menu" style={{ display: 'none' }}>
+                        <button onClick={() => {
+                          const filename = `${(notebookName || 'notebook').replace(/\s+/g, '-')}-cell-${index + 1}-output.html`
+                          let htmlContent = `<html><head><meta charset="UTF-8"><title>${notebookName || 'Notebook'} — Cell ${index + 1}</title><style>body{font-family:system-ui;padding:20px;max-width:900px;margin:0 auto}table{border-collapse:collapse;width:100%}th,td{border:1px solid #ddd;padding:8px;text-align:left}th{background:#f5f5f5;font-weight:600}pre{background:#f5f5f5;padding:12px;border-radius:4px;overflow-x:auto;font-size:13px}details{margin-bottom:16px;border:1px solid #e0e0e0;border-radius:4px}summary{padding:8px 12px;cursor:pointer;font-weight:600;font-size:13px;color:#555}details pre{margin:0;border-radius:0 0 4px 4px;border-top:1px solid #e0e0e0}img{max-width:100%}h3{color:#333;margin-top:0}</style></head><body>`
+                          htmlContent += `<h3>${notebookName || 'Notebook'} — Cell ${index + 1} Output</h3>`
+                          htmlContent += `<details><summary>Code</summary><pre>${(cell.code || '').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</pre></details>`
+                          if (cell.output) htmlContent += `<pre>${cell.output}</pre>`
+                          if (cell.html) htmlContent += cell.html
+                          if (cell.image) htmlContent += `<img src="${cell.image}" alt="Plot output"/>`
+                          htmlContent += '</body></html>'
+                          const blob = new Blob([htmlContent], { type: 'text/html' })
+                          const url = URL.createObjectURL(blob)
+                          const a = document.createElement('a')
+                          a.href = url; a.download = filename; a.click()
+                          URL.revokeObjectURL(url)
+                        }}>HTML</button>
+                        <button onClick={() => {
+                          const filename = `${(notebookName || 'notebook').replace(/\s+/g, '-')}-cell-${index + 1}-output.md`
+                          let md = `# ${notebookName || 'Notebook'} — Cell ${index + 1}\n\n`
+                          md += `<details><summary>Code</summary>\n\n\`\`\`python\n${cell.code || ''}\n\`\`\`\n</details>\n\n`
+                          md += `## Output\n\n`
+                          if (cell.output) md += `\`\`\`\n${cell.output}\n\`\`\`\n\n`
+                          if (cell.html) md += `*(DataFrame table — export as HTML for full rendering)*\n\n`
+                          if (cell.image) md += `![Plot output](plot.png)\n\n`
+                          if (!cell.output && !cell.html && !cell.image) md += '*(empty output)*\n'
+                          const blob = new Blob([md], { type: 'text/markdown' })
+                          const url = URL.createObjectURL(blob)
+                          const a = document.createElement('a')
+                          a.href = url; a.download = filename; a.click()
+                          URL.revokeObjectURL(url)
+                        }}>Markdown</button>
+                      </div>
+                    </div>
+                    {onClearOutput && (
+                      <button className="cell-output-action-btn" onClick={() => onClearOutput()} title="Clear output">
+                        <IconEraser width={11} height={11} /> Clear
+                      </button>
+                    )}
+                  </div>
                 </div>
                 {cell.image && (
                   <div className="output-image">

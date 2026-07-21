@@ -98,6 +98,7 @@ def get_or_create_agent(session_id: str, context: dict = None) -> Agent:
             athena_workgroup=os.environ.get("ATHENA_WORKGROUP", "microvm-demo"),
             athena_db=os.environ.get("ATHENA_DB", "microvm_demo_db"),
             s3_bucket=os.environ.get("ARTIFACT_BUCKET", f"microvm-sandbox-artifacts-{os.environ.get('ACCOUNT_ID', 'unknown')}-{aws_region}"),
+            dynamo_table_prefix=os.environ.get("DYNAMO_TABLE", "microvm-demo").rsplit("-", 1)[0] + "-",
         )
         agent = Agent(
             model=get_model(),

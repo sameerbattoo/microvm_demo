@@ -206,7 +206,11 @@ export default function App() {
   const [newNotebookName, setNewNotebookName] = useState('')
   const [newNotebookDesc, setNewNotebookDesc] = useState('')
 
-  // Fetch instances periodically
+  // Track previous instances to detect termination transitions
+  const prevInstancesRef = useRef({})
+
+  // Fetch instances periodically — this is THE SINGLE SOURCE OF TRUTH for VM state.
+  // No copies (_vmState) are stored on tabs. Components derive state from `instances[tab.microvmId]`.
   const fetchInstances = useCallback(async () => {
     try {
       const resp = await fetch(`${PROXY_URL}/instances`)
@@ -215,21 +219,21 @@ export default function App() {
         const inst = data.instances || {}
         setInstances(inst)
 
-        // Sync VM state onto connected tabs so the status pill reflects actual state
-        // Also auto-connect tabs that are resuming (status='connecting') when VM becomes RUNNING
+        // Only sync connection-related info on tabs (endpoint, status)
+        // NOT vm state — that comes from `instances` directly
         setTabs(prev => {
+          const prevInst = prevInstancesRef.current
           let changed = false
           const updated = prev.map(tab => {
             if (tab.microvmId && inst[tab.microvmId]) {
               const vmState = inst[tab.microvmId].state || 'UNKNOWN'
               const endpoint = inst[tab.microvmId].endpoint
 
-              // Auto-connect: tab is waiting for resume and VM is now RUNNING
-              if (tab.status === 'connecting' && vmState === 'RUNNING' && endpoint) {
+              // Auto-connect: tab has a VM that is RUNNING/SUSPENDED but tab is not connected
+              if ((tab.status === 'connecting' || tab.status === 'disconnected') && (vmState === 'RUNNING' || vmState === 'SUSPENDED') && endpoint) {
                 changed = true
                 return {
                   ...tab,
-                  _vmState: vmState,
                   microvmEndpoint: `${PROXY_URL}/proxy`,
                   microvmRealEndpoint: endpoint,
                   microvmMemory: inst[tab.microvmId].memory_mib || tab.microvmMemory,
@@ -237,24 +241,39 @@ export default function App() {
                   mode: 'microvm',
                 }
               }
-
-              if (tab._vmState !== vmState) {
+            } else if (tab.microvmId && !inst[tab.microvmId]) {
+              // VM not in instances → terminated (either by service or manually)
+              if (tab.status !== 'disconnected' && tab.status !== 'launching') {
                 changed = true
-                return { ...tab, _vmState: vmState }
+                return {
+                  ...tab,
+                  status: 'disconnected',
+                  microvmEndpoint: null,
+                  microvmRealEndpoint: null,
+                  // If checkpoint was enabled, mark session as saved so "Restore" button appears
+                  sessionSaved: tab.checkpointEnabled ? true : tab.sessionSaved,
+                }
               }
-            } else if (tab.microvmId && tab._vmState && !inst[tab.microvmId]) {
-              // VM no longer in instances (terminated)
-              changed = true
-              return { ...tab, _vmState: 'TERMINATED' }
             }
             return tab
           })
+          prevInstancesRef.current = inst
           return changed ? updated : prev
         })
       }
     } catch {
       // Proxy not available
     }
+  }, [])
+
+  // Helper: immediately update a single VM's state in the instances map
+  // Used after successful cell execution on a suspended VM (don't wait for poll)
+  const markVmRunning = useCallback((microvmId) => {
+    setInstances(prev => {
+      if (!prev[microvmId]) return prev
+      if (prev[microvmId].state === 'RUNNING') return prev
+      return { ...prev, [microvmId]: { ...prev[microvmId], state: 'RUNNING' } }
+    })
   }, [])
 
   // Fetch files from the active MicroVM (stored per-tab to avoid cross-VM contamination)
@@ -318,78 +337,14 @@ export default function App() {
       .catch(() => setAiAvailable(false))
   }, [])
 
-  // Auto-reconnect tabs that have a saved microvmId
-  useEffect(() => {
-    const reconnect = async () => {
-      try {
-        const resp = await fetch(`${PROXY_URL}/instances`)
-        if (!resp.ok) return
-        const data = await resp.json()
-        const runningInstances = data.instances || {}
-
-        setTabs(prev => prev.map(tab => {
-          if (tab.microvmId && tab.status === 'disconnected') {
-            const inst = runningInstances[tab.microvmId]
-            // Connect if VM exists in any active state (RUNNING or SUSPENDED)
-            // Suspended VMs auto-resume on traffic — no manual action needed
-            if (inst && (inst.state === 'RUNNING' || inst.state === 'SUSPENDED') && inst.endpoint) {
-              return {
-                ...tab,
-                microvmEndpoint: `${PROXY_URL}/proxy`,
-                microvmRealEndpoint: inst.endpoint,
-                microvmMemory: inst.memory_mib || tab.microvmMemory,
-                status: 'connected',
-                mode: 'microvm',
-              }
-            }
-            // VM terminated or gone — clear the microvmId so user can launch fresh
-            if (!inst) {
-              return { ...tab, microvmId: null }
-            }
-          }
-          return tab
-        }))
-      } catch {}
-    }
-    reconnect()
-  }, []) // Run once on mount
+  // NOTE: Auto-reconnect is handled by fetchInstances polling (runs on mount + every 10s).
+  // It auto-connects any tab whose VM is RUNNING or SUSPENDED.
+  // No separate mount effect needed — fetchInstances is the single source of truth.
 
   // Refresh files when active tab changes or connects
   useEffect(() => {
     fetchFiles()
   }, [activeTabId, tabs.find(t => t.id === activeTabId)?.status])
-
-  // Auto-resume suspended MicroVM when user navigates to its notebook
-  useEffect(() => {
-    const activeTab = tabs.find(t => t.id === activeTabId)
-    if (!activeTab?.microvmId) return
-
-    const checkAndResume = async () => {
-      try {
-        const resp = await fetch(`${PROXY_URL}/instances`)
-        if (!resp.ok) return
-        const data = await resp.json()
-        const inst = data.instances?.[activeTab.microvmId]
-        if (inst?.state === 'SUSPENDED') {
-          // Auto-resume the suspended VM
-          await fetch(`${PROXY_URL}/resume/${activeTab.microvmId}`, { method: 'POST' })
-          // Update tab to connected once resumed
-          setTabs(prev => prev.map(t => {
-            if (t.id !== activeTabId) return t
-            return {
-              ...t,
-              microvmEndpoint: `${PROXY_URL}/proxy`,
-              microvmRealEndpoint: inst.endpoint,
-              status: 'connected',
-              mode: 'microvm',
-            }
-          }))
-          fetchInstances()
-        }
-      } catch {}
-    }
-    checkAndResume()
-  }, [activeTabId])
 
   const addTab = useCallback(() => {
     setNewNotebookName(`Notebook ${nextTabId}`)
@@ -413,21 +368,46 @@ export default function App() {
   }, [tabs])
 
   const confirmCloseTab = useCallback((tabId, shouldSave) => {
+    const closingTab = tabs.find(t => t.id === tabId)
+    if (!closingTab) { setModal(null); return }
+
     if (shouldSave) {
-      // Trigger save on the notebook before closing (save handled by Notebook component via ref — simplified: just close)
-      // For simplicity, we dispatch a custom event
-      window.dispatchEvent(new CustomEvent('save-notebook', { detail: { tabId } }))
+      // Save notebook as a file download (same as toolbar Save button)
+      const cells = (closingTab._cells || []).map(c => ({
+        type: c.type || 'code',
+        code: c.code || '',
+        output: c.output || null,
+        error: c.error || null,
+        html: c.html || null,
+        image: null,
+        executionNumber: c.executionNumber || null,
+        executionTime: c.executionTime || null,
+        aiExplanation: c.aiExplanation || null,
+      }))
+      const notebook = {
+        name: closingTab.name,
+        description: closingTab.description || '',
+        tag: closingTab.tag || 'Drafts',
+        cells,
+        session_id: closingTab.sessionId || null,
+        microvm_id: closingTab.microvmId || null,
+        checkpoint_enabled: closingTab.checkpointEnabled || false,
+        saved_at: new Date().toISOString(),
+      }
+      const blob = new Blob([JSON.stringify(notebook, null, 2)], { type: 'application/json' })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `${(closingTab.name || 'notebook').replace(/\s+/g, '_')}.notebook.json`
+      a.click()
+      URL.revokeObjectURL(url)
     }
 
-    const closingTab = tabs.find(t => t.id === tabId)
-    if (closingTab?.microvmId && closingTab.mode === 'microvm') {
+    if (closingTab.microvmId && closingTab.mode === 'microvm') {
       fetch(`${PROXY_URL}/terminate/${closingTab.microvmId}`, { method: 'POST' }).catch(() => {})
     }
 
-    setTabs(prev => {
-      const remaining = prev.filter(t => t.id !== tabId)
-      return remaining
-    })
+    setTabs(prev => prev.filter(t => t.id !== tabId))
     setActiveTabId(prev => {
       if (prev === tabId) {
         const remaining = tabs.filter(t => t.id !== tabId)
@@ -508,14 +488,15 @@ export default function App() {
     } catch {}
   }, [fetchInstances])
 
-  // Suspend: suspends an attached VM, detaches from notebook
+  // Suspend: suspends an attached VM via the AWS API
   const suspendInstance = useCallback(async (microvmId) => {
     try {
-      // Detach the notebook from the VM — the VM stays running but will suspend on idle timeout.
-      setTabs(prev => prev.map(t => {
-        if (t.microvmId !== microvmId) return t
-        return { ...t, microvmId: null, status: 'disconnected', microvmEndpoint: null, microvmRealEndpoint: null, mode: null }
-      }))
+      await fetch(`${PROXY_URL}/suspend/${microvmId}`, { method: 'POST' })
+      // Immediately update instances state so UI reflects suspension without waiting for poll
+      setInstances(prev => {
+        if (!prev[microvmId]) return prev
+        return { ...prev, [microvmId]: { ...prev[microvmId], state: 'SUSPENDED' } }
+      })
     } catch {}
   }, [])
 
@@ -648,7 +629,7 @@ export default function App() {
       const tab = createTab(sampleName || notebook.name, notebook.description || '', 'Samples')
       tab._loadedCells = notebook.cells
       tab._cells = notebook.cells.map((c, i) => ({
-        id: Date.now() + i,
+        id: Date.now() + Math.random() + i,
         type: c.type || 'code',
         code: c.code || '',
         output: c.output || null,
@@ -672,7 +653,7 @@ export default function App() {
       const tab = createTab(name, description, tag || undefined)
       tab._loadedCells = cells
       tab._cells = (cells || []).map((c, i) => ({
-        id: Date.now() + i,
+        id: Date.now() + Math.random() + i,
         type: c.type || 'code',
         code: c.code || '',
         output: c.output || null,
@@ -787,22 +768,20 @@ export default function App() {
           {(() => {
             const tab = tabs.find(t => t.id === activeTabId)
             if (!tab) return null
-            // Inject live VM state from instances (avoids stale prop issues)
-            const liveTab = tab.microvmId && instances[tab.microvmId]
-              ? { ...tab, _vmState: instances[tab.microvmId].state }
-              : tab
             return (
             <Notebook
-              key={liveTab.id}
-              tab={liveTab}
+              key={tab.id}
+              tab={tab}
               instances={instances}
-              onUpdateTab={(updates) => updateTab(liveTab.id, updates)}
+              onUpdateTab={(updates) => updateTab(tab.id, updates)}
+              onMarkVmRunning={markVmRunning}
               onNewNotebook={addTab}
+              onCloseTab={closeTab}
               attachedIds={attachedIds}
               theme={theme}
               onToggleTheme={toggleTheme}
               aiAvailable={aiAvailable}
-              onRefreshMetrics={() => refreshMetrics(liveTab.microvmId)}
+              onRefreshMetrics={() => refreshMetrics(tab.microvmId)}
             />
             )
           })()}
@@ -826,7 +805,7 @@ export default function App() {
               const insertIdx = (tab._activeCellIndex ?? tab._cells.length - 1) + 1
               const newCells = [...tab._cells]
               codeBlocks.forEach((code, i) => {
-                newCells.splice(insertIdx + i, 0, { id: Date.now() + i, type: 'code', code, output: null, error: null, html: null, image: null })
+                newCells.splice(insertIdx + i, 0, { id: Date.now() + Math.random() + i, type: 'code', code, output: null, error: null, html: null, image: null })
               })
               updateTab(activeTabId, { _cells: newCells })
             }}

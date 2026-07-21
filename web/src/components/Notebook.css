@@ -4,6 +4,7 @@
   flex-direction: column;
   overflow: hidden;
   position: relative;
+  min-width: 0;
 }
 
 /* Resuming overlay */
@@ -98,6 +99,14 @@
   font-size: var(--font-size-sm);
   padding: 0 4px;
   white-space: nowrap;
+}
+
+.toolbar-notebook-name {
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--text-primary);
+  font-weight: 700;
 }
 
 .toolbar-theme-btn {
@@ -466,8 +475,10 @@
 .cells-container {
   flex: 1;
   overflow-y: auto;
+  overflow-x: hidden;
   padding: var(--space-4);
   padding-bottom: 100px;
+  min-width: 0;
 }
 
 .add-cell-row {

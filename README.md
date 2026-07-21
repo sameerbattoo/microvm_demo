@@ -218,12 +218,18 @@ A unified collapsible sidebar with VS Code-style icon activity bar:
   - Notebook scope pill shown at the top of Outline, Variables, Packages, and Data Sources panels
 
 ### 3.4 MicroVM Management
-- Launch new MicroVMs from the connection panel (5 memory tiers: 512MB–8GB)
+- Launch new MicroVMs from the connection panel (4 memory tiers: 1GB–8GB)
 - **Idle suspend** configurable: 1 min, 2 min, 5 min, 15 min, 30 min, 1 hr, 2 hr
 - **Max lifetime** configurable: 1 hr, 2 hr, 4 hr, 8 hr
 - Instance cards in sidebar show: spec, session, lifecycle, real-time resources, cost breakdown
+- **Lifecycle countdown** — "Terminates in" timer with urgency indicators:
+  - Normal when > 5 minutes remaining
+  - Red when ≤ 5 minutes
+  - Pulsing red when ≤ 60 seconds (VM card and activity bar icon pulse too)
+- **Suspend button** — manually suspend a running VM to save costs
+- **Pre-termination wake timer** — for VMs with checkpoint enabled, the proxy resumes the VM 30s before max lifetime expires so the `/terminate` hook fires and state is saved to S3 (workaround for AWS not firing the hook on suspended VMs)
 - **Live Resources** — CPU, Memory, Disk gauge bars update after each cell execution (using `psutil` inside the VM)
-- **Connection status pill** — toolbar shows actual VM state: 🟢 Running, 🟠 Suspended, 🔴 Disconnected
+- **Connection status pill** — toolbar shows actual VM state: 🟢 Running, 🟠 Suspended, 🔴 Terminated/Disconnected
 - Attach existing running instances to notebooks
 - Resume suspended instances (auto-resume on traffic ~1s)
 - Terminate instances (with optional S3 checkpoint)
@@ -438,7 +444,7 @@ Edit `scripts/config.sh`:
 AWS_REGION="us-west-2"          # MicroVM region
 AWS_CLI_PROFILE="default"       # AWS CLI profile
 IMAGE_NAME="agent-sandbox"      # MicroVM image name
-IMAGE_SIZES="512 1024 2048 4096 8192"  # Memory tiers to build (MiB)
+IMAGE_SIZES="1024 2048 4096 8192"  # Memory tiers to build (MiB)
 ```
 
 ### 6.2 Ports & Polling
@@ -449,7 +455,25 @@ BACKEND_PORT="8080"             # Local sandbox backend port
 POLL_INTERVAL_MS="10000"        # Instance state refresh interval (ms)
 ```
 
-### 6.3 Sample Data Resources
+### 6.3 Storage Backend
+
+```bash
+STORAGE_BACKEND="sqlite"        # "sqlite", "mysql", "postgres"
+STORAGE_CONNECTION=""            # Connection string (empty for sqlite)
+```
+
+The storage layer is abstracted behind an interface (`proxy/storage/interface.py`). Switch backends by changing `STORAGE_BACKEND` and providing a connection string.
+
+### 6.4 Pricing & Retention
+
+```bash
+PRICE_RUNNING_PER_GB_SEC="0.0000133"      # Compute rate
+PRICE_SUSPENDED_PER_GB_SEC="0.0000000309" # Snapshot storage rate
+METRICS_RETENTION_HOURS="168"             # Keep metrics for 7 days
+S3_CHECKPOINT_RETENTION_DAYS="30"         # S3 lifecycle rule
+```
+
+### 6.5 Sample Data Resources
 
 ```bash
 DYNAMO_TABLE="microvm-demo-data"   # DynamoDB table name
@@ -529,21 +553,22 @@ The executor automatically detects:
 - Base: `public.ecr.aws/lambda/microvms:al2023-minimal`
 - Runtime: **Python 3.11** (installed via dnf, venv-isolated)
 - All hooks enabled (run, suspend, resume, terminate, ready)
-- Memory tiers: 0.5 GB (0.25 vCPU), 1 GB (0.5 vCPU), 2 GB (1 vCPU), 4 GB (2 vCPU), 8 GB (4 vCPU)
+- Memory tiers: 1 GB (0.5 vCPU), 2 GB (1 vCPU), 4 GB (2 vCPU), 8 GB (4 vCPU)
 - Each tier can burst up to **4× baseline** during peak activity (baseline-peak model)
 - All tiers build **in parallel** (~4-5 minutes total) with automatic retry on transient failures
+- 512MB tier excluded (insufficient memory for pandas+numpy+matplotlib snapshot)
 
 ### 7.7 Cost Tracking Implementation
 - `proxy/cost_tracker.py` — `CostTracker` class records state transitions per MicroVM
 - State observations come from the `/instances` polling loop (every 15 seconds) — calls AWS control-plane API, NOT the VM
 - Initial `RUNNING` state recorded at launch time
 - Cost formula: `memory_gb × seconds_in_state × rate_per_gb_sec`
-- Rates: `$0.0000133/GB-sec` (running), `$0.0000000309/GB-sec` (suspended)
+- Rates configurable via env vars: `PRICE_RUNNING_PER_GB_SEC` (default `$0.0000133`), `PRICE_SUSPENDED_PER_GB_SEC` (default `$0.0000000309`)
 - Persists across proxy restarts (stored in SQLite)
 
-### 7.8 SQLite Database (`proxy/db.py`)
+### 7.8 Storage Layer (`proxy/storage/`)
 
-All persistent state is stored in `proxy/data/microvm.db` (auto-created on first run):
+Persistent state is stored via an abstracted storage backend. The default backend is SQLite (`proxy/data/microvm.db`, auto-created on first run). Switch to MySQL/Postgres for cloud deployments via `STORAGE_BACKEND` env var.
 
 | Table | Purpose |
 |-------|---------|
@@ -553,9 +578,12 @@ All persistent state is stored in `proxy/data/microvm.db` (auto-created on first
 | `vm_state_log` | Audit trail of state transitions (RUNNING → SUSPENDED → TERMINATED) |
 | `ai_sessions` | AI chat history per notebook |
 
+- **Abstract interface**: `proxy/storage/interface.py` defines all method signatures
+- **SQLite implementation**: `proxy/storage/sqlite_db.py` (default)
 - **Notebook persistence**: Frontend saves to both localStorage (offline fallback) and SQLite API (source of truth)
 - **Auto-migration**: On first load, localStorage notebooks are migrated to SQLite
 - **Metrics on-demand**: Resource metrics are fetched from the VM only after cell execution (not continuously) to avoid preventing idle suspension
+- **Metrics retention**: Configurable via `METRICS_RETENTION_HOURS` (default: 168h / 7 days)
 - API endpoints: `GET/POST/PUT/DELETE /notebooks`, `GET /instances/metrics/history/:id`
 
 ### 7.9 Live Resource Monitoring
@@ -608,76 +636,77 @@ scipy (statistics), boto3 (AWS SDK)
 
 ```
 .
-├── app/
-│   ├── server.py           # FastAPI: lifecycle hooks, execute (async), upload, install, interrupt
-│   └── executor.py         # Stateful Python executor with rich output, interrupt, variable inspection,
-│                           # smart DataFrame enhancement (clickable URLs, number formatting, etc.)
-├── proxy/
-│   ├── server.py           # Token proxy: launch, terminate, resume, auth, datasources, cost tracking, AI endpoints, notebook CRUD, metrics
-│   ├── cost_tracker.py     # CostTracker class: per-MicroVM cost estimation
-│   ├── db.py               # SQLite database: schema, CRUD helpers for all tables
-│   ├── data/               # SQLite database file (auto-created, gitignored)
-│   │   └── microvm.db
-│   └── ai/                 # AI module (Strands Agents SDK)
-│       ├── __init__.py
-│       ├── constants.py    # All AI config constants (model IDs, tokens, temperatures)
-│       ├── prompts.py      # XML-structured system prompts for agent, explain, fix
-│       ├── sessions.py     # Per-notebook session management (SlidingWindowConversationManager)
-│       ├── notebook_agent.py  # Strands Agent definition with tools
-│       └── tools/
-│           ├── __init__.py
-│           └── execution_tools.py  # Agent tools: execute_code, read_notebook_state, install_package
+├── app/                          # MicroVM sandbox (runs INSIDE the Firecracker VM)
+│   ├── server.py                 # FastAPI entrypoint: shared state, pre-loaded libs
+│   ├── executor.py               # SandboxExecutor: stateful Python execution engine
+│   ├── hooks.py                  # Lifecycle hooks: /run, /suspend, /resume, /terminate
+│   ├── routes.py                 # Sandbox API: /execute, /install, /variables, /upload, /metrics
+│   └── checkpoint.py             # CheckpointManager: S3 checkpoint/restore logic
+├── proxy/                        # Token proxy (runs on your machine)
+│   ├── server.py                 # FastAPI entrypoint: app setup, startup, health, router registration
+│   ├── microvm_manager.py        # MicrovmManager: tokens, timers, cost, AWS client
+│   ├── cost_tracker.py           # CostTracker: per-VM cost estimation
+│   ├── routes/                   # API route modules
+│   │   ├── microvm.py            # Launch, terminate, suspend, resume, proxy, instances
+│   │   ├── notebooks.py          # Notebook CRUD
+│   │   ├── metrics.py            # Metrics, image tiers, packages
+│   │   ├── sessions.py           # S3 session checkpoints, data sources
+│   │   └── ai.py                 # AI chat, explain, fix, suggest-tag
+│   ├── storage/                  # Abstracted storage backend
+│   │   ├── __init__.py           # Backend selection (STORAGE_BACKEND env var)
+│   │   ├── interface.py          # Abstract StorageBackend class (the contract)
+│   │   └── sqlite_db.py          # SqliteStorage implementation (default)
+│   ├── ai/                       # AI module (Strands Agents SDK)
+│   │   ├── constants.py          # All AI config constants
+│   │   ├── prompts.py            # XML-structured system prompts
+│   │   ├── sessions.py           # Per-notebook session management
+│   │   ├── notebook_agent.py     # Strands Agent definition with tools
+│   │   └── tools/
+│   │       └── execution_tools.py  # Agent tools: execute_code, get_variables, install_package
+│   └── data/                     # SQLite database file (auto-created, gitignored)
+│       └── microvm.db
 ├── web/
 │   └── src/
-│       ├── main.jsx
-│       ├── App.jsx              # Layout, state, tab management (debounced localStorage)
-│       ├── App.css              # App shell, empty state welcome page
-│       ├── config.js            # Runtime config (ports from Vite env vars)
-│       ├── theme.css            # Design tokens (light + dark themes)
-│       ├── syntax-theme.css     # Python syntax highlighting
+│       ├── App.jsx               # Layout, state, tab management
+│       ├── config.js             # Runtime config (ports from Vite env vars)
+│       ├── theme.css             # Design tokens (light + dark themes)
 │       ├── components/
-│       │   ├── Cell.jsx         # Code cell: collapse, drag, timer, AI explain/fix/generate buttons
-│       │   ├── Cell.css
-│       │   ├── MarkdownCell.jsx     # Markdown/text cell: edit/render modes
-│       │   ├── ConnectionPanel.jsx  # MicroVM connection + launch (dynamic tiers, idle/max config)
-│       │   ├── ConnectionPanel.css
-│       │   ├── Notebook.jsx     # Toolbar, cell management, search, drag-reorder, annotate
-│       │   ├── Notebook.css
-│       │   ├── AiChatPanel.jsx  # Right-side AI chat panel (per-notebook messages, SSE streaming)
-│       │   ├── AiChatPanel.css
-│       │   ├── Sidebar.jsx      # Activity bar + collapsible panels:
-│       │   │                    #   • Notebooks — open tabs with status + tag grouping
-│       │   │                    #   • Outline — searchable cell list with drag-reorder
-│       │   │                    #   • Data Sources — S3, DynamoDB, Athena, Public APIs
-│       │   │                    #   • Variables — live variable explorer with smart previews
-│       │   │                    #   • Packages — pip install + package list
-│       │   │                    #   • Samples — prebuilt notebook templates
-│       │   │                    #   • MicroVMs — instance cards with cost breakdown
-│       │   ├── Sidebar.css
-│       │   ├── VariablePreviewRenderer.jsx  # Smart type-aware variable preview
-│       │   ├── Icons.jsx        # SVG icon components (35+)
-│       │   ├── Modal.jsx        # Reusable confirm/input modals
-│       │   └── Modal.css
+│       │   ├── Cell.jsx          # Code cell: collapse, drag, timer, AI buttons
+│       │   ├── Notebook.jsx      # Toolbar, cell management, search, drag-reorder
+│       │   ├── ConnectionPanel.jsx  # MicroVM connection + launch + restore
+│       │   ├── AiChatPanel.jsx   # Right-side AI chat panel (SSE streaming)
+│       │   ├── Sidebar.jsx       # Activity bar + panel container
+│       │   ├── panels/           # Individual sidebar panel components
+│       │   │   ├── NotebooksPanel.jsx
+│       │   │   ├── OutlinePanel.jsx
+│       │   │   ├── DataSourcesPanel.jsx
+│       │   │   ├── SamplesPanel.jsx
+│       │   │   ├── VariablesPanel.jsx
+│       │   │   ├── PackagesPanel.jsx
+│       │   │   ├── MicroVMsPanel.jsx
+│       │   │   └── AboutPanel.jsx
+│       │   ├── Icons.jsx         # SVG icon components (35+)
+│       │   └── Modal.jsx         # Reusable confirm/input modals
 │       └── services/
-│           ├── microvm.js       # MicroVM client service
-│           ├── notebooks.js     # Notebook API client (CRUD, migration, metrics)
-│           └── sanitize.js      # HTML sanitization (DOMPurify) for XSS prevention
+│           ├── notebooks.js      # Notebook API client (CRUD, migration)
+│           └── sanitize.js       # HTML sanitization (DOMPurify)
 ├── tests/
-│   ├── test_interrupt_execution.py  # E2E: interrupt long-running cells (7 scenarios)
-│   ├── test_microvm_lifecycle.py    # E2E: full state machine + checkpoint/restore (15 scenarios)
-│   └── test_s3_restore.py          # E2E: checkpoint serialization & restore (8 scenarios)
+│   ├── test_interrupt_execution.py
+│   ├── test_microvm_lifecycle.py
+│   ├── test_s3_restore.py
+│   └── test_resume_before_expire.py  # Pre-termination wake timer test
 ├── scripts/
-│   ├── config.sh               # All config (region, ports, sizes, DB names, polling)
+│   ├── config.sh               # All config (region, ports, sizes, pricing, retention)
 │   ├── setup_iam.sh            # Create IAM roles + S3 bucket
-│   ├── build_all_images.sh     # Parallel image build (all 5 tiers) with retry
+│   ├── build_all_images.sh     # Parallel image build (all tiers) with retry
 │   ├── setup_sample_data.sh    # DynamoDB + S3 + Athena tables + workgroup
 │   └── teardown.sh             # Terminate MicroVMs + delete images
 ├── iam/                    # IAM trust and permission policies
 ├── Dockerfile              # MicroVM image (al2023-minimal, Python 3.11)
-├── requirements.txt        # MicroVM sandbox Python deps (exact pins for fast image builds)
+├── requirements.txt        # MicroVM sandbox Python deps
 ├── requirements-proxy.txt  # Proxy server deps (Strands Agents, FastAPI, boto3)
-├── dev_run.sh              # One-command local dev (auto-detects python/python3)
-├── aws_microvm_run.sh      # One-command AWS mode (auto-detects python/python3)
+├── dev_run.sh              # One-command local dev
+├── aws_microvm_run.sh      # One-command AWS mode
 └── README.md
 ```
 
@@ -692,6 +721,7 @@ Three end-to-end test scripts validate the major aspects of MicroVM execution. A
 python3 tests/test_interrupt_execution.py
 python3 tests/test_microvm_lifecycle.py
 python3 tests/test_s3_restore.py
+python3 tests/test_resume_before_expire.py
 ```
 
 ### 9.1 Interrupt Execution (`test_interrupt_execution.py`)
@@ -751,6 +781,26 @@ Focused deep test of the checkpoint/restore mechanism — serialization, S3 uplo
 | 6 | Validate restored namespace | All variables match, types correct |
 | 7 | Validate restored files | Local /tmp/ files exist |
 | 8 | Timing report | End-to-end latency breakdown |
+
+### 9.4 Pre-Termination Wake Timer (`test_resume_before_expire.py`)
+
+Tests the workaround for an AWS Lambda MicroVMs limitation where the `/terminate` lifecycle hook does NOT fire when the service auto-terminates a SUSPENDED VM.
+
+**The Problem:**
+When `maximumDurationInSeconds` expires on a VM that is in SUSPENDED state, AWS releases it without resuming it — the `/terminate` hook never executes and our S3 checkpoint is lost.
+
+**The Workaround:**
+The proxy sets a timer 30 seconds before max lifetime. When the timer fires, it resumes the VM (if suspended). When AWS then terminates the VM moments later, it's in RUNNING state and the `/terminate` hook fires normally — our checkpoint code runs and saves state to S3.
+
+| # | Scenario | Validates |
+|---|----------|-----------|
+| 1 | Launch with short max lifetime (240s) | Timer scheduled by proxy |
+| 2 | Create state (variables + file) | Checkpoint has something to save |
+| 3 | Wait for VM to suspend (idle timeout) | VM enters SUSPENDED state |
+| 4 | Proxy timer fires at t=210s | VM resumes to RUNNING |
+| 5 | AWS auto-terminates at t=240s | VM is RUNNING → /terminate hook fires |
+| 6 | S3 checkpoint verified | checkpoint.pkl, metadata.json exist |
+| 7 | CloudWatch log confirmation | "POST /terminate HTTP/1.1" 200 OK in logs |
 
 ---
 

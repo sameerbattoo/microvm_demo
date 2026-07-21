@@ -108,6 +108,21 @@ else
   echo "   Bucket exists ✓"
 fi
 
+# --- Set S3 lifecycle rule for session checkpoints (auto-delete after N days) ---
+echo "   Setting lifecycle rule: sessions/ expire after ${S3_CHECKPOINT_RETENTION_DAYS} days"
+aws s3api put-bucket-lifecycle-configuration \
+  --bucket "$ARTIFACT_BUCKET" \
+  --lifecycle-configuration '{
+    "Rules": [{
+      "ID": "ExpireSessionCheckpoints",
+      "Status": "Enabled",
+      "Filter": {"Prefix": "sessions/"},
+      "Expiration": {"Days": '"$S3_CHECKPOINT_RETENTION_DAYS"'}
+    }]
+  }' \
+  --profile "$AWS_CLI_PROFILE" \
+  --region "$AWS_REGION" 2>/dev/null || true
+
 # --- Ensure IAM roles exist ---
 echo ">> Checking IAM roles..."
 if ! aws iam get-role --role-name "$BUILD_ROLE_NAME" --profile "$AWS_CLI_PROFILE" &>/dev/null; then
@@ -181,6 +196,12 @@ echo ">> Starting token proxy on http://localhost:$PROXY_PORT"
   ATHENA_DB="$ATHENA_DB" \
   ATHENA_WORKGROUP="$ATHENA_WORKGROUP" \
   ARTIFACT_BUCKET="$ARTIFACT_BUCKET" \
+  DYNAMO_TABLE="$DYNAMO_TABLE" \
+  STORAGE_BACKEND="$STORAGE_BACKEND" \
+  STORAGE_CONNECTION="$STORAGE_CONNECTION" \
+  PRICE_RUNNING_PER_GB_SEC="$PRICE_RUNNING_PER_GB_SEC" \
+  PRICE_SUSPENDED_PER_GB_SEC="$PRICE_SUSPENDED_PER_GB_SEC" \
+  METRICS_RETENTION_HOURS="$METRICS_RETENTION_HOURS" \
   $PYTHON -m uvicorn proxy.server:app --host 0.0.0.0 --port "$PROXY_PORT" --log-level warning) &
 PROXY_PID=$!
 sleep 1

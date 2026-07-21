@@ -39,11 +39,20 @@ function createCell(type = 'code') {
   }
 }
 
-export default function Notebook({ tab, instances = {}, onUpdateTab, onNewNotebook, onRefreshMetrics, attachedIds = [], theme, onToggleTheme, aiAvailable = false }) {
+export default function Notebook({ tab, instances = {}, onUpdateTab, onMarkVmRunning, onNewNotebook, onCloseTab, onRefreshMetrics, attachedIds = [], theme, onToggleTheme, aiAvailable = false }) {
   const [cells, setCells] = useState(() => {
     // Restore cells from tab state (persists across tab switches)
     if (tab._cells && Array.isArray(tab._cells) && tab._cells.length > 0) {
-      return tab._cells
+      // Ensure all cells have unique IDs (fix for cells loaded from API/localStorage without IDs)
+      const seen = new Set()
+      return tab._cells.map(c => {
+        let id = c.id
+        if (!id || seen.has(id)) {
+          id = nextCellId++
+        }
+        seen.add(id)
+        return { ...c, id }
+      })
     }
     // If tab has pre-loaded cells (from sample), use them
     if (tab._loadedCells && Array.isArray(tab._loadedCells)) {
@@ -73,6 +82,13 @@ export default function Notebook({ tab, instances = {}, onUpdateTab, onNewNotebo
       setShowConnection(false)
     }
   }, [tab.status])
+
+  // Auto-show connection panel when VM is terminated (disappeared from instances)
+  useEffect(() => {
+    if (tab.microvmId && Object.keys(instances).length > 0 && !instances[tab.microvmId]) {
+      setShowConnection(true)
+    }
+  }, [tab.microvmId, instances])
   const [activeCellId, setActiveCellId] = useState(null)
   const [dragOverId, setDragOverId] = useState(null)
   const [showSearch, setShowSearch] = useState(false)
@@ -237,7 +253,78 @@ export default function Notebook({ tab, instances = {}, onUpdateTab, onNewNotebo
   }, [tab.microvmEndpoint, tab.microvmId, tab.microvmRealEndpoint, tab.status])
 
   const executeCell = useCallback(async (cellId) => {
-    if (!tab.microvmEndpoint || tab.status !== 'connected') {
+    // If no VM linked at all, can't execute
+    if (!tab.microvmId) return
+
+    // Ensure we have an endpoint (might be missing after page refresh)
+    let endpoint = tab.microvmEndpoint
+    let realEndpoint = tab.microvmRealEndpoint
+    if (!endpoint) {
+      endpoint = `${PROXY_URL}/proxy`
+      // Discover real endpoint from instances
+      try {
+        const instResp = await fetch(`${PROXY_URL}/instances`)
+        const instData = await instResp.json()
+        const inst = instData.instances?.[tab.microvmId]
+        if (inst?.endpoint) {
+          realEndpoint = inst.endpoint
+          onUpdateTab({ microvmEndpoint: endpoint, microvmRealEndpoint: realEndpoint, status: 'connected' })
+        }
+      } catch {}
+    }
+
+    if (!realEndpoint) {
+      // Auto-restore: if VM was terminated but has a checkpoint, auto-launch + restore
+      if (tab.sessionSaved && tab.sessionId) {
+        // Set a guard state to prevent polling from interfering
+        onUpdateTab({ status: 'launching' })
+        setCells(prev => prev.map(c =>
+          c.id === cellId ? { ...c, status: 'running', output: null, error: null } : c
+        ))
+        try {
+          const resp = await fetch(`${PROXY_URL}/launch`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              notebookName: tab.name || 'Restored',
+              memoryMiB: tab.microvmMemory || 2048,
+              idleTimeoutSeconds: tab.idleTimeoutSeconds || 60,
+              maxDurationSeconds: tab.maxDurationSeconds || 14400,
+              checkpointEnabled: true,
+              sessionId: tab.sessionId,
+              restoreFromSession: tab.sessionId,
+            }),
+          })
+          if (resp.ok) {
+            const data = await resp.json()
+            onUpdateTab({
+              microvmId: data.microvmId,
+              microvmEndpoint: `${PROXY_URL}/proxy`,
+              microvmRealEndpoint: data.endpoint,
+              microvmMemory: tab.microvmMemory || 2048,
+              status: 'connected',
+              mode: 'microvm',
+              sessionSaved: false,
+              checkpointEnabled: true,
+              sessionId: data.sessionId,
+            })
+            // Retry the cell execution after restore
+            setCells(prev => prev.map(c =>
+              c.id === cellId ? { ...c, status: 'idle', output: '♻️ Session restored — re-run this cell.', error: null } : c
+            ))
+          } else {
+            onUpdateTab({ status: 'disconnected' })
+            setCells(prev => prev.map(c =>
+              c.id === cellId ? { ...c, status: 'error', error: '⚠️ Failed to auto-restore session. Use the connection panel to restore manually.' } : c
+            ))
+          }
+        } catch (err) {
+          onUpdateTab({ status: 'disconnected' })
+          setCells(prev => prev.map(c =>
+            c.id === cellId ? { ...c, status: 'error', error: `⚠️ Auto-restore failed: ${err.message}` } : c
+          ))
+        }
+      }
       return
     }
 
@@ -286,7 +373,7 @@ export default function Notebook({ tab, instances = {}, onUpdateTab, onNewNotebo
         } catch {
           setCells(prev => prev.map(c =>
             c.id === cellId
-              ? { ...c, status: 'error', error: 'MicroVM unreachable (may be terminated or suspended). Reconnect via ⚙ Connection.' }
+              ? { ...c, status: 'error', error: '⚠️ Sandbox unresponsive — it may have crashed or been terminated. Click "Terminate" in the MicroVMs panel and launch a new one.' }
               : c
           ))
           return
@@ -316,6 +403,12 @@ export default function Notebook({ tab, instances = {}, onUpdateTab, onNewNotebo
               }
             : c
         ))
+
+        // If execution succeeded and VM was suspended, immediately mark it as RUNNING
+        // (don't wait for 10s poll — this is the ONE exception to poll-only updates)
+        if (result.success && tab.microvmId && onMarkVmRunning) {
+          onMarkVmRunning(tab.microvmId)
+        }
       } catch (err) {
         setCells(prev => prev.map(c =>
           c.id === cellId
@@ -363,7 +456,7 @@ export default function Notebook({ tab, instances = {}, onUpdateTab, onNewNotebo
   }, [tab.microvmEndpoint, tab.microvmId, tab.microvmRealEndpoint, tab.status, tab.tag, tab.name, tab.description, isExecuting])
 
   const executeAllCells = useCallback(async () => {
-    if (!tab.microvmEndpoint || tab.status !== 'connected') return
+    if (!tab.microvmId) return
 
     for (const cell of cells) {
       if (cell.code.trim()) {
@@ -385,7 +478,7 @@ export default function Notebook({ tab, instances = {}, onUpdateTab, onNewNotebo
   }, [activeCellId, executeCell])
 
   const interruptExecution = useCallback(async () => {
-    if (!tab.microvmEndpoint || tab.status !== 'connected') return
+    if (!tab.microvmEndpoint || !tab.microvmId) return
 
     const headers = { 'Content-Type': 'application/json' }
     if (tab.microvmId) {
@@ -632,6 +725,9 @@ export default function Notebook({ tab, instances = {}, onUpdateTab, onNewNotebo
     return { [activeMatch.cellId]: countInCell }
   }, [showSearch, searchQuery, searchMatches, searchActiveIdx])
 
+  // Derive whether the linked VM is alive (exists in instances) — used for toolbar/cell disabled state
+  const vmAlive = tab.microvmId && !!instances[tab.microvmId]
+
   return (
     <div className="notebook">
       {showConnection && tab.status !== 'connecting' && (
@@ -649,22 +745,22 @@ export default function Notebook({ tab, instances = {}, onUpdateTab, onNewNotebo
           <div className="toolbar-scrollable">
           <div className="toolbar-brand">
             <IconZap width={14} height={14} />
-            <span>MicroVM</span>
+            <span className="toolbar-notebook-name" title={tab.name}>{tab.name || 'Untitled'}</span>
           </div>
 
           <span className="toolbar-divider" />
 
           <div className="toolbar-group toolbar-group-cells" title="Cell actions">
             <button className="toolbar-btn" onClick={() => addCellAtEnd('code')} title="Add code cell">
-              <IconPlus width={14} height={14} /> Code
+              <IconPlus width={14} height={14} />
             </button>
             <button className="toolbar-btn" onClick={() => addCellAtEnd('markdown')} title="Add text/markdown cell">
-              <IconFile width={14} height={14} /> Text
+              <IconFile width={14} height={14} />
             </button>
             <button
               className="toolbar-btn toolbar-btn-run"
               onClick={runActiveCell}
-              disabled={!activeCellId || isExecuting || tab.status !== 'connected'}
+              disabled={!activeCellId || isExecuting || !vmAlive}
               title="Run active cell (Shift+Enter)"
             >
               <IconPlay width={14} height={14} /> Run
@@ -675,15 +771,15 @@ export default function Notebook({ tab, instances = {}, onUpdateTab, onNewNotebo
               disabled={!cells.some(c => c.status === 'running')}
               title="Stop execution"
             >
-              <IconStop width={14} height={14} /> Stop
+              <IconStop width={14} height={14} />
             </button>
             <button
               className="toolbar-btn toolbar-btn-run-all"
               onClick={executeAllCells}
-              disabled={isExecuting || tab.status !== 'connected'}
+              disabled={isExecuting || !vmAlive}
               title="Execute all cells sequentially"
             >
-              <IconPlayAll width={14} height={14} /> Run All
+              <IconPlayAll width={14} height={14} />
             </button>
             <button
               className="toolbar-btn toolbar-btn-delete"
@@ -691,7 +787,7 @@ export default function Notebook({ tab, instances = {}, onUpdateTab, onNewNotebo
               disabled={!activeCellId}
               title="Delete active cell"
             >
-              <IconTrash width={14} height={14} /> Delete
+              <IconTrash width={14} height={14} />
             </button>
           </div>
 
@@ -699,19 +795,24 @@ export default function Notebook({ tab, instances = {}, onUpdateTab, onNewNotebo
 
           <div className="toolbar-group toolbar-group-notebook" title="Notebook actions">
             <button className="toolbar-btn toolbar-btn-save" onClick={saveNotebook} title="Save notebook">
-              <IconSave width={14} height={14} /> Save
+              <IconSave width={14} height={14} />
             </button>
             <button className="toolbar-btn toolbar-btn-open" onClick={loadNotebook} title="Open notebook">
-              <IconFolderOpen width={14} height={14} /> Open
+              <IconFolderOpen width={14} height={14} />
             </button>
             {onNewNotebook && (
               <button className="toolbar-btn" onClick={onNewNotebook} title="New notebook">
-                <IconNotebook width={14} height={14} /> New
+                <IconNotebook width={14} height={14} />
               </button>
             )}
             <button className="toolbar-btn toolbar-btn-find" onClick={() => { setShowSearch(true); setTimeout(() => searchInputRef.current?.focus(), 50) }} title="Find in notebook (Cmd+F)">
-              <IconSearch width={14} height={14} /> Find
+              <IconSearch width={14} height={14} />
             </button>
+            {onCloseTab && (
+              <button className="toolbar-btn toolbar-btn-close" onClick={() => onCloseTab(tab.id)} title="Close notebook">
+                <IconX width={14} height={14} />
+              </button>
+            )}
             {aiAvailable && (
               <button
                 className={`toolbar-btn toolbar-btn-autodoc ${isAnnotating ? 'toolbar-btn-loading' : ''}`}
@@ -719,7 +820,7 @@ export default function Notebook({ tab, instances = {}, onUpdateTab, onNewNotebo
                 disabled={!tab.microvmEndpoint || tab.status !== 'connected' || isAnnotating}
                 title="Auto-annotate all cells with AI explanations"
               >
-                {isAnnotating ? <span className="toolbar-spinner" /> : <IconFile width={14} height={14} />} {isAnnotating ? 'Annotating...' : 'Annotate'}
+                {isAnnotating ? <span className="toolbar-spinner" /> : <IconFile width={14} height={14} />}
               </button>
             )}
             <button
@@ -728,7 +829,7 @@ export default function Notebook({ tab, instances = {}, onUpdateTab, onNewNotebo
               disabled={!cells.some(c => c.output || c.error || c.html || c.image)}
               title="Clear all cell outputs"
             >
-              <IconEraser width={14} height={14} /> Clear
+              <IconEraser width={14} height={14} />
             </button>
           </div>
 
@@ -736,15 +837,17 @@ export default function Notebook({ tab, instances = {}, onUpdateTab, onNewNotebo
 
           <div className="toolbar-pinned">
           {(() => {
-            // VM state is injected fresh from App via tab._vmState
-            const vmState = tab._vmState || (tab.microvmId && instances[tab.microvmId] ? instances[tab.microvmId].state : null)
+            // VM state derived directly from instances (single source of truth)
+            const vmState = tab.microvmId && instances[tab.microvmId] ? instances[tab.microvmId].state : null
             const isSuspended = vmState === 'SUSPENDED'
-            const isTerminated = vmState === 'TERMINATED'
+            const isTerminated = tab.microvmId && !instances[tab.microvmId]
+            const isUnhealthy = tab.microvmId && instances[tab.microvmId]?.unhealthy
             return (
               <div className="toolbar-status" onClick={() => setShowConnection(true)} title="Click to manage connection">
-                <span className={`status-dot ${isSuspended ? 'status-suspended' : isTerminated ? 'status-terminated' : `status-${tab.status}`}`} />
+                <span className={`status-dot ${isUnhealthy ? 'status-terminated' : isSuspended ? 'status-suspended' : isTerminated ? 'status-terminated' : `status-${tab.status}`}`} />
                 <span className="status-text">
-                  {isSuspended ? 'Suspended' :
+                  {isUnhealthy ? 'Unhealthy' :
+                   isSuspended ? 'Suspended' :
                    isTerminated ? 'Terminated' :
                    tab.status === 'connected' ? 'Running' :
                    tab.status === 'connecting' ? 'Connecting...' :
@@ -817,7 +920,7 @@ export default function Notebook({ tab, instances = {}, onUpdateTab, onNewNotebo
             key={cell.id}
             cell={cell}
             index={index}
-            isConnected={tab.status === 'connected'}
+            isConnected={vmAlive}
             isActive={cell.id === activeCellId}
             isDragOver={cell.id === dragOverId}
             hasSearchMatch={searchMatchCellIds.has(cell.id)}
@@ -851,6 +954,7 @@ export default function Notebook({ tab, instances = {}, onUpdateTab, onNewNotebo
             searchQuery={showSearch ? searchQuery : ''}
             searchActiveOccurrence={searchActiveOccurrenceMap[cell.id] ?? -1}
             notebookContext={cells}
+            notebookName={tab.name}
             microvmId={tab.microvmId}
             microvmRealEndpoint={tab.microvmRealEndpoint}
             aiAvailable={aiAvailable}

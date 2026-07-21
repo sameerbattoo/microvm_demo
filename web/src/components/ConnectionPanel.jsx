@@ -98,7 +98,7 @@ export default function ConnectionPanel({ tab, onConnect, onUpdateTab, onDismiss
           idleTimeoutSeconds: parseInt(launchIdleTimeout),
           maxDurationSeconds: parseInt(launchMaxDuration),
           checkpointEnabled: true,
-          sessionId: `${tab.sessionId}-restored-${crypto.randomUUID()}`,
+          sessionId: tab.sessionId,
           restoreFromSession: tab.sessionId,
         }),
       })

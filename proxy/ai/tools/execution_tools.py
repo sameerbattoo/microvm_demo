@@ -15,25 +15,28 @@ from ..constants import (
     HTTP_ERROR_BODY_MAX_CHARS,
 )
 
-# Module-level context set before each agent invocation
-_context: dict = {}
-_context_lock = threading.Lock()
+# Thread-local context so concurrent agent sessions don't leak between each other
+_thread_context = threading.local()
 
 
 def set_execution_context(context: dict):
-    """Set the execution context (endpoint, microvm_id, etc.) for tools to use."""
-    global _context
-    with _context_lock:
-        _context = context.copy()
+    """Set the execution context for the current thread (endpoint, microvm_id, etc.)."""
+    _thread_context.context = context.copy()
+
+
+def _get_context() -> dict:
+    """Get the current thread's execution context."""
+    return getattr(_thread_context, 'context', {})
 
 
 def _get_headers() -> dict:
     """Build headers for MicroVM proxy requests."""
+    ctx = _get_context()
     headers = {"Content-Type": "application/json"}
-    if _context.get("microvm_id"):
-        headers["X-MicroVM-Id"] = _context["microvm_id"]
-    if _context.get("microvm_endpoint"):
-        headers["X-MicroVM-Endpoint"] = _context["microvm_endpoint"]
+    if ctx.get("microvm_id"):
+        headers["X-MicroVM-Id"] = ctx["microvm_id"]
+    if ctx.get("microvm_endpoint"):
+        headers["X-MicroVM-Endpoint"] = ctx["microvm_endpoint"]
     return headers
 
 
@@ -53,7 +56,7 @@ def execute_code(code: str) -> str:
     Returns:
         The execution output (stdout), or the error message if it failed.
     """
-    proxy_url = _context.get("proxy_url", "http://localhost:8081")
+    proxy_url = _get_context().get("proxy_url", "http://localhost:8081")
     headers = _get_headers()
 
     try:
@@ -89,7 +92,7 @@ def get_variables() -> str:
     Returns:
         JSON-formatted list of variables with their types and previews.
     """
-    proxy_url = _context.get("proxy_url", "http://localhost:8081")
+    proxy_url = _get_context().get("proxy_url", "http://localhost:8081")
     headers = _get_headers()
 
     try:
@@ -132,7 +135,7 @@ def get_notebook_state() -> str:
     Returns:
         Formatted summary of all notebook cells.
     """
-    notebook_context = _context.get("notebook_cells", [])
+    notebook_context = _get_context().get("notebook_cells", [])
     if not notebook_context:
         return "Notebook is empty (no cells)."
 
@@ -171,7 +174,7 @@ def install_package(package_name: str) -> str:
     Returns:
         Success or failure message from pip install.
     """
-    proxy_url = _context.get("proxy_url", "http://localhost:8081")
+    proxy_url = _get_context().get("proxy_url", "http://localhost:8081")
     headers = _get_headers()
 
     try:
@@ -203,8 +206,8 @@ def get_available_data_sources() -> str:
     Returns:
         Formatted list of available data sources with schema info where available.
     """
-    data_sources = _context.get("data_sources")
-    uploaded_files = _context.get("uploaded_files", [])
+    data_sources = _get_context().get("data_sources")
+    uploaded_files = _get_context().get("uploaded_files", [])
 
     if not data_sources and not uploaded_files:
         return "No data source information available."

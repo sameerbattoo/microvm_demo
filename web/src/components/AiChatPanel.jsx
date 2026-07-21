@@ -86,10 +86,14 @@ export default function AiChatPanel({ activeTab, uploadedFiles = [], onClose, on
     onUpdateMessages(newMessages)
     setLoading(true)
 
+    // Scroll to bottom immediately so user sees their message
+    setTimeout(() => endRef.current?.scrollIntoView({ behavior: 'smooth' }), 50)
+
     try {
       const controller = new AbortController()
       chatAbortRef.current = controller
-      const resp = await fetch(`${PROXY_URL}/ai/chat/sync`, {
+
+      const resp = await fetch(`${PROXY_URL}/ai/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         signal: controller.signal,
@@ -111,12 +115,50 @@ export default function AiChatPanel({ activeTab, uploadedFiles = [], onClose, on
         }),
       })
 
-      if (resp.ok) {
-        const data = await resp.json()
-        onUpdateMessages([...newMessages, { role: 'assistant', content: data.response || 'No response' }])
-      } else {
+      if (!resp.ok) {
         const err = await resp.json().catch(() => ({}))
         onUpdateMessages([...newMessages, { role: 'assistant', content: `Error: ${err.error || resp.statusText}`, isError: true }])
+        setLoading(false)
+        return
+      }
+
+      // Stream SSE response token by token
+      const reader = resp.body.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ''
+      let assistantContent = ''
+
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+
+        buffer += decoder.decode(value, { stream: true })
+        const lines = buffer.split('\n')
+        buffer = lines.pop() || ''
+
+        for (const line of lines) {
+          if (line.startsWith('data: ')) {
+            try {
+              const event = JSON.parse(line.slice(6))
+              if (event.type === 'text') {
+                assistantContent += event.content
+                onUpdateMessages([...newMessages, { role: 'assistant', content: assistantContent }])
+                // Auto-scroll as content streams in
+                endRef.current?.scrollIntoView({ behavior: 'smooth' })
+              } else if (event.type === 'done') {
+                // Stream complete
+              } else if (event.type === 'error') {
+                assistantContent += `\n\nError: ${event.content}`
+                onUpdateMessages([...newMessages, { role: 'assistant', content: assistantContent, isError: true }])
+              }
+            } catch {}
+          }
+        }
+      }
+
+      // Final update with complete content
+      if (assistantContent) {
+        onUpdateMessages([...newMessages, { role: 'assistant', content: assistantContent }])
       }
     } catch (err) {
       if (err.name !== 'AbortError') {
