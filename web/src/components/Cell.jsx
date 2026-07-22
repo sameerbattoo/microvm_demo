@@ -75,6 +75,18 @@ export default function Cell({
     }
   }, [cell.code, codeCollapsed])
 
+  // Re-calculate height when container width changes (e.g., AI panel resize)
+  useEffect(() => {
+    const el = textareaRef.current
+    if (!el) return
+    const observer = new ResizeObserver(() => {
+      el.style.height = 'auto'
+      el.style.height = `${el.scrollHeight}px`
+    })
+    observer.observe(el.parentElement)
+    return () => observer.disconnect()
+  }, [])
+
   const highlightedHtml = useMemo(() => {
     if (!cell.code) return ''
     let html = Prism.highlight(cell.code, Prism.languages.python, 'python')

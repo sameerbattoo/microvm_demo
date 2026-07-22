@@ -1,4 +1,5 @@
 import { useState, useCallback, useRef, useEffect, useMemo } from 'react'
+import { createPortal } from 'react-dom'
 import Cell from './Cell'
 import ConnectionPanel from './ConnectionPanel'
 import { IconPlus, IconPlayAll, IconPlay, IconTrash, IconSave, IconFolderOpen, IconStop, IconFile, IconSearch, IconChevronUp, IconChevronDown, IconX, IconZap, IconSun, IconMoon, IconCode, IconNotebook, IconEraser } from './Icons'
@@ -75,6 +76,9 @@ export default function Notebook({ tab, instances = {}, onUpdateTab, onMarkVmRun
   const [showConnection, setShowConnection] = useState(tab.status !== 'connected')
   const [isExecuting, setIsExecuting] = useState(false)
   const [isAnnotating, setIsAnnotating] = useState(false)
+  const [showExportMenu, setShowExportMenu] = useState(false)
+  const [saveMenuPos, setSaveMenuPos] = useState(null)
+  const [exportMenuPos, setExportMenuPos] = useState(null)
 
   // Sync connection panel visibility when tab status changes
   useEffect(() => {
@@ -675,10 +679,101 @@ export default function Notebook({ tab, instances = {}, onUpdateTab, onMarkVmRun
     URL.revokeObjectURL(url)
   }, [tab.name, tab.microvmId, cells])
 
+  const exportNotebookHTML = useCallback(() => {
+    const nbName = tab.name || 'Notebook'
+    let html = `<html><head><meta charset="UTF-8"><title>${nbName}</title><style>body{font-family:system-ui;padding:20px;max-width:1000px;margin:0 auto;background:#1a1a2e;color:#e0e0e0}h1{color:#89b4fa}h2{color:#cdd6f4;font-size:16px;margin-top:24px}.desc{color:#888;margin-bottom:24px}.cell{margin:16px 0;border:1px solid #333;border-radius:8px;overflow:hidden}.cell-header{background:#2a2a4a;padding:8px 12px;font-size:11px;color:#888;display:flex;justify-content:space-between}details{margin:0}summary{padding:8px 12px;cursor:pointer;font-weight:600;font-size:12px;color:#a6adc8;background:#1e2a3a}pre{margin:0;padding:12px;background:#0d1117;overflow-x:auto;font-size:13px;color:#e0e0e0}table{border-collapse:collapse;width:100%;margin:8px 0}th,td{border:1px solid #444;padding:6px 10px;text-align:left;font-size:12px}th{background:#2a2a4a}.output{padding:12px;background:#11111b}.ai-note{padding:8px 12px;background:#1e2a3a;border-top:1px solid #333;font-size:12px;color:#a6adc8;font-style:italic}img{max-width:100%}.error{color:#f38ba8}footer{text-align:center;padding:24px;color:#555;font-size:11px;border-top:1px solid #333;margin-top:32px}</style></head><body>`
+    html += `<h1>${nbName}</h1>`
+    if (tab.description) html += `<p class="desc">${tab.description}</p>`
+    html += `<p style="color:#666;font-size:12px">Exported: ${new Date().toLocaleString()} · ${cells.length} cells</p>`
+    cells.forEach((cell, i) => {
+      const cellType = cell.type || 'code'
+      html += `<div class="cell">`
+      html += `<div class="cell-header"><span>${cellType === 'markdown' ? 'Text' : `Code — Cell ${i + 1}`}</span>${cell.executionNumber ? `<span>[${cell.executionNumber}]</span>` : ''}</div>`
+      html += `<details open><summary>Code</summary><pre>${(cell.code || '').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</pre></details>`
+      if (cell.output || cell.html || cell.image || cell.error) {
+        html += `<div class="output">`
+        if (cell.output) html += `<pre>${cell.output}</pre>`
+        if (cell.html) html += cell.html
+        if (cell.image) html += `<img src="${cell.image}" alt="Plot"/>`
+        if (cell.error) html += `<pre class="error">${cell.error}</pre>`
+        html += `</div>`
+      }
+      if (cell.aiExplanation) html += `<div class="ai-note">✨ ${cell.aiExplanation}</div>`
+      html += `</div>`
+    })
+    html += `<footer><strong>Lambda MicroVM Notebook</strong><br>Developed by the AWS Startup SA Team<br>&copy; ${new Date().getFullYear()} Amazon Web Services, Inc.</footer></body></html>`
+    const blob = new Blob([html], { type: 'text/html' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url; a.download = `${nbName.replace(/\s+/g, '-')}.html`; a.click()
+    URL.revokeObjectURL(url)
+  }, [tab.name, tab.description, cells])
+
+  const exportNotebookMD = useCallback(() => {
+    const nbName = tab.name || 'Notebook'
+    let md = `# ${nbName}\n\n`
+    if (tab.description) md += `> ${tab.description}\n\n`
+    md += `*Exported: ${new Date().toLocaleString()} · ${cells.length} cells*\n\n---\n\n`
+    cells.forEach((cell, i) => {
+      const cellType = cell.type || 'code'
+      md += `## ${cellType === 'markdown' ? 'Text' : `Cell ${i + 1}`}${cell.executionNumber ? ` [${cell.executionNumber}]` : ''}\n\n`
+      md += `<details><summary>Code</summary>\n\n\`\`\`python\n${cell.code || ''}\n\`\`\`\n</details>\n\n`
+      if (cell.output) md += `**Output:**\n\`\`\`\n${cell.output}\n\`\`\`\n\n`
+      if (cell.html) md += `*(DataFrame table — view HTML export for full rendering)*\n\n`
+      if (cell.image) md += `![Plot](plot-cell-${i + 1}.png)\n\n`
+      if (cell.error) md += `**Error:** \`${cell.error}\`\n\n`
+      if (cell.aiExplanation) md += `> ✨ *${cell.aiExplanation}*\n\n`
+      md += `---\n\n`
+    })
+    md += `\n*Lambda MicroVM Notebook — Developed by the AWS Startup SA Team*\n`
+    const blob = new Blob([md], { type: 'text/markdown' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url; a.download = `${nbName.replace(/\s+/g, '-')}.md`; a.click()
+    URL.revokeObjectURL(url)
+  }, [tab.name, tab.description, cells])
+
+  const saveAsIPYNB = useCallback(() => {
+    const nbName = tab.name || 'Notebook'
+    const ipynb = {
+      nbformat: 4,
+      nbformat_minor: 5,
+      metadata: {
+        kernelspec: { display_name: 'Python 3', language: 'python', name: 'python3' },
+        language_info: { name: 'python', version: '3.11' },
+      },
+      cells: cells.map(cell => {
+        const cellType = cell.type === 'markdown' ? 'markdown' : 'code'
+        const source = (cell.code || '').split('\n').map((line, i, arr) => i < arr.length - 1 ? line + '\n' : line)
+        const outputs = []
+        if (cellType === 'code') {
+          if (cell.output) {
+            outputs.push({ output_type: 'stream', name: 'stdout', text: cell.output.split('\n').map((l, i, a) => i < a.length - 1 ? l + '\n' : l) })
+          }
+          if (cell.error) {
+            outputs.push({ output_type: 'stream', name: 'stderr', text: [cell.error] })
+          }
+        }
+        return {
+          cell_type: cellType,
+          metadata: {},
+          source,
+          ...(cellType === 'code' ? { outputs, execution_count: cell.executionNumber || null } : {}),
+        }
+      }),
+    }
+    const blob = new Blob([JSON.stringify(ipynb, null, 1)], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url; a.download = `${nbName.replace(/\s+/g, '_')}.ipynb`; a.click()
+    URL.revokeObjectURL(url)
+    setSaveMenuPos(null)
+  }, [tab.name, cells])
+
   const loadNotebook = useCallback(() => {
     const input = document.createElement('input')
     input.type = 'file'
-    input.accept = '.json,.notebook.json'
+    input.accept = '.json,.notebook.json,.ipynb'
     input.onchange = (e) => {
       const file = e.target.files?.[0]
       if (!file) return
@@ -686,20 +781,54 @@ export default function Notebook({ tab, instances = {}, onUpdateTab, onMarkVmRun
       const reader = new FileReader()
       reader.onload = (ev) => {
         try {
-          const notebook = JSON.parse(ev.target.result)
-          if (notebook.cells && Array.isArray(notebook.cells)) {
-            // Open as a new notebook tab (don't overwrite current)
+          const data = JSON.parse(ev.target.result)
+
+          // Detect Jupyter .ipynb format
+          if (data.nbformat && data.cells && Array.isArray(data.cells)) {
+            // Parse Jupyter notebook
+            const cells = data.cells
+              .filter(c => c.cell_type === 'code' || c.cell_type === 'markdown')
+              .map(c => {
+                const code = Array.isArray(c.source) ? c.source.join('') : (c.source || '')
+                // Extract text output if available
+                let output = null
+                if (c.outputs && c.outputs.length > 0) {
+                  const textOut = c.outputs.find(o => o.output_type === 'stream' || o.output_type === 'execute_result')
+                  if (textOut) {
+                    const text = textOut.text || textOut.data?.['text/plain']
+                    output = Array.isArray(text) ? text.join('') : text || null
+                  }
+                }
+                return {
+                  type: c.cell_type === 'markdown' ? 'markdown' : 'code',
+                  code,
+                  output,
+                  error: null,
+                  html: null,
+                  image: null,
+                }
+              })
+
+            const name = file.name.replace('.ipynb', '')
+            window.dispatchEvent(new CustomEvent('open-notebook', {
+              detail: { name, description: `Imported from Jupyter: ${file.name}`, tag: null, cells }
+            }))
+            return
+          }
+
+          // Our native .notebook.json format
+          if (data.cells && Array.isArray(data.cells)) {
             window.dispatchEvent(new CustomEvent('open-notebook', {
               detail: {
-                name: notebook.name || file.name.replace('.notebook.json', '').replace('.json', ''),
-                description: notebook.description || '',
-                tag: notebook.tag || null,
-                cells: notebook.cells,
+                name: data.name || file.name.replace('.notebook.json', '').replace('.json', ''),
+                description: data.description || '',
+                tag: data.tag || null,
+                cells: data.cells,
               }
             }))
           }
         } catch {
-          alert('Invalid notebook file')
+          alert('Invalid notebook file. Supported formats: .notebook.json, .ipynb')
         }
       }
       reader.readAsText(file)
@@ -729,6 +858,7 @@ export default function Notebook({ tab, instances = {}, onUpdateTab, onMarkVmRun
   const vmAlive = tab.microvmId && !!instances[tab.microvmId]
 
   return (
+    <>
     <div className="notebook">
       {showConnection && tab.status !== 'connecting' && (
         <ConnectionPanel
@@ -794,8 +924,17 @@ export default function Notebook({ tab, instances = {}, onUpdateTab, onMarkVmRun
           <span className="toolbar-divider" />
 
           <div className="toolbar-group toolbar-group-notebook" title="Notebook actions">
-            <button className="toolbar-btn toolbar-btn-save" onClick={saveNotebook} title="Save notebook">
+            <button className="toolbar-btn toolbar-btn-save" onClick={(e) => {
+              const rect = e.currentTarget.getBoundingClientRect()
+              setSaveMenuPos(saveMenuPos ? null : { top: rect.bottom + 4, left: rect.left })
+            }} title="Save notebook">
               <IconSave width={14} height={14} />
+            </button>
+            <button className="toolbar-btn" onClick={(e) => {
+              const rect = e.currentTarget.getBoundingClientRect()
+              setExportMenuPos(exportMenuPos ? null : { top: rect.bottom + 4, left: rect.left })
+            }} title="Export notebook">
+              <svg width={14} height={14} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
             </button>
             <button className="toolbar-btn toolbar-btn-open" onClick={loadNotebook} title="Open notebook">
               <IconFolderOpen width={14} height={14} />
@@ -972,5 +1111,26 @@ export default function Notebook({ tab, instances = {}, onUpdateTab, onMarkVmRun
 
       </div>
     </div>
+    {saveMenuPos && createPortal(
+      <div className="toolbar-portal-menu" style={{ position: 'fixed', top: saveMenuPos.top, left: saveMenuPos.left, zIndex: 9999 }}>
+        <div className="toolbar-portal-backdrop" onClick={() => setSaveMenuPos(null)} />
+        <div className="toolbar-portal-options">
+          <button onClick={() => { saveNotebook(); setSaveMenuPos(null) }}>Native (.notebook.json)</button>
+          <button onClick={saveAsIPYNB}>Jupyter (.ipynb)</button>
+        </div>
+      </div>,
+      document.body
+    )}
+    {exportMenuPos && createPortal(
+      <div className="toolbar-portal-menu" style={{ position: 'fixed', top: exportMenuPos.top, left: exportMenuPos.left, zIndex: 9999 }}>
+        <div className="toolbar-portal-backdrop" onClick={() => setExportMenuPos(null)} />
+        <div className="toolbar-portal-options">
+          <button onClick={() => { exportNotebookHTML(); setExportMenuPos(null) }}>HTML</button>
+          <button onClick={() => { exportNotebookMD(); setExportMenuPos(null) }}>Markdown</button>
+        </div>
+      </div>,
+      document.body
+    )}
+    </>
   )
 }

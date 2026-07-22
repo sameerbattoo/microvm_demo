@@ -128,7 +128,7 @@ export default function App() {
           output: c.output || null,
           error: c.error || null,
           html: c.html || null,
-          image: null,
+          image: c.image || null,
           aiExplanation: c.aiExplanation || null,
         }))
         apiSaveNotebook({
@@ -156,33 +156,53 @@ export default function App() {
 
       // Fetch from API
       const apiNotebooks = await fetchNotebooks()
-      if (apiNotebooks && apiNotebooks.length > 0 && tabs.length === 0) {
-        // API has notebooks but local state is empty — load from API
-        const loaded = apiNotebooks.map(nb => ({
-          id: nb.id.includes('-') ? nb.id : parseInt(nb.id) || nb.id,
-          name: nb.name,
-          description: nb.description || '',
-          tag: nb.tag || 'Drafts',
-          _cells: nb.cells || [],
-          microvmEndpoint: null,
-          microvmRealEndpoint: null,
-          microvmId: nb.microvm_id || null,
-          status: 'disconnected',
-          mode: null,
-          sessionId: nb.session_id || null,
-          checkpointEnabled: nb.checkpoint_enabled || false,
-        }))
-        setTabs(loaded)
-        if (loaded.length > 0 && !activeTabId) {
-          setActiveTabId(loaded[0].id)
+      if (apiNotebooks && apiNotebooks.length > 0) {
+        if (tabs.length === 0) {
+          // API has notebooks but local state is empty — load from API
+          const loaded = apiNotebooks.map(nb => ({
+            id: nb.id.includes('-') ? nb.id : parseInt(nb.id) || nb.id,
+            name: nb.name,
+            description: nb.description || '',
+            tag: nb.tag || 'Drafts',
+            _cells: nb.cells || [],
+            microvmEndpoint: null,
+            microvmRealEndpoint: null,
+            microvmId: nb.microvm_id || null,
+            status: 'disconnected',
+            mode: null,
+            sessionId: nb.session_id || null,
+            checkpointEnabled: nb.checkpoint_enabled || false,
+          }))
+          setTabs(loaded)
+          if (loaded.length > 0 && !activeTabId) {
+            setActiveTabId(loaded[0].id)
+          }
+        } else {
+          // Enrich existing tabs with images from API (localStorage strips them)
+          const apiMap = {}
+          apiNotebooks.forEach(nb => { apiMap[nb.id] = nb })
+          setTabs(prev => prev.map(tab => {
+            const apiNb = apiMap[String(tab.id)]
+            if (!apiNb || !apiNb.cells) return tab
+            const apiCells = apiNb.cells
+            const enrichedCells = (tab._cells || []).map((cell, idx) => {
+              if (!cell.image && apiCells[idx]?.image) {
+                return { ...cell, image: apiCells[idx].image }
+              }
+              return cell
+            })
+            return { ...tab, _cells: enrichedCells }
+          }))
         }
 
         // Load chat messages from DB for each notebook (non-blocking)
-        loaded.forEach(async (tab) => {
-          if (tab.sessionId) {
-            const msgs = await loadChatMessages(tab.sessionId)
+        apiNotebooks.forEach(async (nb) => {
+          const tabId = nb.id.includes('-') ? nb.id : parseInt(nb.id) || nb.id
+          const sessionId = nb.session_id
+          if (sessionId) {
+            const msgs = await loadChatMessages(sessionId)
             if (msgs && msgs.length > 0) {
-              setTabs(prev => prev.map(t => t.id === tab.id ? { ...t, _chatMessages: msgs } : t))
+              setTabs(prev => prev.map(t => t.id === tabId ? { ...t, _chatMessages: msgs } : t))
             }
           }
         })
@@ -816,14 +836,9 @@ export default function App() {
               updateTab(activeTabId, { _cells: newCells })
             }}
             onInsertCells={(codeBlocks) => {
-              const tab = tabs.find(t => t.id === activeTabId)
-              if (!tab || !tab._cells) return
-              const insertIdx = (tab._activeCellIndex ?? tab._cells.length - 1) + 1
-              const newCells = [...tab._cells]
-              codeBlocks.forEach((code, i) => {
-                newCells.splice(insertIdx + i, 0, { id: Date.now() + Math.random() + i, type: 'code', code, output: null, error: null, html: null, image: null })
+              codeBlocks.forEach((code) => {
+                window.dispatchEvent(new CustomEvent('insert-code', { detail: { code } }))
               })
-              updateTab(activeTabId, { _cells: newCells })
             }}
           />
         )}

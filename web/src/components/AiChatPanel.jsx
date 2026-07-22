@@ -12,6 +12,7 @@ export default function AiChatPanel({ activeTab, uploadedFiles = [], onClose, on
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
   const [showExportMenu, setShowExportMenu] = useState(false)
+  const [collapsedMsgs, setCollapsedMsgs] = useState({})
   const [width, setWidth] = useState(320)
   const endRef = useRef(null)
   const isResizing = useRef(false)
@@ -83,7 +84,7 @@ export default function AiChatPanel({ activeTab, uploadedFiles = [], onClose, on
 
     const userMessage = input.trim()
     setInput('')
-    const newMessages = [...messages, { role: 'user', content: userMessage }]
+    const newMessages = [...messages, { role: 'user', content: userMessage, timestamp: new Date().toISOString() }]
     onUpdateMessages(newMessages)
     setLoading(true)
 
@@ -159,7 +160,7 @@ export default function AiChatPanel({ activeTab, uploadedFiles = [], onClose, on
 
       // Final update with complete content
       if (assistantContent) {
-        onUpdateMessages([...newMessages, { role: 'assistant', content: assistantContent }])
+        onUpdateMessages([...newMessages, { role: 'assistant', content: assistantContent, timestamp: new Date().toISOString() }])
       }
     } catch (err) {
       if (err.name !== 'AbortError') {
@@ -178,8 +179,9 @@ export default function AiChatPanel({ activeTab, uploadedFiles = [], onClose, on
     html += `<p style="color:#888">Exported: ${new Date().toLocaleString()}</p>`
     messages.forEach(msg => {
       const cls = msg.role === 'user' ? 'user' : 'assistant'
+      const time = msg.timestamp ? new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''
       const content = msg.role === 'assistant' ? marked.parse(msg.content || '', { breaks: true }) : (msg.content || '').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-      html += `<div class="msg ${cls}"><strong>${msg.role === 'user' ? 'You' : 'AI Assistant'}</strong><br>${content}</div>`
+      html += `<div class="msg ${cls}"><strong>${msg.role === 'user' ? 'You' : 'AI Assistant'}</strong>${time ? ` <span style="color:#666;font-size:11px">${time}</span>` : ''}<br>${content}</div>`
     })
     html += `<hr style="margin-top:32px;border:none;border-top:1px solid #333"><footer style="text-align:center;padding:12px;color:#666;font-size:11px"><strong>Lambda MicroVM Notebook</strong><br>Developed by the AWS Startup SA Team<br>&copy; ${new Date().getFullYear()} Amazon Web Services, Inc.</footer>`
     html += '</body></html>'
@@ -196,10 +198,11 @@ export default function AiChatPanel({ activeTab, uploadedFiles = [], onClose, on
     let md = `# ${nbName} — AI Chat History\n\n`
     md += `*Exported: ${new Date().toLocaleString()}*\n\n---\n\n`
     messages.forEach(msg => {
+      const time = msg.timestamp ? new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''
       if (msg.role === 'user') {
-        md += `**You:** ${msg.content}\n\n`
+        md += `**You**${time ? ` *(${time})*` : ''}: ${msg.content}\n\n`
       } else {
-        md += `**AI Assistant:**\n\n${msg.content}\n\n---\n\n`
+        md += `**AI Assistant**${time ? ` *(${time})*` : ''}:\n\n${msg.content}\n\n---\n\n`
       }
     })
     md += `\n---\n\n*Lambda MicroVM Notebook — Developed by the AWS Startup SA Team*\n`
@@ -258,7 +261,14 @@ export default function AiChatPanel({ activeTab, uploadedFiles = [], onClose, on
           </div>
         )}
         {messages.map((msg, i) => (
-          <div key={i} className={`ai-msg ai-msg-${msg.role} ${msg.isError ? 'ai-msg-error' : ''}`}>
+          <div key={i} className={`ai-msg ai-msg-${msg.role} ${msg.isError ? 'ai-msg-error' : ''} ${collapsedMsgs[i] ? 'ai-msg-collapsed' : ''}`}>
+            <div className="ai-msg-header" onClick={() => setCollapsedMsgs(prev => ({ ...prev, [i]: !prev[i] }))}>
+              <span className="ai-msg-toggle">{collapsedMsgs[i] ? '▸' : '▾'}</span>
+              <span className="ai-msg-role">{msg.role === 'user' ? 'You' : 'AI'}</span>
+              {msg.timestamp && <span className="ai-msg-time">{new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>}
+              {collapsedMsgs[i] && <span className="ai-msg-preview">{(msg.content || '').slice(0, 60)}...</span>}
+            </div>
+            {!collapsedMsgs[i] && (
             <div className="ai-msg-content">
               {msg.role === 'assistant' ? (
                 <>
@@ -287,6 +297,7 @@ export default function AiChatPanel({ activeTab, uploadedFiles = [], onClose, on
                 <span>{msg.content}</span>
               )}
             </div>
+            )}
           </div>
         ))}
         {loading && (

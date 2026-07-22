@@ -375,6 +375,8 @@ export default function ConnectionPanel({ tab, onConnect, onUpdateTab, onDismiss
                 <div className="launch-spec-item launch-spec-editable">
                   <span className="launch-spec-label">Max lifetime</span>
                   <select className="launch-spec-select" value={launchMaxDuration} onChange={(e) => setLaunchMaxDuration(e.target.value)}>
+                    <option value="300">5 minutes</option>
+                    <option value="1800">30 minutes</option>
                     <option value="3600">1 hour</option>
                     <option value="7200">2 hours</option>
                     <option value="14400">4 hours</option>
