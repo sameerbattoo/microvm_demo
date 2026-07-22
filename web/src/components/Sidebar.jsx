@@ -375,6 +375,7 @@ export default function Sidebar({
             <VariablesPanel
               variables={variables}
               activeTab={activeTab}
+              onInsertCode={onInsertCode}
               onClose={() => setActivePanel(null)}
             />
           )}
