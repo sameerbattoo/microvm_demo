@@ -32,6 +32,7 @@ from proxy.ai.notebook_agent import (
     new_thread as agent_new_thread,
 )
 from proxy.microvm_manager import AWS_REGION
+from proxy.storage import storage
 
 logger = logging.getLogger(__name__)
 
@@ -165,8 +166,9 @@ async def ai_chat_sync(request: Request):
 
 @router.delete("/ai/chat/{session_id}")
 async def ai_clear_chat(session_id: str):
-    """Clear conversation history for a session."""
+    """Clear conversation history for a session (agent memory + DB)."""
     agent_new_thread(session_id)
+    storage.ai_session_delete(session_id)
     return {"status": "cleared", "session_id": session_id}
 
 
@@ -269,3 +271,24 @@ Tag:"""
     except Exception as e:
         logger.warning(f"AI tag suggestion failed: {e}")
         return {"tag": "Exploration"}
+
+
+# ============================================================
+# AI CHAT HISTORY (persisted to DB)
+# ============================================================
+
+@router.get("/ai/chat/{session_id}/messages")
+async def ai_get_messages(session_id: str):
+    """Get saved chat messages for a session."""
+    messages = storage.ai_session_get(session_id)
+    return {"messages": messages}
+
+
+@router.put("/ai/chat/{session_id}/messages")
+async def ai_save_messages(session_id: str, request: Request):
+    """Save chat messages for a session."""
+    body = await request.json()
+    messages = body.get("messages", [])
+    notebook_id = body.get("notebook_id", "")
+    storage.ai_session_save(session_id, notebook_id, messages)
+    return {"status": "saved"}

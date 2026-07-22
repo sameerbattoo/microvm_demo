@@ -144,3 +144,33 @@ export async function fetchMetricsLatest() {
   } catch {}
   return { metrics: {} }
 }
+
+
+/**
+ * Load AI chat messages for a session from the API.
+ */
+export async function loadChatMessages(sessionId) {
+  if (!sessionId) return []
+  try {
+    const resp = await fetch(`${PROXY_URL}/ai/chat/${sessionId}/messages`)
+    if (resp.ok) {
+      const data = await resp.json()
+      return data.messages || []
+    }
+  } catch {}
+  return []
+}
+
+/**
+ * Save AI chat messages for a session to the API.
+ */
+export async function saveChatMessages(sessionId, notebookId, messages) {
+  if (!sessionId) return
+  try {
+    await fetch(`${PROXY_URL}/ai/chat/${sessionId}/messages`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ messages, notebook_id: notebookId }),
+    })
+  } catch {}
+}

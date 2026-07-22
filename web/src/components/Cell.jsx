@@ -417,6 +417,7 @@ export default function Cell({
                           if (cell.output) htmlContent += `<pre>${cell.output}</pre>`
                           if (cell.html) htmlContent += cell.html
                           if (cell.image) htmlContent += `<img src="${cell.image}" alt="Plot output"/>`
+                          htmlContent += `<hr style="margin-top:32px;border:none;border-top:1px solid #e0e0e0"><footer style="text-align:center;padding:12px;color:#888;font-size:11px"><strong>Lambda MicroVM Notebook</strong><br>Developed by the AWS Startup SA Team<br>&copy; ${new Date().getFullYear()} Amazon Web Services, Inc.</footer>`
                           htmlContent += '</body></html>'
                           const blob = new Blob([htmlContent], { type: 'text/html' })
                           const url = URL.createObjectURL(blob)
@@ -433,6 +434,7 @@ export default function Cell({
                           if (cell.html) md += `*(DataFrame table — export as HTML for full rendering)*\n\n`
                           if (cell.image) md += `![Plot output](plot.png)\n\n`
                           if (!cell.output && !cell.html && !cell.image) md += '*(empty output)*\n'
+                          md += `\n---\n\n*Lambda MicroVM Notebook — Developed by the AWS Startup SA Team*\n`
                           const blob = new Blob([md], { type: 'text/markdown' })
                           const url = URL.createObjectURL(blob)
                           const a = document.createElement('a')

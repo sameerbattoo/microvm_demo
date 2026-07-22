@@ -11,6 +11,7 @@ export default function AiChatPanel({ activeTab, uploadedFiles = [], onClose, on
   const messages = activeTab?._chatMessages || []
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
+  const [showExportMenu, setShowExportMenu] = useState(false)
   const [width, setWidth] = useState(320)
   const endRef = useRef(null)
   const isResizing = useRef(false)
@@ -170,6 +171,46 @@ export default function AiChatPanel({ activeTab, uploadedFiles = [], onClose, on
     setTimeout(() => endRef.current?.scrollIntoView({ behavior: 'smooth' }), 100)
   }
 
+  const handleExportHTML = () => {
+    const nbName = activeTab?.name || 'Notebook'
+    let html = `<html><head><meta charset="UTF-8"><title>${nbName} — AI Chat</title><style>body{font-family:system-ui;padding:20px;max-width:900px;margin:0 auto;background:#1a1a2e;color:#e0e0e0}.msg{margin:12px 0;padding:12px;border-radius:8px}.user{background:#2d3a5c;text-align:right}.assistant{background:#1e2a3a}table{border-collapse:collapse;width:100%;margin:8px 0}th,td{border:1px solid #444;padding:6px 10px;text-align:left}th{background:#2a2a4a}pre{background:#0d1117;padding:10px;border-radius:4px;overflow-x:auto}code{font-size:13px}img{max-width:100%}h1,h2,h3{color:#89b4fa}strong{color:#cdd6f4}</style></head><body>`
+    html += `<h2>${nbName} — AI Chat History</h2>`
+    html += `<p style="color:#888">Exported: ${new Date().toLocaleString()}</p>`
+    messages.forEach(msg => {
+      const cls = msg.role === 'user' ? 'user' : 'assistant'
+      const content = msg.role === 'assistant' ? marked.parse(msg.content || '', { breaks: true }) : (msg.content || '').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      html += `<div class="msg ${cls}"><strong>${msg.role === 'user' ? 'You' : 'AI Assistant'}</strong><br>${content}</div>`
+    })
+    html += `<hr style="margin-top:32px;border:none;border-top:1px solid #333"><footer style="text-align:center;padding:12px;color:#666;font-size:11px"><strong>Lambda MicroVM Notebook</strong><br>Developed by the AWS Startup SA Team<br>&copy; ${new Date().getFullYear()} Amazon Web Services, Inc.</footer>`
+    html += '</body></html>'
+    const blob = new Blob([html], { type: 'text/html' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url; a.download = `${nbName.replace(/\s+/g, '-')}-ai-chat.html`; a.click()
+    URL.revokeObjectURL(url)
+    setShowExportMenu(false)
+  }
+
+  const handleExportMD = () => {
+    const nbName = activeTab?.name || 'Notebook'
+    let md = `# ${nbName} — AI Chat History\n\n`
+    md += `*Exported: ${new Date().toLocaleString()}*\n\n---\n\n`
+    messages.forEach(msg => {
+      if (msg.role === 'user') {
+        md += `**You:** ${msg.content}\n\n`
+      } else {
+        md += `**AI Assistant:**\n\n${msg.content}\n\n---\n\n`
+      }
+    })
+    md += `\n---\n\n*Lambda MicroVM Notebook — Developed by the AWS Startup SA Team*\n`
+    const blob = new Blob([md], { type: 'text/markdown' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url; a.download = `${nbName.replace(/\s+/g, '-')}-ai-chat.md`; a.click()
+    URL.revokeObjectURL(url)
+    setShowExportMenu(false)
+  }
+
   const handleClear = () => {
     if (activeTab?.sessionId) {
       fetch(`${PROXY_URL}/ai/chat/${activeTab.sessionId}`, { method: 'DELETE' }).catch(() => {})
@@ -182,12 +223,25 @@ export default function AiChatPanel({ activeTab, uploadedFiles = [], onClose, on
       <div className="ai-panel-resize" onMouseDown={handleResizeStart} />
       <div className="ai-panel-header">
         <span className="ai-panel-title">✨ AI Assistant</span>
-        <button className="ai-panel-action" onClick={handleClear} title="New thread">
-          <IconPlus width={14} height={14} />
-        </button>
-        <button className="ai-panel-action" onClick={onClose} title="Close">
-          <IconX width={14} height={14} />
-        </button>
+        <div className="ai-panel-header-actions">
+          <div className="ai-export-wrapper">
+            <button className="ai-panel-action" onClick={() => setShowExportMenu(!showExportMenu)} title="Export chat" disabled={messages.length === 0}>
+              <svg width={14} height={14} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+            </button>
+            {showExportMenu && (
+              <div className="ai-export-menu">
+                <button onClick={handleExportHTML}>HTML</button>
+                <button onClick={handleExportMD}>Markdown</button>
+              </div>
+            )}
+          </div>
+          <button className="ai-panel-action" onClick={handleClear} title="New thread">
+            <IconPlus width={14} height={14} />
+          </button>
+          <button className="ai-panel-action" onClick={onClose} title="Close">
+            <IconX width={14} height={14} />
+          </button>
+        </div>
       </div>
       {activeTab && (
         <div className="ai-panel-scope">

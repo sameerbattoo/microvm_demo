@@ -5,7 +5,7 @@ import AiChatPanel from './components/AiChatPanel'
 import { ConfirmModal, InputModal } from './components/Modal'
 import { IconZap, IconSun, IconMoon } from './components/Icons'
 import { PROXY_URL } from './config'
-import { fetchNotebooks, saveNotebook as apiSaveNotebook, createNotebook as apiCreateNotebook, deleteNotebook as apiDeleteNotebook, migrateFromLocalStorage } from './services/notebooks'
+import { fetchNotebooks, saveNotebook as apiSaveNotebook, createNotebook as apiCreateNotebook, deleteNotebook as apiDeleteNotebook, migrateFromLocalStorage, loadChatMessages, saveChatMessages } from './services/notebooks'
 import './App.css'
 
 let nextTabId = parseInt(localStorage.getItem('microvm-next-tab-id') || '1')
@@ -176,6 +176,16 @@ export default function App() {
         if (loaded.length > 0 && !activeTabId) {
           setActiveTabId(loaded[0].id)
         }
+
+        // Load chat messages from DB for each notebook (non-blocking)
+        loaded.forEach(async (tab) => {
+          if (tab.sessionId) {
+            const msgs = await loadChatMessages(tab.sessionId)
+            if (msgs && msgs.length > 0) {
+              setTabs(prev => prev.map(t => t.id === tab.id ? { ...t, _chatMessages: msgs } : t))
+            }
+          }
+        })
       }
     }
     loadFromApi()
@@ -243,14 +253,14 @@ export default function App() {
               }
             } else if (tab.microvmId && !inst[tab.microvmId]) {
               // VM not in instances → terminated (either by service or manually)
+              // Don't interfere with a tab that's currently launching a new VM
+              if (tab.status === 'launching') return tab
               const updates = {
                 status: 'disconnected',
                 microvmEndpoint: null,
                 microvmRealEndpoint: null,
-                // If checkpoint was enabled, mark session as saved so "Restore" button appears
                 sessionSaved: tab.checkpointEnabled ? true : tab.sessionSaved,
               }
-              // Only mark as changed if something actually needs updating
               if (tab.status !== 'disconnected' || (tab.checkpointEnabled && !tab.sessionSaved)) {
                 changed = true
                 return { ...tab, ...updates }
@@ -792,7 +802,12 @@ export default function App() {
             activeTab={tabs.find(t => t.id === activeTabId) || null}
             uploadedFiles={tabs.find(t => t.id === activeTabId)?._localFiles || []}
             onClose={() => setShowAiChat(false)}
-            onUpdateMessages={(msgs) => updateTab(activeTabId, { _chatMessages: msgs })}
+            onUpdateMessages={(msgs) => {
+              updateTab(activeTabId, { _chatMessages: msgs })
+              // Persist to DB (non-blocking)
+              const tab = tabs.find(t => t.id === activeTabId)
+              if (tab?.sessionId) saveChatMessages(tab.sessionId, String(tab.id), msgs)
+            }}
             onUpdateCell={(code) => {
               const tab = tabs.find(t => t.id === activeTabId)
               if (!tab || !tab._cells || tab._activeCellIndex == null) return

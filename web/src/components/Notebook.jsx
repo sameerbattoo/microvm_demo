@@ -763,7 +763,7 @@ export default function Notebook({ tab, instances = {}, onUpdateTab, onMarkVmRun
               disabled={!activeCellId || isExecuting || !vmAlive}
               title="Run active cell (Shift+Enter)"
             >
-              <IconPlay width={14} height={14} /> Run
+              <IconPlay width={14} height={14} />
             </button>
             <button
               className="toolbar-btn toolbar-btn-stop"
