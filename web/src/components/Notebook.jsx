@@ -642,7 +642,14 @@ export default function Notebook({ tab, instances = {}, onUpdateTab, onMarkVmRun
 
   // Auto-document: explain all code cells that don't have an AI explanation yet
   const autoDocumentNotebook = useCallback(async () => {
-    const codeCells = cells.filter(c => c.type !== 'markdown' && c.code?.trim() && !c.aiExplanation)
+    // Only annotate cells that don't already have an AI explanation AND don't have a markdown summary above
+    const codeCells = cells.filter((c, idx) => {
+      if (c.type === 'markdown' || !c.code?.trim()) return false
+      if (c.aiExplanation) return false
+      // Check if the cell above is already a markdown annotation
+      if (idx > 0 && cells[idx - 1].type === 'markdown') return false
+      return true
+    })
     if (codeCells.length === 0) return
 
     setIsAnnotating(true)
@@ -670,8 +677,9 @@ export default function Notebook({ tab, instances = {}, onUpdateTab, onMarkVmRun
               const idx = prev.findIndex(c => c.id === cell.id)
               if (idx < 0) return prev
               const mdText = data.summary.startsWith('#') || data.summary.startsWith('**') ? data.summary : `**${data.summary}**`
+              const descLine = data.description ? `\n\n${data.description}` : ''
               const newCells = [...prev]
-              newCells.splice(idx, 0, { id: Date.now() + Math.random(), type: 'markdown', code: mdText, output: null, error: null, html: null, image: null })
+              newCells.splice(idx, 0, { id: Date.now() + Math.random(), type: 'markdown', code: mdText + descLine, output: null, error: null, html: null, image: null })
               return newCells
             })
           }
@@ -921,15 +929,6 @@ export default function Notebook({ tab, instances = {}, onUpdateTab, onMarkVmRun
           <span className="toolbar-divider" />
 
           <div className="toolbar-group toolbar-group-cells" title="Cell actions">
-            <button className="toolbar-btn" onClick={() => addCellAtEnd('code')} title="Add code cell">
-              <IconPlus width={14} height={14} />
-            </button>
-            <button className="toolbar-btn" onClick={() => addCellAtEnd('markdown')} title="Add text/markdown cell">
-              <IconFile width={14} height={14} />
-            </button>
-            <button className="toolbar-btn" onClick={() => addCellAtEnd('sql')} title="Add SQL cell">
-              <IconDatabase width={14} height={14} />
-            </button>
             <button
               className="toolbar-btn toolbar-btn-run"
               onClick={runActiveCell}
@@ -954,6 +953,15 @@ export default function Notebook({ tab, instances = {}, onUpdateTab, onMarkVmRun
             >
               <IconPlayAll width={14} height={14} />
             </button>
+            <button className="toolbar-btn" onClick={() => addCellAtEnd('code')} title="Add code cell">
+              <IconCode width={14} height={14} />
+            </button>
+            <button className="toolbar-btn" onClick={() => addCellAtEnd('sql')} title="Add SQL cell">
+              <IconDatabase width={14} height={14} />
+            </button>
+            <button className="toolbar-btn" onClick={() => addCellAtEnd('markdown')} title="Add text/markdown cell">
+              <span style={{fontWeight: 700, fontSize: '13px'}}>M</span>
+            </button>
             <button
               className="toolbar-btn toolbar-btn-delete"
               onClick={deleteActiveCell}
@@ -967,6 +975,14 @@ export default function Notebook({ tab, instances = {}, onUpdateTab, onMarkVmRun
           <span className="toolbar-divider" />
 
           <div className="toolbar-group toolbar-group-notebook" title="Notebook actions">
+            {onNewNotebook && (
+              <button className="toolbar-btn" onClick={onNewNotebook} title="New notebook">
+                <IconNotebook width={14} height={14} />
+              </button>
+            )}
+            <button className="toolbar-btn toolbar-btn-open" onClick={loadNotebook} title="Open notebook">
+              <IconFolderOpen width={14} height={14} />
+            </button>
             <button className="toolbar-btn toolbar-btn-save" onClick={(e) => {
               const rect = e.currentTarget.getBoundingClientRect()
               setSaveMenuPos(saveMenuPos ? null : { top: rect.bottom + 4, left: rect.left })
@@ -979,22 +995,9 @@ export default function Notebook({ tab, instances = {}, onUpdateTab, onMarkVmRun
             }} title="Export notebook">
               <svg width={14} height={14} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
             </button>
-            <button className="toolbar-btn toolbar-btn-open" onClick={loadNotebook} title="Open notebook">
-              <IconFolderOpen width={14} height={14} />
-            </button>
-            {onNewNotebook && (
-              <button className="toolbar-btn" onClick={onNewNotebook} title="New notebook">
-                <IconNotebook width={14} height={14} />
-              </button>
-            )}
             <button className="toolbar-btn toolbar-btn-find" onClick={() => { setShowSearch(true); setTimeout(() => searchInputRef.current?.focus(), 50) }} title="Find in notebook (Cmd+F)">
               <IconSearch width={14} height={14} />
             </button>
-            {onCloseTab && (
-              <button className="toolbar-btn toolbar-btn-close" onClick={() => onCloseTab(tab.id)} title="Close notebook">
-                <IconX width={14} height={14} />
-              </button>
-            )}
             {aiAvailable && (
               <button
                 className={`toolbar-btn toolbar-btn-autodoc ${isAnnotating ? 'toolbar-btn-loading' : ''}`}
@@ -1002,7 +1005,7 @@ export default function Notebook({ tab, instances = {}, onUpdateTab, onMarkVmRun
                 disabled={!tab.microvmEndpoint || tab.status !== 'connected' || isAnnotating}
                 title="Auto-annotate all cells with AI explanations"
               >
-                {isAnnotating ? <span className="toolbar-spinner" /> : <IconFile width={14} height={14} />}
+                {isAnnotating ? <span className="toolbar-spinner" /> : <IconZap width={14} height={14} />}
               </button>
             )}
             <button
@@ -1013,6 +1016,11 @@ export default function Notebook({ tab, instances = {}, onUpdateTab, onMarkVmRun
             >
               <IconEraser width={14} height={14} />
             </button>
+            {onCloseTab && (
+              <button className="toolbar-btn toolbar-btn-close" onClick={() => onCloseTab(tab.id)} title="Close notebook">
+                <IconX width={14} height={14} />
+              </button>
+            )}
           </div>
 
           </div>

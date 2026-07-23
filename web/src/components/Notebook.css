@@ -57,6 +57,17 @@
   z-index: 5;
   min-height: 40px;
   gap: 0;
+  transition: min-height 0.2s ease, padding 0.2s ease;
+}
+
+.notebook-toolbar:hover {
+  min-height: 46px;
+  padding: var(--space-2) var(--space-3);
+}
+
+.notebook-toolbar:hover .toolbar-btn {
+  padding: 7px 12px;
+  font-size: 13px;
 }
 
 .notebook-toolbar::-webkit-scrollbar {
@@ -175,7 +186,7 @@
   font-size: var(--font-size-sm);
   font-weight: 500;
   cursor: pointer;
-  transition: all var(--transition-fast);
+  transition: all 0.15s ease;
   display: flex;
   align-items: center;
   gap: 5px;

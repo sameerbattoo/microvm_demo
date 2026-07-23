@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from 'react'
 import { marked } from 'marked'
 import { sanitizeMarkdown } from '../services/sanitize'
-import { IconCode, IconCheck, IconPlus, IconTrash, IconGripVertical } from './Icons'
+import { IconCode, IconCheck, IconPlus, IconTrash, IconGripVertical, IconDatabase, IconPencil } from './Icons'
 import './Cell.css'
 
 /**
@@ -52,7 +52,7 @@ export default function MarkdownCell({
         >
           <IconGripVertical width={12} height={12} />
         </span>
-        <span className="cell-type-badge cell-type-text" title="Text cell">T</span>
+        <span className="cell-type-badge cell-type-text" title="Markdown cell">M</span>
       </div>
       <div className="cell-content">
         {mdEditing ? (
@@ -88,11 +88,14 @@ export default function MarkdownCell({
             </button>
           ) : (
             <button className="cell-action-btn" onClick={() => setMdEditing(true)} title="Edit markdown">
-              <IconCode width={14} height={14} />
+              <IconPencil width={14} height={14} />
             </button>
           )}
           <button className="cell-action-btn" onClick={(e) => { e.stopPropagation(); onAddBelow('code') }} title="Add code cell below">
-            <IconPlus width={14} height={14} />
+            <IconCode width={14} height={14} />
+          </button>
+          <button className="cell-action-btn cell-add-sql-btn" onClick={(e) => { e.stopPropagation(); onAddBelow('sql') }} title="Add SQL cell below">
+            <IconDatabase width={12} height={12} />
           </button>
           <button className="cell-action-btn cell-add-md-btn" onClick={(e) => { e.stopPropagation(); onAddBelow('markdown') }} title="Add text cell below">
             M

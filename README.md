@@ -250,6 +250,19 @@ A unified collapsible sidebar with VS Code-style icon activity bar:
 - Persists across proxy restarts (stored in SQLite database)
 - Uses published Lambda MicroVM pricing: `$0.0000133/GB-sec` (running), `$0.0000000309/GB-sec` (suspended)
 
+**Burst Billing:**
+- MicroVMs are pre-allocated 4× baseline resources (memory + CPU) from boot
+- You pay the baseline rate for the entire running duration
+- Usage **above baseline** (actual RSS > configured memory) incurs per-second burst surcharge at the same rate
+- Exceeding the 4× hard ceiling causes OOM crash — there is no dynamic scaling beyond 4×
+
+| Baseline | Peak (4×) | Visible RAM | CPU Cores |
+|----------|-----------|-------------|-----------|
+| 1 GB | 4 GB | Always 4 GB | 2 |
+| 2 GB | 8 GB | Always 8 GB | 4 |
+| 4 GB | 16 GB | Always 16 GB | 8 |
+| 8 GB | 32 GB | Always 32 GB | 16 |
+
 ### 3.6 Session Checkpoint & Restore
 - Enable "session restore" when launching a MicroVM
 - On termination, state is serialized to S3 (variables, files, packages)
@@ -897,6 +910,29 @@ The application tracks and displays estimated cost per MicroVM in real time:
 - Cost is computed from observed RUNNING and SUSPENDED durations
 - Displayed in the Instances panel (hover for breakdown)
 - Based on published pricing — actual AWS bill may vary slightly due to rounding
+
+### 10.3 Burst Billing Model
+
+Lambda MicroVMs use a **baseline-peak model** where 4× resources are pre-allocated at boot:
+
+```
+Cost = Baseline Cost + Burst Surcharge
+
+Baseline Cost = baseline_gb × running_seconds × $0.0000133/GB-sec
+Burst Surcharge = max(0, used_gb - baseline_gb) × burst_seconds × $0.0000133/GB-sec
+```
+
+**Key findings from testing (`tests/test_burst_behavior.py`):**
+- Resources are pre-allocated at 4× baseline from the moment the VM boots
+- `psutil.virtual_memory().total` always reports 4× baseline (e.g., 4GB for a 1GB VM)
+- `total_mb` NEVER changes during load — it's fixed at 4×
+- Burst billing applies when **actual usage (RSS)** exceeds the configured baseline
+- Exceeding the 4× peak ceiling causes an OOM crash — there is no dynamic scaling beyond 4×
+- CPU cores are also fixed at 4× baseline vCPU (2 cores for 1GB, 4 for 2GB, etc.)
+
+**Example: 2 GB baseline, workload uses 5 GB for 120 seconds:**
+- Baseline: 2 GB × total_running_time × rate = always billed
+- Burst: (5 - 2) = 3 GB × 120s × $0.0000133 = $0.004788 surcharge
 
 ---
 

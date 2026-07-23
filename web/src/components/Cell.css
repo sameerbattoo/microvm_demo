@@ -5,27 +5,40 @@
 .cell {
   display: flex;
   gap: 0;
-  margin-bottom: var(--space-2);
+  margin-bottom: 12px;
   border: 1px solid var(--cell-border);
+  border-left: 3px solid rgba(79, 139, 255, 0.6);
   border-radius: var(--radius-lg);
   overflow: hidden;
-  transition: border-color var(--transition-normal), box-shadow var(--transition-normal), transform var(--transition-fast);
+  transition: border-color var(--transition-normal), box-shadow var(--transition-normal), transform 0.15s ease;
   background: var(--cell-bg);
   min-width: 0;
 }
 
 .cell:hover {
   border-color: var(--border-default);
-  box-shadow: var(--shadow-sm);
+  border-left: 4px solid rgba(79, 139, 255, 0.5);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  transform: translateY(-1px);
+}
+
+.cell-sql:hover {
+  border-left: 4px solid rgba(224, 108, 29, 0.5);
+}
+
+.cell-markdown:hover {
+  border-left: 4px solid rgba(108, 192, 112, 0.5);
 }
 
 .cell-active {
-  border-color: rgba(137, 180, 250, 0.4);
-  box-shadow: inset 3px 0 0 0 var(--accent-primary);
+  border-color: rgba(137, 180, 250, 0.5);
+  border-left: 4px solid #4f8bff !important;
+  box-shadow: 0 0 0 1px rgba(79, 139, 255, 0.2), 0 2px 8px rgba(79, 139, 255, 0.1);
+  background: color-mix(in srgb, var(--cell-bg) 97%, #4f8bff 3%);
 }
 
 .cell-active .cell-gutter {
-  background: var(--accent-primary-subtle);
+  background: rgba(79, 139, 255, 0.08);
 }
 
 .cell-active .cell-number {
@@ -40,15 +53,24 @@
 
 .cell-running {
   border-color: var(--accent-warning);
+  border-left-color: var(--accent-warning);
   box-shadow: 0 0 0 2px var(--accent-warning-subtle);
 }
 
 .cell-success {
-  border-left: 3px solid var(--accent-success);
+  /* Success indicated subtly — no border override (left border = cell type color) */
+}
+
+.cell-success.cell-active {
+  border-left: 4px solid #4f8bff !important;
 }
 
 .cell-error {
-  border-left: 3px solid var(--accent-danger);
+  border-left: 4px solid var(--accent-danger) !important;
+}
+
+.cell-error.cell-active {
+  border-left: 4px solid #4f8bff !important;
 }
 
 /* ---- Gutter ---- */
@@ -65,13 +87,14 @@
 
 .cell-number {
   font-family: var(--font-mono);
-  font-size: var(--font-size-xs);
+  font-size: 10px;
   color: var(--text-muted);
   white-space: nowrap;
-  font-weight: 500;
-  padding: 2px 4px;
+  font-weight: 400;
+  padding: 1px 4px;
   border-radius: var(--radius-sm);
-  background: var(--surface-3);
+  background: transparent;
+  opacity: 0.6;
 }
 
 .cell-spinner {
@@ -303,8 +326,10 @@
 .cell-output {
   border-top: 1px solid var(--border-subtle);
   padding: var(--space-3);
-  background: var(--cell-gutter-bg);
+  background: color-mix(in srgb, var(--cell-gutter-bg) 80%, var(--bg-primary) 20%);
   animation: slideDown 0.2s ease;
+  margin-top: 1px;
+  border-radius: 0 0 var(--radius-lg) 0;
 }
 
 @keyframes slideDown {
@@ -885,14 +910,26 @@
 
 .cell-markdown {
   border-color: var(--border-subtle);
+  border-left: 3px solid rgba(130, 130, 130, 0.3);
   background: var(--surface-0);
+}
+
+.cell-markdown.cell-active {
+  border-left: 4px solid #6cc070 !important;
+  border-color: rgba(108, 192, 112, 0.4);
+  box-shadow: 0 0 0 1px rgba(108, 192, 112, 0.15), 0 2px 8px rgba(108, 192, 112, 0.08);
+  background: color-mix(in srgb, var(--surface-0) 97%, #6cc070 3%);
+}
+
+.cell-markdown.cell-active .cell-gutter {
+  background: rgba(108, 192, 112, 0.08);
 }
 
 .cell-markdown .cell-gutter {
   background: var(--surface-1);
   padding: 10px 8px;
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: center;
 }
 
@@ -1334,11 +1371,25 @@
 
 /* SQL cell type */
 .cell-sql {
-  border-left-color: #e06c1d;
+  border-left: 3px solid rgba(224, 108, 29, 0.4);
+}
+
+.cell-sql.cell-active {
+  border-left: 4px solid #e06c1d !important;
+  box-shadow: 0 0 0 1px rgba(224, 108, 29, 0.2), 0 2px 8px rgba(224, 108, 29, 0.1);
+  background: color-mix(in srgb, var(--cell-bg) 97%, #e06c1d 3%);
+}
+
+.cell-sql.cell-success.cell-active {
+  border-left: 4px solid #e06c1d !important;
 }
 
 .cell-sql .cell-gutter {
-  border-right-color: #e06c1d;
+  /* No extra border — left border of the cell is sufficient */
+}
+
+.cell-sql.cell-active .cell-gutter {
+  background: rgba(224, 108, 29, 0.08);
 }
 
 .cell-type-badge {

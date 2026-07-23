@@ -34,6 +34,9 @@ class MicroVMCostRecord:
     microvm_id: str
     memory_mib: int = 4096
     transitions: list[StateTransition] = field(default_factory=list)
+    # Burst tracking: accumulates MB-seconds above baseline
+    burst_mb_seconds: float = 0.0
+    _last_burst_poll: float = 0.0
 
     @property
     def memory_gb(self) -> float:
@@ -45,6 +48,19 @@ class MicroVMCostRecord:
             return  # No change
         self.transitions.append(StateTransition(state=state, timestamp=time.time()))
 
+    def record_burst_sample(self, used_mb: float):
+        """
+        Record a memory usage sample for burst cost tracking.
+        Called each time metrics are polled from the VM.
+        Accumulates (used_mb - baseline_mb) × elapsed_seconds when above baseline.
+        """
+        now = time.time()
+        if self._last_burst_poll > 0 and used_mb > self.memory_mib:
+            elapsed = now - self._last_burst_poll
+            overage_mb = used_mb - self.memory_mib
+            self.burst_mb_seconds += overage_mb * elapsed
+        self._last_burst_poll = now
+
     def compute(self) -> dict:
         """
         Compute estimated cost breakdown.
@@ -55,8 +71,10 @@ class MicroVMCostRecord:
                 "suspended_secs": int,
                 "running_cost_usd": float,
                 "suspended_cost_usd": float,
+                "burst_cost_usd": float,
                 "total_cost_usd": float,
                 "memory_gb": float,
+                "burst_mb_seconds": float,
             }
         """
         if not self.transitions:
@@ -65,8 +83,10 @@ class MicroVMCostRecord:
                 "suspended_secs": 0,
                 "running_cost_usd": 0.0,
                 "suspended_cost_usd": 0.0,
+                "burst_cost_usd": 0.0,
                 "total_cost_usd": 0.0,
                 "memory_gb": self.memory_gb,
+                "burst_mb_seconds": 0.0,
             }
 
         now = time.time()
@@ -89,15 +109,20 @@ class MicroVMCostRecord:
 
         running_cost = self.memory_gb * running_secs * PRICE_RUNNING_PER_GB_SEC
         suspended_cost = self.memory_gb * suspended_secs * PRICE_SUSPENDED_PER_GB_SEC
-        total_cost = running_cost + suspended_cost
+        # Burst cost: overage MB-seconds converted to GB-seconds, same rate as running
+        burst_gb_seconds = self.burst_mb_seconds / 1024.0
+        burst_cost = burst_gb_seconds * PRICE_RUNNING_PER_GB_SEC
+        total_cost = running_cost + suspended_cost + burst_cost
 
         return {
             "running_secs": round(running_secs),
             "suspended_secs": round(suspended_secs),
             "running_cost_usd": round(running_cost, 6),
             "suspended_cost_usd": round(suspended_cost, 6),
+            "burst_cost_usd": round(burst_cost, 6),
             "total_cost_usd": round(total_cost, 6),
             "memory_gb": self.memory_gb,
+            "burst_mb_seconds": round(self.burst_mb_seconds, 1),
         }
 
 
@@ -139,6 +164,19 @@ class CostTracker:
 
         record.record_state(state)
 
+    def record_burst(self, microvm_id: str, used_mb: float):
+        """
+        Record a memory usage sample for burst cost tracking.
+        Call this each time metrics are polled from the VM.
+
+        Args:
+            microvm_id: The MicroVM identifier
+            used_mb: Current memory usage in MB (from psutil)
+        """
+        record = self._records.get(microvm_id)
+        if record:
+            record.record_burst_sample(used_mb)
+
     def get_cost(self, microvm_id: str) -> dict:
         """Get cost breakdown for a specific MicroVM."""
         record = self._records.get(microvm_id)
@@ -159,6 +197,7 @@ class CostTracker:
         total_suspended_secs = 0
         total_running_cost = 0.0
         total_suspended_cost = 0.0
+        total_burst_cost = 0.0
 
         for record in self._records.values():
             cost = record.compute()
@@ -166,13 +205,15 @@ class CostTracker:
             total_suspended_secs += cost["suspended_secs"]
             total_running_cost += cost["running_cost_usd"]
             total_suspended_cost += cost["suspended_cost_usd"]
+            total_burst_cost += cost["burst_cost_usd"]
 
         return {
             "running_secs": total_running_secs,
             "suspended_secs": total_suspended_secs,
             "running_cost_usd": round(total_running_cost, 6),
             "suspended_cost_usd": round(total_suspended_cost, 6),
-            "total_cost_usd": round(total_running_cost + total_suspended_cost, 6),
+            "burst_cost_usd": round(total_burst_cost, 6),
+            "total_cost_usd": round(total_running_cost + total_suspended_cost + total_burst_cost, 6),
             "microvm_count": len(self._records),
         }
 
@@ -180,3 +221,57 @@ class CostTracker:
     def tracked_ids(self) -> list[str]:
         """List all tracked MicroVM IDs."""
         return list(self._records.keys())
+
+    def persist_cost(self, microvm_id: str, storage) -> None:
+        """Persist current cost data to the database."""
+        record = self._records.get(microvm_id)
+        if not record:
+            return
+        cost = record.compute()
+        storage.vm_session_update_cost(
+            microvm_id=microvm_id,
+            running_secs=cost["running_secs"],
+            suspended_secs=cost["suspended_secs"],
+            total_cost=cost["total_cost_usd"],
+            burst_mb_seconds=cost["burst_mb_seconds"],
+        )
+
+    def load_from_db(self, storage) -> None:
+        """
+        Load cost state from the database on startup.
+        Reconstructs CostTracker records from vm_sessions + vm_state_log.
+        """
+        try:
+            active_sessions = storage.vm_session_list_active()
+
+            for session in active_sessions:
+                microvm_id = session["microvm_id"]
+                memory_mib = session.get("memory_mib") or 4096
+                db_burst_mb_sec = session.get("burst_mb_seconds") or 0
+
+                # Create record with stored burst data
+                record = MicroVMCostRecord(
+                    microvm_id=microvm_id,
+                    memory_mib=memory_mib,
+                    burst_mb_seconds=db_burst_mb_sec,
+                )
+
+                # Reconstruct transitions from state_log
+                log_entries = storage.vm_state_log_get(microvm_id)
+                if log_entries:
+                    from datetime import datetime, timezone
+                    for entry in log_entries:
+                        try:
+                            ts = datetime.fromisoformat(entry["timestamp"].replace("Z", "+00:00"))
+                            record.transitions.append(StateTransition(
+                                state=entry["new_state"],
+                                timestamp=ts.timestamp()
+                            ))
+                        except (ValueError, TypeError):
+                            pass
+
+                if record.transitions:
+                    self._records[microvm_id] = record
+
+        except Exception:
+            pass  # Silently fail — fresh start is acceptable

@@ -192,9 +192,10 @@ async def ai_explain_output(request: Request):
 
     try:
         result = await asyncio.to_thread(agent_explain, code, output, context)
-        # agent_explain returns {"summary": str, "explanation": str}
+        # agent_explain returns {"summary": str, "description": str, "explanation": str}
         return {
             "summary": result.get("summary", "") if isinstance(result, dict) else "",
+            "description": result.get("description", "") if isinstance(result, dict) else "",
             "explanation": result.get("explanation", str(result)) if isinstance(result, dict) else str(result),
         }
     except Exception as e:

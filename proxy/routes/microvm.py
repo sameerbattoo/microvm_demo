@@ -325,6 +325,8 @@ async def list_instances(request: Request):
                 "unhealthy": local_info.get("_502_strikes", 0) >= 3,
             }
             vm_manager.cost_tracker.record(microvm_id, state, memory_mib=memory_mib)
+            # Persist cost to DB periodically
+            vm_manager.cost_tracker.persist_cost(microvm_id, storage)
 
         # Include recently launched VMs not yet in AWS API response
         for microvm_id, local_info in list(vm_manager.active_microvms.items()):
@@ -412,6 +414,10 @@ async def get_instance_metrics(microvm_id: str = None, request: Request = None):
                     processes=m.get("processes", 0),
                     uptime_sec=m.get("uptime_sec", 0),
                 )
+                # Track burst usage for cost calculation
+                used_mb = m.get("memory", {}).get("used_mb", 0)
+                if used_mb > 0:
+                    vm_manager.cost_tracker.record_burst(microvm_id, used_mb)
                 return {"metrics": {microvm_id: m}}
             else:
                 logger.warning(f"Metrics endpoint for {microvm_id} returned {resp.status_code}")

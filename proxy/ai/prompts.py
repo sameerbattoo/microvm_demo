@@ -125,9 +125,11 @@ Use get_available_data_sources tool for discovery — it has the complete list i
 </current_time>"""
 
 EXPLAIN_PROMPT = """<task>
-Explain this cell and its output. Return JSON with two fields:
-1. "summary" — one-line markdown heading (under 10 words, wrapped in **)
-2. "explanation" — 2-3 sentences focusing on data insights, not code mechanics
+Explain this cell and its output. Return JSON with three fields:
+1. "summary" — bold heading, under 8 words (e.g. "Load Sales Data from S3")
+2. "description" — 1-2 sentence explanation of what the cell does and why, with key details.
+   Use markdown: bold for important terms, `code` for variable/function names, bullet points for multi-step cells.
+3. "explanation" — 2-3 sentences focusing on data insights from the output, not code mechanics
 </task>
 
 <cell_code>
@@ -139,11 +141,15 @@ Explain this cell and its output. Return JSON with two fields:
 </cell_output>
 
 <instructions>
-- Return ONLY valid JSON: {{"summary": "...", "explanation": "..."}}
-- Summary: **verb + object** format (e.g. **Load sales data from S3**)
-- For DataFrames: highlight key patterns or distributions
-- For plots: describe the trend
-- No output yet: explain what the code will do when run
+- Return ONLY valid JSON: {{"summary": "...", "description": "...", "explanation": "..."}}
+- Summary: short verb + object (e.g. "Load Sales Data from S3", "Merge All 3 Sources")
+- Description: explain the approach briefly. Use `code` backticks for identifiers. Use bullet points (•) for multi-step cells.
+  Examples:
+  - "Read the CSV from the S3 bucket using `boto3` and convert to a pandas DataFrame."
+  - "Join the data:\n• **Sales** (S3) enriched with **product ratings** (DynamoDB) via keyword matching\n• Then merged with **customer demographics** (Athena) on `customer_id`"
+  - "Scan the product catalog table. DynamoDB returns `Decimal` types which we convert to float for pandas compatibility."
+- Explanation: focus on output insights (row counts, patterns, distributions)
+- No output yet: describe what the code will produce when run
 </instructions>"""
 
 FIX_ERROR_PROMPT = """<task>

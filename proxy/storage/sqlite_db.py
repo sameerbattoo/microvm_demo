@@ -60,7 +60,8 @@ CREATE TABLE IF NOT EXISTS vm_sessions (
     checkpoint_enabled INTEGER DEFAULT 0,
     total_cost_usd REAL DEFAULT 0.0,
     running_secs REAL DEFAULT 0.0,
-    suspended_secs REAL DEFAULT 0.0
+    suspended_secs REAL DEFAULT 0.0,
+    burst_mb_seconds REAL DEFAULT 0.0
 );
 
 -- VM Metrics: time-series data
@@ -238,11 +239,12 @@ class SqliteStorage(StorageBackend):
                 conn.execute("UPDATE vm_sessions SET terminated_at = ? WHERE microvm_id = ?", (now, microvm_id))
 
     def vm_session_update_cost(self, microvm_id: str, running_secs: float,
-                               suspended_secs: float, total_cost: float) -> None:
+                               suspended_secs: float, total_cost: float,
+                               burst_mb_seconds: float = 0.0) -> None:
         with self._db() as conn:
             conn.execute(
-                "UPDATE vm_sessions SET running_secs = ?, suspended_secs = ?, total_cost_usd = ? WHERE microvm_id = ?",
-                (running_secs, suspended_secs, total_cost, microvm_id)
+                "UPDATE vm_sessions SET running_secs = ?, suspended_secs = ?, total_cost_usd = ?, burst_mb_seconds = ? WHERE microvm_id = ?",
+                (running_secs, suspended_secs, total_cost, burst_mb_seconds, microvm_id)
             )
 
     def vm_session_get(self, microvm_id: str) -> Optional[dict]:
@@ -253,6 +255,14 @@ class SqliteStorage(StorageBackend):
     def vm_session_list_active(self) -> list[dict]:
         with self._db() as conn:
             rows = conn.execute("SELECT * FROM vm_sessions WHERE state != 'TERMINATED' ORDER BY launched_at DESC").fetchall()
+        return [dict(r) for r in rows]
+
+    def vm_state_log_get(self, microvm_id: str) -> list[dict]:
+        with self._db() as conn:
+            rows = conn.execute(
+                "SELECT new_state, timestamp FROM vm_state_log WHERE microvm_id = ? ORDER BY id ASC",
+                (microvm_id,)
+            ).fetchall()
         return [dict(r) for r in rows]
 
     # ============================================================

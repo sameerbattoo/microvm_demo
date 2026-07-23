@@ -5,7 +5,7 @@ import 'prismjs/components/prism-sql'
 import { marked } from 'marked'
 import { sanitizeHtml, sanitizeMarkdown } from '../services/sanitize'
 import MarkdownCell from './MarkdownCell'
-import { IconPlay, IconPlus, IconTrash, IconX, IconStop, IconChevronDown, IconChevronRight, IconGripVertical, IconEraser, IconCode, IconDatabase } from './Icons'
+import { IconPlay, IconPlus, IconTrash, IconX, IconStop, IconChevronDown, IconChevronRight, IconGripVertical, IconEraser, IconCode, IconDatabase, IconZap } from './Icons'
 import { PROXY_URL } from '../config'
 import './Cell.css'
 
@@ -194,7 +194,8 @@ export default function Cell({
         if (onSetAiExplanation) onSetAiExplanation(explanation)
         // Insert a short markdown summary above if no markdown cell exists above
         if (onInsertAbove && data.summary) {
-          onInsertAbove(data.summary)
+          const desc = data.description ? `\n\n${data.description}` : ''
+          onInsertAbove(data.summary + desc)
         }
       } else {
         setAiResult({ type: 'explain', content: 'Failed to get explanation', loading: false })
@@ -432,7 +433,7 @@ export default function Cell({
                 </button>
               )}
               <button className="cell-action-btn" onClick={(e) => { e.stopPropagation(); onAddBelow('code') }} title="Add code cell below">
-                <IconPlus width={14} height={14} />
+                <IconCode width={14} height={14} />
               </button>
               <button className="cell-action-btn cell-add-sql-btn" onClick={(e) => { e.stopPropagation(); onAddBelow('sql') }} title="Add SQL cell below">
                 <IconDatabase width={12} height={12} />
@@ -463,8 +464,8 @@ export default function Cell({
                       className="cell-action-btn cell-ai-action-btn"
                       onClick={(e) => { e.stopPropagation(); handleAiExplain() }}
                       disabled={aiResult?.loading}
-                      title="Explain with AI"
-                    >💡</button>
+                      title="Auto-annotate cell with AI explanation"
+                    ><IconZap width={12} height={12} /></button>
                   )
                 }
                 return null

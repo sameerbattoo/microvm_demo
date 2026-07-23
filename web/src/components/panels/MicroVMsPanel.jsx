@@ -248,7 +248,14 @@ export default function MicroVMsPanel({
                             <div className="vm-metric-fill vm-metric-mem" style={{ width: `${Math.min(vmMetrics[id].memory?.percent || 0, 100)}%` }} />
                           </div>
                           <span className="vm-metric-label">Mem</span>
-                          <span className="vm-metric-value" title={`${(vmMetrics[id].memory?.used_mb || 0).toFixed(0)} MB used`}>{(vmMetrics[id].memory?.percent || 0).toFixed(0)}%</span>
+                          <span className="vm-metric-value" title={`${(vmMetrics[id].memory?.used_mb || 0).toFixed(0)} MB used / ${inst.memory_mib} MB baseline`}>
+                            {(vmMetrics[id].memory?.percent || 0).toFixed(0)}%
+                            {(vmMetrics[id].memory?.used_mb || 0) > (inst.memory_mib || 4096) && (
+                              <span className="vm-burst-badge" title={`Using ${((vmMetrics[id].memory?.used_mb || 0) - (inst.memory_mib || 4096)).toFixed(0)} MB above baseline — burst billing active`}>
+                                🔥 +{Math.round(((vmMetrics[id].memory?.used_mb || 0) - (inst.memory_mib || 4096)) / (inst.memory_mib || 4096) * 100)}%
+                              </span>
+                            )}
+                          </span>
                         </div>
                         <div className="vm-metric-gauge">
                           <div className="vm-metric-bar">
@@ -303,6 +310,22 @@ export default function MicroVMsPanel({
                           <div className="vm-detail-row vm-detail-row-sub">
                             <span className="vm-detail-label">Subtotal</span>
                             <span className="vm-detail-value">${inst.cost.suspended_cost_usd.toFixed(6)}</span>
+                          </div>
+                        </div>
+                      )}
+                      {inst.cost.burst_cost_usd > 0 && (
+                        <div className="vm-cost-item vm-cost-burst">
+                          <div className="vm-detail-row">
+                            <span className="vm-detail-label"><strong>🔥 Burst</strong> <span className="vm-cost-hint">(above baseline)</span></span>
+                            <span className="vm-detail-value">{(inst.cost.burst_mb_seconds / 1024).toFixed(1)} GB·s</span>
+                          </div>
+                          <div className="vm-detail-row vm-detail-row-sub">
+                            <span className="vm-detail-label">Rate</span>
+                            <span className="vm-detail-value">$0.0000133/GB-sec (same as running)</span>
+                          </div>
+                          <div className="vm-detail-row vm-detail-row-sub">
+                            <span className="vm-detail-label">Subtotal</span>
+                            <span className="vm-detail-value">${inst.cost.burst_cost_usd.toFixed(6)}</span>
                           </div>
                         </div>
                       )}

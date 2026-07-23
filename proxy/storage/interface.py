@@ -83,7 +83,8 @@ class StorageBackend(ABC):
 
     @abstractmethod
     def vm_session_update_cost(self, microvm_id: str, running_secs: float,
-                               suspended_secs: float, total_cost: float) -> None:
+                               suspended_secs: float, total_cost: float,
+                               burst_mb_seconds: float = 0.0) -> None:
         """Update accumulated cost for a VM session."""
         ...
 
@@ -95,6 +96,11 @@ class StorageBackend(ABC):
     @abstractmethod
     def vm_session_list_active(self) -> list[dict]:
         """List all non-terminated VM sessions."""
+        ...
+
+    @abstractmethod
+    def vm_state_log_get(self, microvm_id: str) -> list[dict]:
+        """Get state transition log for a VM. Returns list of {new_state, timestamp}."""
         ...
 
     # ============================================================

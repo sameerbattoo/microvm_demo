@@ -775,6 +775,44 @@ export default function App() {
                 <button className="app-empty-btn app-empty-btn-primary" onClick={addTab}>
                   + New Notebook
                 </button>
+                <button className="app-empty-btn" onClick={() => {
+                  const input = document.createElement('input')
+                  input.type = 'file'
+                  input.accept = '.json,.notebook.json,.ipynb'
+                  input.onchange = (e) => {
+                    const file = e.target.files?.[0]
+                    if (!file) return
+                    const reader = new FileReader()
+                    reader.onload = (ev) => {
+                      try {
+                        const data = JSON.parse(ev.target.result)
+                        if (data.nbformat && data.cells) {
+                          // Jupyter .ipynb
+                          const cells = data.cells
+                            .filter(c => c.cell_type === 'code' || c.cell_type === 'markdown')
+                            .map(c => {
+                              const code = Array.isArray(c.source) ? c.source.join('') : (c.source || '')
+                              let cellType = c.cell_type === 'markdown' ? 'markdown' : 'code'
+                              let cellCode = code
+                              if (cellType === 'code' && code.trimStart().startsWith('%%sql')) {
+                                cellType = 'sql'
+                                cellCode = code.trimStart().replace(/^%%sql\s*\n?/, '')
+                              }
+                              return { type: cellType, code: cellCode, output: null, error: null, html: null, image: null }
+                            })
+                          window.dispatchEvent(new CustomEvent('open-notebook', { detail: { name: file.name.replace('.ipynb', ''), description: '', tag: null, cells } }))
+                        } else if (data.cells && Array.isArray(data.cells)) {
+                          // Native .notebook.json
+                          window.dispatchEvent(new CustomEvent('open-notebook', { detail: { name: data.name || file.name.replace('.notebook.json', '').replace('.json', ''), description: data.description || '', tag: data.tag || null, cells: data.cells } }))
+                        }
+                      } catch { alert('Invalid notebook file.') }
+                    }
+                    reader.readAsText(file)
+                  }
+                  input.click()
+                }}>
+                  Open Existing
+                </button>
                 <button className="app-empty-btn" onClick={() => loadSample('/samples/aws_data_sources.notebook.json', 'AWS Data Sources')}>
                   Open Sample: AWS Data Sources
                 </button>
@@ -786,7 +824,7 @@ export default function App() {
                 </div>
                 <div className="app-empty-hint">
                   <span className="app-empty-hint-icon">2</span>
-                  <span>Write Python code in cells — <kbd>Shift+Enter</kbd> to execute</span>
+                  <span>Write Python or SQL in cells — <kbd>Shift+Enter</kbd> to execute</span>
                 </div>
                 <div className="app-empty-hint">
                   <span className="app-empty-hint-icon">3</span>

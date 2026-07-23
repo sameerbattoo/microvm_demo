@@ -174,7 +174,7 @@ async def chat_stream(session_id: str, message: str, context: dict):
 def explain(code: str, output: str, context: dict) -> dict:
     """
     One-shot: explain a cell's output.
-    Returns {"summary": "short heading", "explanation": "detailed explanation"}
+    Returns {"summary": "short heading", "description": "detailed description", "explanation": "insights"}
     """
     from .prompts import EXPLAIN_PROMPT
     import json as json_mod
@@ -200,6 +200,7 @@ def explain(code: str, output: str, context: dict) -> dict:
         result = json_mod.loads(response_text)
         return {
             "summary": result.get("summary", ""),
+            "description": result.get("description", ""),
             "explanation": result.get("explanation", response_text),
         }
     except (json_mod.JSONDecodeError, TypeError):
@@ -207,6 +208,7 @@ def explain(code: str, output: str, context: dict) -> dict:
         first_sentence = response_text.split('.')[0].strip() + '.'
         return {
             "summary": first_sentence[:60],
+            "description": "",
             "explanation": response_text,
         }
 

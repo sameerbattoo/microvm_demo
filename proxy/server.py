@@ -89,6 +89,8 @@ async def _on_startup():
     """Start background tasks and restore state from DB."""
     asyncio.create_task(_housekeeping_loop())
     app.state.vm_manager.restore_timers_from_db()
+    # Restore cost tracking state from database
+    app.state.vm_manager.cost_tracker.load_from_db(storage)
 
 
 # --- Health endpoint ---
