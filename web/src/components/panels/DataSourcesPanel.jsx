@@ -1,5 +1,33 @@
-import { useState } from 'react'
-import { IconUpload, IconFile, IconDatabase, IconBucket, IconRefresh, IconX, IconNotebook, IconTable } from '../Icons'
+import { useState, useRef, useEffect } from 'react'
+import { IconUpload, IconFile, IconDatabase, IconBucket, IconRefresh, IconX, IconNotebook, IconTable, IconCode } from '../Icons'
+
+/**
+ * Small popover that appears on a datasource item click to let user choose Python or SQL insertion.
+ */
+function InsertChoicePopover({ pythonCode, sqlCode, onInsert, onClose, anchorRef }) {
+  const popRef = useRef(null)
+
+  useEffect(() => {
+    const handleClick = (e) => {
+      if (popRef.current && !popRef.current.contains(e.target)) onClose()
+    }
+    document.addEventListener('mousedown', handleClick)
+    return () => document.removeEventListener('mousedown', handleClick)
+  }, [onClose])
+
+  return (
+    <div className="ds-insert-popover" ref={popRef}>
+      <button className="ds-insert-btn ds-insert-python" onClick={() => { onInsert(pythonCode, 'code'); onClose() }}>
+        <IconCode width={11} height={11} /> Python
+      </button>
+      {sqlCode && (
+        <button className="ds-insert-btn ds-insert-sql" onClick={() => { onInsert(sqlCode, 'sql'); onClose() }}>
+          <IconDatabase width={11} height={11} /> SQL
+        </button>
+      )}
+    </div>
+  )
+}
 
 const PUBLIC_APIS = [
   { id: 'worldbank', name: 'World Bank', icon: '🌍', desc: 'Country indicators & economics', code: `import pandas as pd, requests\n\n# Indicators: NY.GDP.MKTP.CD=GDP($), SP.POP.TOTL=Population, EN.ATM.CO2E.KT=CO2 emissions\ndef world_bank(indicator='NY.GDP.MKTP.CD', country='all', date='2018:2023'):\n    url = f'https://api.worldbank.org/v2/country/{country}/indicator/{indicator}?date={date}&format=json&per_page=300'\n    resp = requests.get(url).json()\n    df = pd.DataFrame(resp[1])[['country','date','value']]\n    df['country'] = df['country'].apply(lambda x: x['value'])\n    return df.dropna(subset=['value'])\n\ndf = world_bank()  # GDP in current US$ for all countries\ndf.head(20)` },
@@ -39,6 +67,7 @@ export default function DataSourcesPanel({
   const [dynamoExpanded, setDynamoExpanded] = useState(true)
   const [athenaExpanded, setAthenaExpanded] = useState(true)
   const [publicApisExpanded, setPublicApisExpanded] = useState(true)
+  const [activePopover, setActivePopover] = useState(null) // key of item with open popover
 
   const handleFileUpload = () => {
     const input = document.createElement('input')
@@ -77,8 +106,8 @@ export default function DataSourcesPanel({
               <div
                 key={file.name}
                 className="sidebar-file-item sidebar-ds-clickable"
-                onClick={() => onInsertCode && onInsertCode(`import pandas as pd\n\n${file.variable || 'df'} = pd.read_csv('/tmp/${file.name}')\n${file.variable || 'df'}.head()`)}
-                title={`Click to insert: pd.read_csv('/tmp/${file.name}')`}
+                onClick={() => setActivePopover(activePopover === `file-${file.name}` ? null : `file-${file.name}`)}
+                title={`Click to insert code for '/tmp/${file.name}'`}
               >
                 <span className="sidebar-file-icon sidebar-icon-file-csv">
                   <IconFile width={13} height={13} />
@@ -94,6 +123,14 @@ export default function DataSourcesPanel({
                 >
                   <IconX width={11} height={11} />
                 </button>
+                {activePopover === `file-${file.name}` && (
+                  <InsertChoicePopover
+                    pythonCode={`import pandas as pd\n\n${file.variable || 'df'} = pd.read_csv('/tmp/${file.name}')\n${file.variable || 'df'}.head()`}
+                    sqlCode={`SELECT * FROM '/tmp/${file.name}' LIMIT 10`}
+                    onInsert={onInsertCode}
+                    onClose={() => setActivePopover(null)}
+                  />
+                )}
               </div>
             ))}
           </>
@@ -137,7 +174,7 @@ export default function DataSourcesPanel({
               <div
                 key={file.key}
                 className="sidebar-file-item sidebar-ds-clickable"
-                onClick={() => onInsertCode && onInsertCode(`import boto3, pandas as pd\n\ndef read_s3_csv(bucket, key):\n    obj = boto3.client('s3').get_object(Bucket=bucket, Key=key)\n    return pd.read_csv(obj['Body'])\n\ndf = read_s3_csv('${file.bucket}', '${file.key}')\ndf.head()`)}
+                onClick={() => setActivePopover(activePopover === `s3-${file.key}` ? null : `s3-${file.key}`)}
                 title={`Click to insert code: read '${file.key}' from S3`}
               >
                 <span className="sidebar-file-icon sidebar-icon-s3"><IconFile width={13} height={13} /></span>
@@ -145,6 +182,19 @@ export default function DataSourcesPanel({
                   <span className="sidebar-file-name">{file.key}</span>
                   <span className="sidebar-file-meta">{file.size}</span>
                 </div>
+                {activePopover === `s3-${file.key}` && (() => {
+                  const ext = file.key.split('.').pop().toLowerCase()
+                  const readFn = ext === 'json' ? 'read_json' : ext === 'parquet' ? 'read_parquet' : 'read_csv'
+                  const pdReader = ext === 'json' ? 'pd.read_json' : ext === 'parquet' ? 'pd.read_parquet' : 'pd.read_csv'
+                  return (
+                  <InsertChoicePopover
+                    pythonCode={`import boto3, pandas as pd\n\ndef read_s3_file(bucket, key):\n    obj = boto3.client('s3').get_object(Bucket=bucket, Key=key)\n    return ${pdReader}(obj['Body'])\n\ndf = read_s3_file('${file.bucket}', '${file.key}')\ndf.head()`}
+                    sqlCode={`SELECT * FROM ${readFn}('s3://${file.bucket}/${file.key}') LIMIT 10`}
+                    onInsert={onInsertCode}
+                    onClose={() => setActivePopover(null)}
+                  />
+                  )
+                })()}
               </div>
             ))}
           </>
@@ -164,7 +214,7 @@ export default function DataSourcesPanel({
               <div
                 key={table.name}
                 className="sidebar-file-item sidebar-ds-clickable"
-                onClick={() => onInsertCode && onInsertCode(`import boto3, pandas as pd\n\ndef scan_dynamodb(table_name, region='${table.region}'):\n    table = boto3.resource('dynamodb', region_name=region).Table(table_name)\n    return pd.DataFrame(table.scan()['Items'])\n\ndf = scan_dynamodb('${table.name}')\ndf.head()`)}
+                onClick={() => setActivePopover(activePopover === `dynamo-${table.name}` ? null : `dynamo-${table.name}`)}
                 title={`Click to insert code for table '${table.name}'`}
               >
                 <span className="sidebar-file-icon sidebar-icon-dynamodb"><IconDatabase width={13} height={13} /></span>
@@ -172,6 +222,14 @@ export default function DataSourcesPanel({
                   <span className="sidebar-file-name">{table.name}</span>
                   <span className="sidebar-file-meta">{table.item_count} items · {table.region}</span>
                 </div>
+                {activePopover === `dynamo-${table.name}` && (
+                  <InsertChoicePopover
+                    pythonCode={`import boto3, pandas as pd\n\ndef scan_dynamodb(table_name, region='${table.region}'):\n    table = boto3.resource('dynamodb', region_name=region).Table(table_name)\n    return pd.DataFrame(table.scan()['Items'])\n\ndf = scan_dynamodb('${table.name}')\ndf.head()`}
+                    sqlCode={`SELECT * FROM dynamodb."${table.name}" LIMIT 10`}
+                    onInsert={onInsertCode}
+                    onClose={() => setActivePopover(null)}
+                  />
+                )}
               </div>
             ))}
           </>
@@ -191,7 +249,7 @@ export default function DataSourcesPanel({
               <div
                 key={`${table.database}.${table.name}`}
                 className="sidebar-file-item sidebar-ds-clickable"
-                onClick={() => onInsertCode && onInsertCode(`import boto3, pandas as pd, time\n\ndef athena_query(sql, workgroup='${athenaWorkgroup}', region='${table.region}'):\n    c = boto3.client('athena', region_name=region)\n    eid = c.start_query_execution(QueryString=sql, WorkGroup=workgroup)['QueryExecutionId']\n    while c.get_query_execution(QueryExecutionId=eid)['QueryExecution']['Status']['State'] in ('QUEUED','RUNNING'): time.sleep(0.5)\n    rows = c.get_query_results(QueryExecutionId=eid)['ResultSet']['Rows']\n    header = [col['VarCharValue'] for col in rows[0]['Data']]\n    data = [[col.get('VarCharValue','') for col in row['Data']] for row in rows[1:]]\n    return pd.DataFrame(data, columns=header)\n\ndf = athena_query("SELECT * FROM ${table.database}.${table.name} LIMIT 100")\ndf`)}
+                onClick={() => setActivePopover(activePopover === `athena-${table.database}.${table.name}` ? null : `athena-${table.database}.${table.name}`)}
                 title={`Click to query ${table.database}.${table.name} (${table.column_count} columns)`}
               >
                 <span className="sidebar-file-icon sidebar-icon-athena"><IconTable width={13} height={13} /></span>
@@ -199,6 +257,14 @@ export default function DataSourcesPanel({
                   <span className="sidebar-file-name">{table.name}</span>
                   <span className="sidebar-file-meta">{table.column_count} cols · {table.database}</span>
                 </div>
+                {activePopover === `athena-${table.database}.${table.name}` && (
+                  <InsertChoicePopover
+                    pythonCode={`import boto3, pandas as pd, time\n\ndef athena_query(sql, workgroup='${athenaWorkgroup}', region='${table.region}'):\n    c = boto3.client('athena', region_name=region)\n    eid = c.start_query_execution(QueryString=sql, WorkGroup=workgroup)['QueryExecutionId']\n    while c.get_query_execution(QueryExecutionId=eid)['QueryExecution']['Status']['State'] in ('QUEUED','RUNNING'): time.sleep(0.5)\n    rows = c.get_query_results(QueryExecutionId=eid)['ResultSet']['Rows']\n    header = [col['VarCharValue'] for col in rows[0]['Data']]\n    data = [[col.get('VarCharValue','') for col in row['Data']] for row in rows[1:]]\n    return pd.DataFrame(data, columns=header)\n\ndf = athena_query("SELECT * FROM ${table.database}.${table.name} LIMIT 100")\ndf`}
+                    sqlCode={`SELECT * FROM ${table.database}.${table.name} LIMIT 100`}
+                    onInsert={onInsertCode}
+                    onClose={() => setActivePopover(null)}
+                  />
+                )}
               </div>
             ))}
           </>
@@ -214,7 +280,7 @@ export default function DataSourcesPanel({
           <div
             key={api.id}
             className="sidebar-file-item sidebar-ds-clickable"
-            onClick={() => onInsertCode && onInsertCode(api.code)}
+            onClick={() => onInsertCode && onInsertCode(api.code, 'code')}
             title={api.desc}
           >
             <span className="sidebar-file-icon">{api.icon}</span>

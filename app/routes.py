@@ -1,11 +1,7 @@
 """
-Sandbox API routes — code execution, package management, file operations.
-
-These are the endpoints the AI agent and notebook UI call to interact
-with the persistent Python sandbox inside the MicroVM.
+Sandbox utility routes — package management, variables, health, metrics, files.
 
 Endpoints:
-  POST /execute      - Execute Python code
   POST /install      - Install a pip package
   GET  /variables    - List namespace variables
   POST /reset        - Clear namespace
@@ -18,7 +14,6 @@ Endpoints:
 
 import os
 import base64
-import asyncio
 import logging
 import glob
 
@@ -28,33 +23,6 @@ from fastapi.responses import JSONResponse
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["sandbox"])
-
-
-@router.post("/execute")
-async def execute_code(request: Request):
-    """Execute Python code in the persistent sandbox namespace."""
-    executor = request.app.state.executor
-    session_state = request.app.state.session_state
-    session_state["request_count"] += 1
-
-    body = await request.json()
-    code = body.get("code", "")
-    if not code.strip():
-        return JSONResponse(status_code=400, content={"error": "No code provided. Send {\"code\": \"...\"}"})
-
-    logger.info(f"▶ Executing code (len={len(code)})")
-    result = await asyncio.to_thread(executor.execute, code)
-
-    return {
-        "success": result.success,
-        "output": result.output,
-        "error": result.error,
-        "html": result.html,
-        "image": result.image,
-        "variables_created": result.variables_created,
-        "execution_time_ms": result.execution_time_ms,
-        "execution_number": executor.get_stats()["execution_count"],
-    }
 
 
 @router.post("/install")

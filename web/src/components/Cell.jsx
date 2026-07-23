@@ -1,12 +1,31 @@
 import { useState, useRef, useEffect, useMemo } from 'react'
 import Prism from 'prismjs'
 import 'prismjs/components/prism-python'
+import 'prismjs/components/prism-sql'
 import { marked } from 'marked'
 import { sanitizeHtml, sanitizeMarkdown } from '../services/sanitize'
 import MarkdownCell from './MarkdownCell'
-import { IconPlay, IconPlus, IconTrash, IconX, IconStop, IconChevronDown, IconChevronRight, IconGripVertical, IconEraser } from './Icons'
+import { IconPlay, IconPlus, IconTrash, IconX, IconStop, IconChevronDown, IconChevronRight, IconGripVertical, IconEraser, IconCode, IconDatabase } from './Icons'
 import { PROXY_URL } from '../config'
 import './Cell.css'
+
+// Derive a default variable name from SQL (based on the primary table being queried)
+function deriveSqlVarName(sql) {
+  if (!sql || !sql.trim()) return 'result'
+  // Try to extract table name from FROM clause
+  const fromMatch = sql.match(/\bFROM\s+(?:dynamodb\.)?"?([a-zA-Z_][\w\-]*)"?/i)
+    || sql.match(/\bFROM\s+'\/tmp\/([^']+)'/i)
+    || sql.match(/\bFROM\s+read_(?:csv|json|parquet)\('[^']*\/([^'/]+)'\)/i)
+    || sql.match(/\bFROM\s+([a-zA-Z_]\w*\.)?([a-zA-Z_]\w*)/i)
+  if (fromMatch) {
+    // Get the last captured group that has a value
+    const raw = fromMatch[fromMatch.length - 1] || fromMatch[1] || 'result'
+    // Sanitize: remove extension, replace non-identifier chars with underscore
+    const cleaned = raw.replace(/\.\w+$/, '').replace(/[^a-zA-Z0-9_]/g, '_').replace(/^_+|_+$/g, '')
+    if (cleaned && /^[a-zA-Z_]/.test(cleaned)) return cleaned
+  }
+  return 'result'
+}
 
 // Ticking timer component for running cells
 function ElapsedTimer() {
@@ -32,6 +51,7 @@ export default function Cell({
   onExecute,
   onInterrupt,
   onCodeChange,
+  onOutputVarChange,
   onAddBelow,
   onInsertAbove,
   onSetAiExplanation,
@@ -89,7 +109,9 @@ export default function Cell({
 
   const highlightedHtml = useMemo(() => {
     if (!cell.code) return ''
-    let html = Prism.highlight(cell.code, Prism.languages.python, 'python')
+    const lang = cell.type === 'sql' ? 'sql' : 'python'
+    const grammar = cell.type === 'sql' ? Prism.languages.sql : Prism.languages.python
+    let html = Prism.highlight(cell.code, grammar, lang)
     if (searchQuery && searchQuery.trim()) {
       const escaped = searchQuery.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
       const regex = new RegExp(`(${escaped})`, 'gi')
@@ -108,6 +130,18 @@ export default function Cell({
   // Smart execute: detects NLP vs code and routes accordingly
   const smartExecute = () => {
     const code = (cell.code || '').trim()
+    if (cell.type === 'sql') {
+      // For SQL cells: detect NLP (doesn't look like SQL) → generate SQL
+      if (code && aiAvailable && isConnected) {
+        const looksLikeSql = /^(SELECT|INSERT INTO|UPDATE\s+\w+\s+SET|DELETE\s+FROM|CREATE\s+(TABLE|VIEW|INDEX|DATABASE)|DROP\s+(TABLE|VIEW)|ALTER\s+TABLE|WITH\s+\w+\s+AS|SHOW\s+(TABLES|DATABASES|COLUMNS)|DESCRIBE|EXPLAIN)\b/i.test(code) || code.trimStart().startsWith('--')
+        if (!looksLikeSql && !generating) {
+          handleGenerate()
+          return
+        }
+      }
+      onExecute()
+      return
+    }
     if (code && aiAvailable && isConnected) {
       const looksLikeCode = /^(import |from |def |class |for |while |if |#|[a-zA-Z_]\w*\s*[=([]|print\(|plt\.|pd\.|np\.)/.test(code) || code.includes('=') || code.includes('(')
       if (!looksLikeCode && !generating) {
@@ -217,12 +251,17 @@ export default function Cell({
     if (!cell.code?.trim() || generating) return
     setGenerating(true)
     try {
+      const isSqlCell = cell.type === 'sql'
+      const prompt = isSqlCell
+        ? `Generate a SQL query for the following request. This is a SQL cell using DuckDB. Use proper DuckDB syntax: local files as '/tmp/file.csv', S3 as read_csv('s3://...'), Athena tables as database.table. Return ONLY the SQL wrapped in \`\`\`sql, no explanations:\n\n${cell.code}`
+        : `Generate Python code for the following request. This is a PYTHON code cell — return ONLY Python code, never SQL. Do NOT use \`\`\`sql blocks. Return ONLY the code wrapped in \`\`\`python, no explanations:\n\n${cell.code}`
+
       const resp = await fetch(`${PROXY_URL}/ai/chat/sync`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           session_id: 'oneshot-generate',
-          message: `Generate Python code for the following request. Return ONLY the code, no explanations:\n\n${cell.code}`,
+          message: prompt,
           active_cell_index: index,
           cells: (notebookContext || []).slice(0, index).map(c => ({
             type: c.type || 'code',
@@ -236,11 +275,22 @@ export default function Cell({
       if (resp.ok) {
         const data = await resp.json()
         let code = data.response || ''
-        // Strip markdown fences if present
-        if (code.includes('```python')) {
-          code = code.split('```python')[1]?.split('```')[0]?.trim() || code
-        } else if (code.startsWith('```') && code.endsWith('```')) {
-          code = code.split('\n').slice(1, -1).join('\n').trim()
+        // Strip markdown fences based on cell type
+        if (isSqlCell) {
+          if (code.includes('```sql')) {
+            code = code.split('```sql')[1]?.split('```')[0]?.trim() || code
+          } else if (code.startsWith('```') && code.endsWith('```')) {
+            code = code.split('\n').slice(1, -1).join('\n').trim()
+          }
+        } else {
+          if (code.includes('```python')) {
+            code = code.split('```python')[1]?.split('```')[0]?.trim() || code
+          } else if (code.includes('```sql')) {
+            // AI returned SQL despite being told Python — extract it anyway
+            code = code.split('```sql')[1]?.split('```')[0]?.trim() || code
+          } else if (code.startsWith('```') && code.endsWith('```')) {
+            code = code.split('\n').slice(1, -1).join('\n').trim()
+          }
         }
         if (code) onCodeChange(code)
       }
@@ -278,7 +328,7 @@ export default function Cell({
 
   return (
     <div
-      className={`cell ${statusColor} ${isActive ? 'cell-active' : ''} ${isDragOver ? 'cell-drag-over' : ''} ${hasSearchMatch ? 'cell-search-match' : ''}`}
+      className={`cell ${statusColor} ${isActive ? 'cell-active' : ''} ${isDragOver ? 'cell-drag-over' : ''} ${hasSearchMatch ? 'cell-search-match' : ''} ${cell.type === 'sql' ? 'cell-sql' : ''}`}
       data-cell-id={cell.id}
       onClick={onFocus}
       onDragOver={(e) => { e.preventDefault(); onDragOver?.() }}
@@ -304,6 +354,12 @@ export default function Cell({
         <span className="cell-number">
           {cell.executionNumber ? `[${cell.executionNumber}]` : `[${index + 1}]`}
         </span>
+        <span className={`cell-type-badge ${cell.type === 'sql' ? 'cell-type-sql' : 'cell-type-code'}`} title={cell.type === 'sql' ? 'SQL cell' : 'Python cell'}>
+          {cell.type === 'sql'
+            ? <IconDatabase width={10} height={10} />
+            : <IconCode width={10} height={10} />
+          }
+        </span>
         {cell.status === 'running' && <ElapsedTimer />}
         {cell.lastExecutedCode != null && cell.code !== cell.lastExecutedCode && cell.status !== 'running' && (
           <span className="cell-stale-badge" title="Code modified since last execution — re-run to update output">●</span>
@@ -324,6 +380,21 @@ export default function Cell({
         {/* Code editor */}
         {!codeCollapsed && (
           <div className="cell-input">
+            {/* SQL output variable name */}
+            {cell.type === 'sql' && (
+              <div className="sql-output-var">
+                <span className="sql-output-var-label">→</span>
+                <input
+                  className="sql-output-var-input"
+                  type="text"
+                  value={cell.outputVariable || ''}
+                  onChange={(e) => onOutputVarChange && onOutputVarChange(e.target.value)}
+                  placeholder={deriveSqlVarName(cell.code)}
+                  title="Variable name for the query result (accessible in subsequent cells)"
+                  spellCheck={false}
+                />
+              </div>
+            )}
             <div className="cell-editor-wrapper">
               <pre
                 className="cell-editor-highlight"
@@ -362,6 +433,9 @@ export default function Cell({
               )}
               <button className="cell-action-btn" onClick={(e) => { e.stopPropagation(); onAddBelow('code') }} title="Add code cell below">
                 <IconPlus width={14} height={14} />
+              </button>
+              <button className="cell-action-btn cell-add-sql-btn" onClick={(e) => { e.stopPropagation(); onAddBelow('sql') }} title="Add SQL cell below">
+                <IconDatabase width={12} height={12} />
               </button>
               <button className="cell-action-btn cell-add-md-btn" onClick={(e) => { e.stopPropagation(); onAddBelow('markdown') }} title="Add text cell below">
                 M

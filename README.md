@@ -1,15 +1,15 @@
 # Lambda MicroVM Notebook
 
-A **Python notebook** web application demonstrating **AWS Lambda MicroVMs** as isolated
+A **Python & SQL notebook** web application demonstrating **AWS Lambda MicroVMs** as isolated
 code execution sandboxes — the primary use case for this new serverless compute primitive.
 
-> **Note:** This is a proof-of-concept / demo application. It currently supports Python as the
-> execution language but the architecture is extensible to other runtimes (R, Node.js, Julia, etc.)
+> **Note:** This is a proof-of-concept / demo application. It supports Python and SQL (DuckDB + Athena)
+> as execution languages. The architecture is extensible to other runtimes (R, Node.js, Julia, etc.)
 > by swapping the executor and MicroVM image.
 
 ## What This Is
 
-A browser-based Python notebook (React UI) backed by stateful execution sandboxes running
+A browser-based Python & SQL notebook (React UI) backed by stateful execution sandboxes running
 on Lambda MicroVMs. Each notebook session gets its own Firecracker VM providing:
 
 - **Persistent state** — Variables, imports, and installed packages survive across cell executions
@@ -153,6 +153,7 @@ Terminates all running/suspended MicroVMs and deletes all images. S3 bucket, IAM
 ## 3. Features
 
 ### 3.1 Notebook UI
+- **Three cell types**: Code (Python), SQL (DuckDB/Athena), and Text (Markdown)
 - Code cells with `Shift+Enter` execution
 - **AI Chat panel** — right-side conversational AI assistant (opens by default with each notebook)
 - **AI Explain / Fix / Generate** — contextual buttons on each cell
@@ -262,7 +263,77 @@ A unified collapsible sidebar with VS Code-style icon activity bar:
 - **Centralized CSS design tokens** — all colors, spacing, shadows via CSS custom properties
 - **Cell dip effect** — subtle lift on hover/select with shadow
 
-### 3.8 Variable Explorer
+### 3.8 SQL Cell Type (DuckDB + Athena)
+
+The notebook supports native SQL cells alongside Python and Text cells. SQL execution is powered by **DuckDB** (in-process) with transparent **Athena** routing for remote tables.
+
+**Cell Types:**
+| Type | Icon | Execution |
+|------|------|-----------|
+| Code | `</>` (blue) | Python via `/execute` |
+| SQL | 🗄️ (orange) | DuckDB/Athena via `/execute-sql` |
+| Text | T (gray) | Markdown rendering (no execution) |
+
+**Supported SQL Data Sources:**
+
+| Source | Syntax | Engine |
+|--------|--------|--------|
+| In-memory DataFrame | `SELECT * FROM df_name` | DuckDB |
+| Local CSV file | `SELECT * FROM '/tmp/file.csv'` | DuckDB |
+| Local JSON file | `SELECT * FROM '/tmp/file.json'` | DuckDB |
+| Local Parquet file | `SELECT * FROM '/tmp/file.parquet'` | DuckDB |
+| S3 CSV file | `SELECT * FROM read_csv('s3://bucket/key.csv')` | DuckDB + httpfs |
+| S3 JSON file | `SELECT * FROM read_json('s3://bucket/key.json')` | DuckDB + httpfs |
+| S3 Parquet file | `SELECT * FROM read_parquet('s3://bucket/key.parquet')` | DuckDB + httpfs |
+| DynamoDB table | `SELECT * FROM dynamodb."table-name"` | PartiQL → DuckDB fallback |
+| Athena table | `SELECT * FROM microvm_demo_db.table_name` | Athena (auto-detected) |
+
+**Intelligent Auto-Routing:**
+- The engine detects data source references and routes transparently — the user just writes standard SQL
+- **Pure local** — all references are DataFrames, files, or S3 → runs in DuckDB (instant)
+- **Pure Athena** — all references are Athena tables → sends SQL directly to Athena
+- **Pure DynamoDB** — simple queries (SELECT/WHERE/LIMIT) → runs server-side via PartiQL (efficient, no full scan)
+- **Mixed query** — e.g. `JOIN '/tmp/local.csv' WITH microvm_demo_db.customers` or `JOIN dynamodb."products"` → remote tables are auto-materialized into DataFrames, then DuckDB executes the full query locally
+- Output shows which engine ran: 🦆 DuckDB, ⚡ Athena, 🔶 DynamoDB (PartiQL), ⚡🦆 Athena → DuckDB, 🔶🦆 DynamoDB → DuckDB
+
+**DynamoDB SQL — PartiQL-First Strategy:**
+
+DynamoDB queries use a two-tier execution model:
+
+1. **PartiQL first** (server-side) — For simple single-table queries without JOINs or GROUP BY, the SQL is sent directly to DynamoDB via [PartiQL](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/ql-reference.html). This is efficient — WHERE clauses with partition keys use indexes, and LIMIT prevents full scans.
+
+2. **Fallback to scan → DuckDB** — If PartiQL can't handle the query (JOIN, GROUP BY, HAVING, UNION, or any syntax DynamoDB doesn't support), the table is scanned into a DataFrame, registered in DuckDB, and the full query runs locally.
+
+```sql
+-- Simple query → runs via PartiQL (server-side, fast)
+SELECT * FROM dynamodb."microvm-demo-data" WHERE category = 'Electronics'
+
+-- Complex query → scans table, then DuckDB handles the JOIN locally
+SELECT d.name, d.price, s.quantity
+FROM dynamodb."microvm-demo-data" d
+JOIN '/tmp/sales_data.csv' s ON d.name = s.product
+```
+
+**DynamoDB optimizations:**
+- **Caching** — full table scans are cached in-memory for the VM lifetime (no re-scan on repeated queries)
+- **LIMIT pushdown** — simple `SELECT * LIMIT N` queries only fetch N items from DynamoDB
+- **Item count warning** — tables with >10,000 items show a warning suggesting LIMIT
+
+**S3 Access:**
+- DuckDB's `httpfs` extension is pre-configured with AWS credentials from the MicroVM execution role
+- No boto3 pre-loading needed — query S3 directly in SQL
+
+**DataSource Panel:**
+- Clicking a data source shows a Python/SQL choice popover
+- SQL option generates the correct syntax for the source type and file extension
+- All sources (local files, S3, DynamoDB, Athena) have SQL options; Public APIs are Python-only
+
+**Export:**
+- HTML/MD exports label SQL cells as "SQL — Cell N" with proper syntax highlighting
+- `.ipynb` export uses `%%sql` magic for round-trip compatibility with Jupyter
+- Native `.notebook.json` preserves the `type: "sql"` field directly
+
+### 3.9 Variable Explorer
 - **Collapsible right panel** (280px default, resizable by dragging left edge)
 - **Auto-refreshes** after each cell execution
 - **Rich type previews** per variable:
@@ -379,7 +450,8 @@ A unified collapsible sidebar with VS Code-style icon activity bar:
 ### 5.1 Cells
 - **Execute** — `Shift+Enter` or click ▶
 - **Run All** — `▶▶ Run All` in toolbar executes all cells sequentially
-- **Add cell** — `+ Cell` button or `+` on any cell
+- **Add cell** — `+ Code`, `+ SQL`, or `+ Text` buttons at bottom (or toolbar)
+- **Cell types** — Code cells run Python, SQL cells run DuckDB/Athena queries, Text cells render Markdown
 - **Delete cell** — 🗑 button; deleting the last cell replaces it with a fresh empty cell
 
 ### 5.2 AI Features
@@ -627,7 +699,7 @@ Metrics are fetched on-demand (after each cell execution), NOT continuously poll
 ```
 pandas, numpy, polars, matplotlib, requests, psutil,
 openpyxl (Excel .xlsx), xlrd (Excel .xls), pyarrow (Parquet),
-scipy (statistics), boto3 (AWS SDK)
+scipy (statistics), boto3 (AWS SDK), duckdb (SQL engine)
 ```
 
 ---
@@ -637,10 +709,12 @@ scipy (statistics), boto3 (AWS SDK)
 ```
 .
 ├── app/                          # MicroVM sandbox (runs INSIDE the Firecracker VM)
-│   ├── server.py                 # FastAPI entrypoint: shared state, pre-loaded libs
+│   ├── server.py                 # FastAPI entrypoint: shared state, pre-loaded libs, router registration
 │   ├── executor.py               # SandboxExecutor: stateful Python execution engine
 │   ├── hooks.py                  # Lifecycle hooks: /run, /suspend, /resume, /terminate
-│   ├── routes.py                 # Sandbox API: /execute, /install, /variables, /upload, /metrics
+│   ├── code_engine.py            # Python execution engine: /execute endpoint
+│   ├── sql_engine.py             # SQL execution engine: /execute-sql with DuckDB/Athena/DynamoDB auto-routing
+│   ├── routes.py                 # Utility routes: /install, /variables, /health, /metrics, /upload, /files
 │   └── checkpoint.py             # CheckpointManager: S3 checkpoint/restore logic
 ├── proxy/                        # Token proxy (runs on your machine)
 │   ├── server.py                 # FastAPI entrypoint: app setup, startup, health, router registration

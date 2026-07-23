@@ -27,6 +27,11 @@ export default function OutlinePanel({
         label = firstLine.slice(0, 60)
       }
       icon = 'M'
+    } else if (cellType === 'sql') {
+      codeCounter++
+      const lines = (cell.code || '').split('\n').filter(l => l.trim() && !l.trim().startsWith('--'))
+      label = lines.length > 0 ? lines[0].trim().slice(0, 50) : '(empty)'
+      icon = `S${codeCounter}`
     } else {
       codeCounter++
       const lines = (cell.code || '').split('\n').filter(l => l.trim())

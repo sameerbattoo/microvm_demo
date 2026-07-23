@@ -41,6 +41,7 @@ matplotlib.use('Agg')
 import matplotlib.pyplot
 import boto3
 import boto3.session
+import duckdb
 
 # Pre-warm common pandas/numpy sub-modules that are lazy-loaded on first use
 import pandas.io.parsers  # read_csv
@@ -90,6 +91,10 @@ app.state.checkpoint_manager = CheckpointManager(executor, session_state)
 # --- Register route modules ---
 from app.hooks import router as hooks_router
 from app.routes import router as routes_router
+from app.code_engine import router as code_router
+from app.sql_engine import router as sql_router
 
 app.include_router(hooks_router)
 app.include_router(routes_router)
+app.include_router(code_router)
+app.include_router(sql_router)

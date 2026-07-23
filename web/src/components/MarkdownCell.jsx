@@ -52,7 +52,7 @@ export default function MarkdownCell({
         >
           <IconGripVertical width={12} height={12} />
         </span>
-        <span className="cell-type-badge">MD</span>
+        <span className="cell-type-badge cell-type-text" title="Text cell">T</span>
       </div>
       <div className="cell-content">
         {mdEditing ? (

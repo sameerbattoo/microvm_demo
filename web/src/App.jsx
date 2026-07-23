@@ -438,6 +438,9 @@ export default function App() {
       fetch(`${PROXY_URL}/terminate/${closingTab.microvmId}`, { method: 'POST' }).catch(() => {})
     }
 
+    // Delete notebook from backend storage
+    apiDeleteNotebook(String(closingTab.id)).catch(() => {})
+
     setTabs(prev => prev.filter(t => t.id !== tabId))
     setActiveTabId(prev => {
       if (prev === tabId) {
@@ -700,9 +703,9 @@ export default function App() {
     return () => window.removeEventListener('open-notebook', handler)
   }, [])
 
-  const insertCode = useCallback((code) => {
+  const insertCode = useCallback((code, type) => {
     // Dispatch event for the active notebook to pick up
-    window.dispatchEvent(new CustomEvent('insert-code', { detail: { code } }))
+    window.dispatchEvent(new CustomEvent('insert-code', { detail: { code, type } }))
   }, [])
 
   const attachedIds = tabs.filter(t => t.microvmId).map(t => t.microvmId)
@@ -835,9 +838,10 @@ export default function App() {
               newCells[tab._activeCellIndex] = { ...newCells[tab._activeCellIndex], code }
               updateTab(activeTabId, { _cells: newCells })
             }}
-            onInsertCells={(codeBlocks) => {
-              codeBlocks.forEach((code) => {
-                window.dispatchEvent(new CustomEvent('insert-code', { detail: { code } }))
+            onInsertCells={(codeBlocks, types) => {
+              codeBlocks.forEach((code, i) => {
+                const type = types?.[i] || 'code'
+                window.dispatchEvent(new CustomEvent('insert-code', { detail: { code, type } }))
               })
             }}
           />

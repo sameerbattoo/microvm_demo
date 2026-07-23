@@ -40,7 +40,8 @@
         "dynamodb:Scan",
         "dynamodb:Query",
         "dynamodb:GetItem",
-        "dynamodb:DescribeTable"
+        "dynamodb:DescribeTable",
+        "dynamodb:PartiQLSelect"
       ],
       "Resource": "arn:aws:dynamodb:*:*:table/microvm-demo-*"
     },

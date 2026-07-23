@@ -2,7 +2,7 @@ import { useState, useCallback, useRef, useEffect, useMemo } from 'react'
 import { createPortal } from 'react-dom'
 import Cell from './Cell'
 import ConnectionPanel from './ConnectionPanel'
-import { IconPlus, IconPlayAll, IconPlay, IconTrash, IconSave, IconFolderOpen, IconStop, IconFile, IconSearch, IconChevronUp, IconChevronDown, IconX, IconZap, IconSun, IconMoon, IconCode, IconNotebook, IconEraser } from './Icons'
+import { IconPlus, IconPlayAll, IconPlay, IconTrash, IconSave, IconFolderOpen, IconStop, IconFile, IconSearch, IconChevronUp, IconChevronDown, IconX, IconZap, IconSun, IconMoon, IconCode, IconNotebook, IconEraser, IconDatabase } from './Icons'
 import { PROXY_URL } from '../config'
 import './Notebook.css'
 
@@ -24,10 +24,25 @@ let nextCellId = (() => {
   return 1
 })()
 
+// Derive default output variable name from SQL query
+function _deriveSqlVarName(sql) {
+  if (!sql || !sql.trim()) return 'result'
+  const fromMatch = sql.match(/\bFROM\s+(?:dynamodb\.)?"?([a-zA-Z_][\w\-]*)"?/i)
+    || sql.match(/\bFROM\s+'\/tmp\/([^']+)'/i)
+    || sql.match(/\bFROM\s+read_(?:csv|json|parquet)\('[^']*\/([^'/]+)'\)/i)
+    || sql.match(/\bFROM\s+([a-zA-Z_]\w*\.)?([a-zA-Z_]\w*)/i)
+  if (fromMatch) {
+    const raw = fromMatch[fromMatch.length - 1] || fromMatch[1] || 'result'
+    const cleaned = raw.replace(/\.\w+$/, '').replace(/[^a-zA-Z0-9_]/g, '_').replace(/^_+|_+$/g, '')
+    if (cleaned && /^[a-zA-Z_]/.test(cleaned)) return cleaned
+  }
+  return 'result'
+}
+
 function createCell(type = 'code') {
   return {
     id: nextCellId++,
-    type,  // 'code' | 'markdown'
+    type,  // 'code' | 'markdown' | 'sql'
     code: '',
     output: null,
     error: null,
@@ -37,6 +52,7 @@ function createCell(type = 'code') {
     executionNumber: null,
     executionTime: null,
     lastExecutedCode: null, // snapshot of code at execution time (for staleness detection)
+    outputVariable: type === 'sql' ? 'result' : null, // SQL cells store result as a named DataFrame
   }
 }
 
@@ -212,18 +228,19 @@ export default function Notebook({ tab, instances = {}, onUpdateTab, onMarkVmRun
   // Listen for code insertion events from sidebar (S3/DynamoDB clicks)
   useEffect(() => {
     const handler = (e) => {
-      const { code } = e.detail
+      const { code, type: cellType } = e.detail
       if (!code) return
+      const insertType = cellType || 'code'
       setCells(prev => {
         const lastCell = prev[prev.length - 1]
-        if (lastCell && !lastCell.code.trim()) {
-          // Use the last empty cell
+        if (lastCell && !lastCell.code.trim() && lastCell.type === insertType) {
+          // Use the last empty cell if same type
           return prev.map((c, i) => i === prev.length - 1 ? { ...c, code } : c)
         }
         // Add a new cell
         return [...prev, {
           id: nextCellId++,
-          type: 'code',
+          type: insertType,
           code,
           output: null,
           error: null,
@@ -364,10 +381,19 @@ export default function Notebook({ tab, instances = {}, onUpdateTab, onMarkVmRun
       }
 
       try {
-        const response = await fetch(`${tab.microvmEndpoint}/execute`, {
+        // Route SQL cells to /execute-sql, code cells to /execute
+        const isSql = cell.type === 'sql'
+        const url = isSql
+          ? `${tab.microvmEndpoint}/execute-sql`
+          : `${tab.microvmEndpoint}/execute`
+        const body = isSql
+          ? JSON.stringify({ sql: cell.code, output_variable: cell.outputVariable || _deriveSqlVarName(cell.code) })
+          : JSON.stringify({ code: cell.code })
+
+        const response = await fetch(url, {
           method: 'POST',
           headers,
-          body: JSON.stringify({ code: cell.code }),
+          body,
         })
 
         const text = await response.text()
@@ -530,6 +556,10 @@ export default function Notebook({ tab, instances = {}, onUpdateTab, onMarkVmRun
     setCells(prev => prev.map(c => c.id === cellId ? { ...c, code } : c))
   }, [])
 
+  const updateCellOutputVar = useCallback((cellId, outputVariable) => {
+    setCells(prev => prev.map(c => c.id === cellId ? { ...c, outputVariable } : c))
+  }, [])
+
   const addCellBelow = useCallback((cellId, type = 'code') => {
     const newCell = createCell(type)
     setCells(prev => {
@@ -667,6 +697,7 @@ export default function Notebook({ tab, instances = {}, onUpdateTab, onMarkVmRun
         image: c.image,
         executionNumber: c.executionNumber,
         aiExplanation: c.aiExplanation || null,
+        outputVariable: c.outputVariable || null,
       })),
     }
 
@@ -688,8 +719,8 @@ export default function Notebook({ tab, instances = {}, onUpdateTab, onMarkVmRun
     cells.forEach((cell, i) => {
       const cellType = cell.type || 'code'
       html += `<div class="cell">`
-      html += `<div class="cell-header"><span>${cellType === 'markdown' ? 'Text' : `Code — Cell ${i + 1}`}</span>${cell.executionNumber ? `<span>[${cell.executionNumber}]</span>` : ''}</div>`
-      html += `<details open><summary>Code</summary><pre>${(cell.code || '').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</pre></details>`
+      html += `<div class="cell-header"><span>${cellType === 'markdown' ? 'Text' : cellType === 'sql' ? `SQL — Cell ${i + 1}` : `Code — Cell ${i + 1}`}</span>${cell.executionNumber ? `<span>[${cell.executionNumber}]</span>` : ''}</div>`
+      html += `<details open><summary>${cellType === 'sql' ? 'SQL' : 'Code'}</summary><pre>${(cell.code || '').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</pre></details>`
       if (cell.output || cell.html || cell.image || cell.error) {
         html += `<div class="output">`
         if (cell.output) html += `<pre>${cell.output}</pre>`
@@ -716,8 +747,8 @@ export default function Notebook({ tab, instances = {}, onUpdateTab, onMarkVmRun
     md += `*Exported: ${new Date().toLocaleString()} · ${cells.length} cells*\n\n---\n\n`
     cells.forEach((cell, i) => {
       const cellType = cell.type || 'code'
-      md += `## ${cellType === 'markdown' ? 'Text' : `Cell ${i + 1}`}${cell.executionNumber ? ` [${cell.executionNumber}]` : ''}\n\n`
-      md += `<details><summary>Code</summary>\n\n\`\`\`python\n${cell.code || ''}\n\`\`\`\n</details>\n\n`
+      md += `## ${cellType === 'markdown' ? 'Text' : cellType === 'sql' ? `SQL — Cell ${i + 1}` : `Code — Cell ${i + 1}`}${cell.executionNumber ? ` [${cell.executionNumber}]` : ''}\n\n`
+      md += `<details><summary>${cellType === 'sql' ? 'SQL' : 'Code'}</summary>\n\n\`\`\`${cellType === 'sql' ? 'sql' : 'python'}\n${cell.code || ''}\n\`\`\`\n</details>\n\n`
       if (cell.output) md += `**Output:**\n\`\`\`\n${cell.output}\n\`\`\`\n\n`
       if (cell.html) md += `*(DataFrame table — view HTML export for full rendering)*\n\n`
       if (cell.image) md += `![Plot](plot-cell-${i + 1}.png)\n\n`
@@ -744,7 +775,9 @@ export default function Notebook({ tab, instances = {}, onUpdateTab, onMarkVmRun
       },
       cells: cells.map(cell => {
         const cellType = cell.type === 'markdown' ? 'markdown' : 'code'
-        const source = (cell.code || '').split('\n').map((line, i, arr) => i < arr.length - 1 ? line + '\n' : line)
+        // For SQL cells exported as ipynb code cells, prepend %%sql magic
+        const codeContent = cell.type === 'sql' ? `%%sql\n${cell.code || ''}` : (cell.code || '')
+        const source = codeContent.split('\n').map((line, i, arr) => i < arr.length - 1 ? line + '\n' : line)
         const outputs = []
         if (cellType === 'code') {
           if (cell.output) {
@@ -790,6 +823,13 @@ export default function Notebook({ tab, instances = {}, onUpdateTab, onMarkVmRun
               .filter(c => c.cell_type === 'code' || c.cell_type === 'markdown')
               .map(c => {
                 const code = Array.isArray(c.source) ? c.source.join('') : (c.source || '')
+                // Detect %%sql magic → SQL cell type
+                let cellType = c.cell_type === 'markdown' ? 'markdown' : 'code'
+                let cellCode = code
+                if (cellType === 'code' && code.trimStart().startsWith('%%sql')) {
+                  cellType = 'sql'
+                  cellCode = code.trimStart().replace(/^%%sql\s*\n?/, '')
+                }
                 // Extract text output if available
                 let output = null
                 if (c.outputs && c.outputs.length > 0) {
@@ -800,8 +840,8 @@ export default function Notebook({ tab, instances = {}, onUpdateTab, onMarkVmRun
                   }
                 }
                 return {
-                  type: c.cell_type === 'markdown' ? 'markdown' : 'code',
-                  code,
+                  type: cellType,
+                  code: cellCode,
                   output,
                   error: null,
                   html: null,
@@ -886,6 +926,9 @@ export default function Notebook({ tab, instances = {}, onUpdateTab, onMarkVmRun
             </button>
             <button className="toolbar-btn" onClick={() => addCellAtEnd('markdown')} title="Add text/markdown cell">
               <IconFile width={14} height={14} />
+            </button>
+            <button className="toolbar-btn" onClick={() => addCellAtEnd('sql')} title="Add SQL cell">
+              <IconDatabase width={14} height={14} />
             </button>
             <button
               className="toolbar-btn toolbar-btn-run"
@@ -1067,6 +1110,7 @@ export default function Notebook({ tab, instances = {}, onUpdateTab, onMarkVmRun
             onExecute={() => executeCell(cell.id)}
             onInterrupt={interruptExecution}
             onCodeChange={(code) => updateCellCode(cell.id, code)}
+            onOutputVarChange={(v) => updateCellOutputVar(cell.id, v)}
             onAddBelow={(type) => addCellBelow(cell.id, type)}
             onInsertAbove={(summary) => {
               const cellAbove = index > 0 ? cells[index - 1] : null
@@ -1102,6 +1146,9 @@ export default function Notebook({ tab, instances = {}, onUpdateTab, onMarkVmRun
         <div className="add-cell-row">
           <button className="add-cell-btn" onClick={() => addCellAtEnd('code')}>
             + Code
+          </button>
+          <button className="add-cell-btn" onClick={() => addCellAtEnd('sql')}>
+            + SQL
           </button>
           <button className="add-cell-btn" onClick={() => addCellAtEnd('markdown')}>
             + Text

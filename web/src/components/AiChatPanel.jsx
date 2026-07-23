@@ -275,17 +275,17 @@ export default function AiChatPanel({ activeTab, uploadedFiles = [], onClose, on
                   <div className="ai-msg-md" dangerouslySetInnerHTML={{ __html: sanitizeMarkdown(marked.parse(msg.content, { breaks: true })) }} />
                   {/* Show Apply button if response contains code blocks */}
                   {msg.content.includes('```') && (onUpdateCell || onInsertCells) && (() => {
-                    const codeBlocks = [...msg.content.matchAll(/```(?:python)?\n([\s\S]*?)```/g)].map(m => m[1].trim())
+                    const codeBlocks = [...msg.content.matchAll(/```(?:python|sql)?\n([\s\S]*?)```/g)].map(m => ({ code: m[1].trim(), type: m[0].startsWith('```sql') ? 'sql' : 'code' }))
                     if (codeBlocks.length === 0) return null
                     return (
                       <div className="ai-apply-multi">
                         <button className="ai-apply-code-btn" onClick={() => {
-                          if (onInsertCells) onInsertCells(codeBlocks)
+                          if (onInsertCells) onInsertCells(codeBlocks.map(b => b.code), codeBlocks.map(b => b.type))
                         }}>
                           {codeBlocks.length === 1 ? 'Insert Cell' : `Insert ${codeBlocks.length} Cells`}
                         </button>
                         {codeBlocks.length === 1 && onUpdateCell && (
-                          <button className="ai-apply-code-btn ai-apply-single" onClick={() => onUpdateCell(codeBlocks[0])}>
+                          <button className="ai-apply-code-btn ai-apply-single" onClick={() => onUpdateCell(codeBlocks[0].code)}>
                             Replace Active Cell
                           </button>
                         )}

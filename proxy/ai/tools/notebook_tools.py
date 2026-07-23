@@ -19,8 +19,10 @@ def insert_cell(code: str, cell_type: str = "code", position: str = "after_activ
     Insert a new cell into the notebook.
 
     Args:
-        code: The Python code or markdown content for the cell.
-        cell_type: Either "code" or "markdown". Use "markdown" for explanatory text.
+        code: The Python code, SQL query, or markdown content for the cell.
+        cell_type: "code" (Python), "sql" (DuckDB SQL query), or "markdown" (explanatory text).
+                   Use "sql" when the user asks for SQL queries — DuckDB can query DataFrames
+                   by variable name and local CSV/Parquet files by path (e.g. '/tmp/file.csv').
         position: Where to insert. Options: "after_active" (after currently selected cell),
                   "end" (at the bottom), or a number like "3" for a specific index.
 
