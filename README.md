@@ -723,12 +723,14 @@ scipy (statistics), boto3 (AWS SDK), duckdb (SQL engine)
 .
 ├── app/                          # MicroVM sandbox (runs INSIDE the Firecracker VM)
 │   ├── server.py                 # FastAPI entrypoint: shared state, pre-loaded libs, router registration
-│   ├── executor.py               # SandboxExecutor: stateful Python execution engine
-│   ├── hooks.py                  # Lifecycle hooks: /run, /suspend, /resume, /terminate
-│   ├── code_engine.py            # Python execution engine: /execute endpoint
-│   ├── sql_engine.py             # SQL execution engine: /execute-sql with DuckDB/Athena/DynamoDB auto-routing
-│   ├── routes.py                 # Utility routes: /install, /variables, /health, /metrics, /upload, /files
-│   └── checkpoint.py             # CheckpointManager: S3 checkpoint/restore logic
+│   ├── platform/                 # Infrastructure layer — MicroVM lifecycle
+│   │   ├── hooks.py              # Lifecycle hooks: /run, /suspend, /resume, /terminate
+│   │   └── checkpoint.py         # S3 checkpoint/restore with per-step timing
+│   └── notebook/                 # Application layer — notebook execution
+│       ├── executor.py           # SandboxExecutor: stateful Python execution engine
+│       ├── code_engine.py        # Python execution: /execute endpoint
+│       ├── sql_engine.py         # SQL execution: /execute-sql with DuckDB/Athena/DynamoDB auto-routing
+│       └── routes.py             # Utility: /install, /variables, /health, /metrics, /upload, /files
 ├── proxy/                        # Token proxy (runs on your machine)
 │   ├── server.py                 # FastAPI entrypoint: app setup, startup, health, router registration
 │   ├── microvm_manager.py        # MicrovmManager: tokens, timers, cost, AWS client

@@ -1,6 +1,8 @@
 """
 Sandboxed Python Code Executor
 
+Part of: app.notebook (application layer)
+
 Maintains a persistent namespace across executions — variables, functions,
 imports all survive between calls. This is the core of the agent sandbox:
 AI-generated code runs here, accumulating state like a notebook kernel.

@@ -765,12 +765,11 @@ export default function App() {
               </button>
               <div className="app-empty-icon">
                 <svg width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                  <rect x="4" y="4" width="16" height="16" rx="2" />
-                  <path d="M9 9h6M9 13h6M9 17h4" />
+                  <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" fill="rgba(137,180,250,0.2)" stroke="#89b4fa"/>
                 </svg>
               </div>
-              <h2 className="app-empty-title">MicroVM Notebook</h2>
-              <p className="app-empty-subtitle">Stateful Python execution in isolated Firecracker VMs</p>
+              <h2 className="app-empty-title">Lambda MicroVM Notebook</h2>
+              <p className="app-empty-subtitle">AI-Powered Python & SQL Notebooks on Serverless Firecracker Sandboxes</p>
               <div className="app-empty-actions">
                 <button className="app-empty-btn app-empty-btn-primary" onClick={addTab}>
                   + New Notebook

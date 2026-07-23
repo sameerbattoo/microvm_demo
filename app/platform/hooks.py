@@ -1,6 +1,8 @@
 """
 MicroVM Lifecycle Hooks.
 
+Part of: app.platform (infrastructure layer)
+
 These endpoints are called by the Lambda MicroVM runtime (not by user code)
 at key points in the MicroVM lifecycle:
 

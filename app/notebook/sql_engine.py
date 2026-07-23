@@ -1,6 +1,8 @@
 """
 SQL execution engine with intelligent auto-routing.
 
+Part of: app.notebook (application layer)
+
 Transparently routes SQL queries to the appropriate engine:
 - DuckDB: local DataFrames, files (/tmp/), S3 via httpfs
 - Athena: tables detected in the Glue catalog (database.table format)

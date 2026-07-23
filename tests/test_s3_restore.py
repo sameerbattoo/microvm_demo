@@ -96,6 +96,46 @@ def main():
     timings = {}
 
     # ================================================================
+    # PHASE 0: Baseline — Launch a bare VM (no checkpoint, no restore)
+    # ================================================================
+    log("PHASE 0: Baseline — launching bare VM (no checkpoint, no restore)...")
+
+    with timed("Bare VM launch") as t:
+        resp = requests.post(f"{PROXY_URL}/launch", json={
+            "name": "baseline-timing",
+            "memoryMiB": MEMORY_MIB,
+            "idleTimeoutSeconds": 60,
+            "maxDurationSeconds": 300,
+            "checkpointEnabled": False,
+        })
+        baseline_data = resp.json()
+        assert "microvmId" in baseline_data, f"Baseline launch failed: {baseline_data}"
+        baseline_vm_id = baseline_data["microvmId"]
+        baseline_endpoint = baseline_data["endpoint"]
+    timings["bare_launch"] = t.elapsed
+
+    # Quick health check to confirm it's responsive
+    with timed("Bare VM first response") as t:
+        headers = {"X-MicroVM-Id": baseline_vm_id, "X-MicroVM-Endpoint": baseline_endpoint}
+        for _ in range(10):
+            try:
+                r = requests.get(f"{PROXY_URL}/proxy/health", headers=headers, timeout=5)
+                if r.ok:
+                    break
+            except:
+                pass
+            time.sleep(1)
+    timings["bare_first_response"] = t.elapsed
+
+    log(f"  Bare VM: {baseline_vm_id}")
+    log(f"  Launch: {timings['bare_launch']:.1f}s, First response: {timings['bare_first_response']:.1f}s")
+
+    # Terminate baseline VM
+    requests.post(f"{PROXY_URL}/terminate/{baseline_vm_id}")
+    log(f"  Terminated baseline VM")
+    log("")
+
+    # ================================================================
     # PHASE 1: Launch MicroVM with checkpoint enabled
     # ================================================================
     log("PHASE 1: Launching MicroVM with checkpoint enabled...")
@@ -237,11 +277,22 @@ print(f"File size: {os.path.getsize('/tmp/test_products.csv')} bytes")
             our_session = s
             break
 
+    save_timings_ms = {}
     if our_session:
         log(f"  ✅ Checkpoint found: {our_session['session_id']}")
         log(f"     Variables: {our_session.get('variables_count', '?')}")
         log(f"     Files: {our_session.get('files_count', '?')}")
         log(f"     Checkpointed at: {our_session.get('checkpointed_at', '?')}")
+        # Extract save timings from metadata
+        save_timings_ms = our_session.get('save_timings_ms', {})
+        if save_timings_ms:
+            log(f"     Save breakdown (inside VM):")
+            log(f"       Serialize (dill):     {save_timings_ms.get('serialize', 0):.0f}ms")
+            log(f"       Upload checkpoint.pkl:{save_timings_ms.get('upload_pkl', 0):.0f}ms")
+            log(f"       Archive files:        {save_timings_ms.get('archive_files', 0):.0f}ms")
+            log(f"       pip freeze:           {save_timings_ms.get('packages', 0):.0f}ms")
+            log(f"       Upload metadata:      {save_timings_ms.get('metadata', 0):.0f}ms")
+            log(f"       TOTAL (inside VM):    {sum(save_timings_ms.values()):.0f}ms")
         restore_session_id = our_session["session_id"]
     else:
         log("  ❌ No checkpoint found for our session!")
@@ -281,9 +332,18 @@ print(f"File size: {os.path.getsize('/tmp/test_products.csv')} bytes")
         wait_for_running(restore_microvm_id)
     timings["wait_running_restore"] = t.elapsed
 
-    # Give the /run hook time to restore state
-    log("  Waiting for restore to complete (run hook)...")
-    time.sleep(10)
+    # Measure time until restored VM responds (confirms /run hook completed)
+    with timed("Restore VM first response") as t:
+        headers = {"X-MicroVM-Id": restore_microvm_id, "X-MicroVM-Endpoint": restore_endpoint}
+        for _ in range(20):
+            try:
+                r = requests.get(f"{PROXY_URL}/proxy/health", headers=headers, timeout=5)
+                if r.ok:
+                    break
+            except:
+                pass
+            time.sleep(1)
+    timings["restore_first_response"] = t.elapsed
 
     # ================================================================
     # PHASE 6: Validate restored state
@@ -367,12 +427,42 @@ print(f'rows={len(rows)}, header={rows[0]}, first_data={rows[1]}')
         log(f"  ❌ File content check failed: {result.get('error') or result.get('output')}")
 
     # ================================================================
-    # PHASE 7: Cleanup
+    # PHASE 6b: Fetch internal checkpoint timings from the restored VM
+    # ================================================================
+    log("")
+    log("PHASE 6b: Fetching checkpoint timing breakdown from VM...")
+    checkpoint_timings = {}
+    try:
+        headers = {"X-MicroVM-Id": restore_microvm_id, "X-MicroVM-Endpoint": restore_endpoint}
+        resp = requests.get(f"{PROXY_URL}/proxy/checkpoint-timings", headers=headers, timeout=10)
+        if resp.ok:
+            checkpoint_timings = resp.json()
+            if checkpoint_timings.get("last_restore"):
+                rt = checkpoint_timings["last_restore"]
+                log(f"  Restore breakdown (inside VM):")
+                log(f"    Download checkpoint.pkl: {rt.get('download_pkl', 0):.0f}ms")
+                log(f"    Deserialize (dill):      {rt.get('deserialize', 0):.0f}ms")
+                log(f"    Download files.tar.gz:   {rt.get('download_files', 0):.0f}ms")
+                log(f"    Extract files:           {rt.get('extract_files', 0):.0f}ms")
+                log(f"    Install packages:        {rt.get('packages', 0):.0f}ms")
+                log(f"    Total (inside VM):       {rt.get('total_ms', 0):.0f}ms")
+            else:
+                log("  No restore timings available (endpoint returned empty)")
+    except Exception as e:
+        log(f"  Could not fetch timings: {e}")
+
+    # ================================================================
+    # PHASE 7: Cleanup — terminate ALL test VMs
     # ================================================================
     log("")
     log("PHASE 7: Cleanup...")
-    requests.post(f"{PROXY_URL}/terminate/{restore_microvm_id}")
-    log("  Terminated restore MicroVM")
+    for vm in [baseline_vm_id, microvm_id, restore_microvm_id]:
+        try:
+            requests.post(f"{PROXY_URL}/terminate/{vm}", timeout=5)
+            log(f"  Terminated {vm[:20]}...")
+        except:
+            pass
+    log("  All test VMs cleaned up")
 
     # ================================================================
     # REPORT
@@ -386,22 +476,58 @@ print(f'rows={len(rows)}, header={rows[0]}, first_data={rows[1]}')
     print(f"  Checks: {checks_passed}/{checks_total} passed")
     print()
     print("  ── Timings ─────────────────────────────────────────────")
-    print(f"  Launch MicroVM:          {timings.get('launch', 0):.1f}s")
-    print(f"  Wait for RUNNING:        {timings.get('wait_running', 0):.1f}s")
-    print(f"  Terminate (request):     {timings.get('terminate_request', 0):.1f}s")
-    print(f"  Wait for TERMINATED:     {timings.get('wait_terminated', 0):.1f}s")
-    print(f"  List sessions (S3):      {timings.get('list_sessions', 0):.1f}s")
-    print(f"  Launch + Restore:        {timings.get('launch_restore', 0):.1f}s")
-    print(f"  Wait for RUNNING (rest): {timings.get('wait_running_restore', 0):.1f}s")
+    print(f"  Bare VM launch (baseline):  {timings.get('bare_launch', 0):.1f}s")
+    print(f"  Bare VM first response:     {timings.get('bare_first_response', 0):.1f}s")
+    print(f"  Launch (with checkpoint):   {timings.get('launch', 0):.1f}s")
+    print(f"  Wait for RUNNING:           {timings.get('wait_running', 0):.1f}s")
+    print(f"  Terminate (request):        {timings.get('terminate_request', 0):.1f}s")
+    print(f"  Wait for TERMINATED:        {timings.get('wait_terminated', 0):.1f}s")
+    print(f"  List sessions (S3):         {timings.get('list_sessions', 0):.1f}s")
+    print(f"  Launch + Restore:           {timings.get('launch_restore', 0):.1f}s")
+    print(f"  Wait for RUNNING (restore): {timings.get('wait_running_restore', 0):.1f}s")
+    print(f"  Restore VM first response:  {timings.get('restore_first_response', 0):.1f}s")
     print()
     total_checkpoint = timings.get('terminate_request', 0) + timings.get('wait_terminated', 0)
-    total_restore = timings.get('launch_restore', 0) + timings.get('wait_running_restore', 0) + 10  # +10s for hook
+    total_restore = timings.get('launch_restore', 0) + timings.get('wait_running_restore', 0) + timings.get('restore_first_response', 0)
+    bare_total = timings.get('bare_launch', 0) + timings.get('bare_first_response', 0)
+    restore_overhead = total_restore - bare_total
     print(f"  ── Summary ─────────────────────────────────────────────")
-    print(f"  Total checkpoint time:   {total_checkpoint:.1f}s")
-    print(f"  Total restore time:      {total_restore:.1f}s")
+    print(f"  Bare VM (no restore):    {bare_total:.1f}s")
+    print(f"  Total checkpoint time:   {total_checkpoint:.1f}s (serialize + S3 upload)")
+    print(f"  Total restore time:      {total_restore:.1f}s (launch + S3 download + deserialize)")
+    print(f"  Restore overhead (Δ):    {restore_overhead:.1f}s (time added by S3 restore vs bare launch)")
     print(f"  Session ID:              {restore_session_id}")
     print(f"  Checkpoint MicroVM:      {microvm_id}")
     print(f"  Restore MicroVM:         {restore_microvm_id}")
+    print()
+    print(f"  ── Interpretation ──────────────────────────────────────")
+    if restore_overhead < 2:
+        print(f"  S3 restore adds <2s overhead — negligible vs VM provisioning")
+    elif restore_overhead < 5:
+        print(f"  S3 restore adds ~{restore_overhead:.0f}s — moderate (mostly S3 download + deserialize)")
+    else:
+        print(f"  S3 restore adds ~{restore_overhead:.0f}s — significant (consider EFS for large checkpoints)")
+
+    if checkpoint_timings.get("last_restore"):
+        rt = checkpoint_timings["last_restore"]
+        print()
+        print(f"  ── Checkpoint Internals (inside VM) ────────────────────")
+        if save_timings_ms:
+            print(f"  SAVE (backup):")
+            print(f"    Serialize (dill):      {save_timings_ms.get('serialize', 0):.0f}ms")
+            print(f"    S3 upload (pkl):       {save_timings_ms.get('upload_pkl', 0):.0f}ms")
+            print(f"    Archive + upload files: {save_timings_ms.get('archive_files', 0):.0f}ms")
+            print(f"    pip freeze:            {save_timings_ms.get('packages', 0):.0f}ms")
+            print(f"    Upload metadata:       {save_timings_ms.get('metadata', 0):.0f}ms")
+            print(f"    TOTAL (inside VM):     {sum(save_timings_ms.values()):.0f}ms")
+            print()
+        print(f"  RESTORE:")
+        print(f"    S3 download (pkl):     {rt.get('download_pkl', 0):.0f}ms")
+        print(f"    Deserialize (dill):    {rt.get('deserialize', 0):.0f}ms")
+        print(f"    S3 download (files):   {rt.get('download_files', 0):.0f}ms")
+        print(f"    Extract files:         {rt.get('extract_files', 0):.0f}ms")
+        print(f"    pip install packages:  {rt.get('packages', 0):.0f}ms")
+        print(f"    TOTAL (inside VM):     {rt.get('total_ms', 0):.0f}ms")
     print()
     print("=" * 60)
 

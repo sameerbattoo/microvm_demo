@@ -14,7 +14,7 @@ export default function AboutPanel({ onClose }) {
           </svg>
         </div>
         <h2 className="about-title">Lambda MicroVM Notebook</h2>
-        <p className="about-subtitle">AI-Powered Python Notebooks on Serverless Sandboxes</p>
+        <p className="about-subtitle">AI-Powered Python & SQL Notebooks on Serverless Firecracker Sandboxes</p>
         <div className="about-divider" />
         <div className="about-info">
           <div className="about-row"><span>Version</span><span>1.0.0</span></div>

@@ -1,6 +1,8 @@
 """
 Python code execution engine.
 
+Part of: app.notebook (application layer)
+
 Endpoint:
   POST /execute - Execute Python code in the persistent sandbox namespace
 """

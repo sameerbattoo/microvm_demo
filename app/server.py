@@ -12,10 +12,14 @@ suspends, all memory is snapshotted. On resume, it's exactly as it was.
 Architecture:
     app/
       server.py         ← This file (app setup, shared state, pre-loaded libs)
-      executor.py       ← SandboxExecutor class (code execution engine)
-      hooks.py          ← MicroVM lifecycle hooks (run, suspend, resume, terminate)
-      routes.py         ← Sandbox API (execute, install, variables, upload, metrics)
-      checkpoint.py     ← S3 checkpoint/restore logic
+      platform/
+        hooks.py        ← MicroVM lifecycle hooks (run, suspend, resume, terminate)
+        checkpoint.py   ← S3 checkpoint/restore with timing
+      notebook/
+        executor.py     ← SandboxExecutor class (code execution engine)
+        code_engine.py  ← Python execution: /execute endpoint
+        sql_engine.py   ← SQL execution: /execute-sql with auto-routing
+        routes.py       ← Utility: /install, /variables, /health, /metrics, /upload, /checkpoint-timings
 """
 
 import logging
@@ -23,7 +27,7 @@ import logging
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.executor import SandboxExecutor
+from app.notebook.executor import SandboxExecutor
 
 # --- Logging ---
 logging.basicConfig(
@@ -85,14 +89,14 @@ app.state.executor = executor
 app.state.session_state = session_state
 
 # Checkpoint manager (class-based — holds refs to executor + session_state)
-from app.checkpoint import CheckpointManager
+from app.platform.checkpoint import CheckpointManager
 app.state.checkpoint_manager = CheckpointManager(executor, session_state)
 
 # --- Register route modules ---
-from app.hooks import router as hooks_router
-from app.routes import router as routes_router
-from app.code_engine import router as code_router
-from app.sql_engine import router as sql_router
+from app.platform.hooks import router as hooks_router
+from app.notebook.routes import router as routes_router
+from app.notebook.code_engine import router as code_router
+from app.notebook.sql_engine import router as sql_router
 
 app.include_router(hooks_router)
 app.include_router(routes_router)

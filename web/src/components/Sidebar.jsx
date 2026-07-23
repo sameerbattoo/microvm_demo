@@ -173,15 +173,14 @@ export default function Sidebar({
         headers['X-MicroVM-Id'] = activeTab.microvmId
         if (activeTab.microvmRealEndpoint) headers['X-MicroVM-Endpoint'] = activeTab.microvmRealEndpoint
       }
-      const resp = await fetch(`${activeTab.microvmEndpoint}/execute`, {
-        method: 'POST',
+      const resp = await fetch(`${activeTab.microvmEndpoint}/packages`, {
+        method: 'GET',
         headers,
-        body: JSON.stringify({ code: `import subprocess, json\n_r = subprocess.run(["pip", "list", "--format=json"], capture_output=True, text=True)\nprint(json.dumps(json.loads(_r.stdout) if _r.returncode == 0 else []))` }),
       })
       if (resp.ok) {
         const data = await resp.json()
-        if (data.success && data.output) {
-          const pkgList = JSON.parse(data.output.trim()).map(p => ({ name: p.name, version: p.version }))
+        if (data.packages) {
+          const pkgList = data.packages.map(p => ({ name: p.name, version: p.version }))
           setPackages(pkgList)
           if (onSyncPackages) onSyncPackages(pkgList)
         }

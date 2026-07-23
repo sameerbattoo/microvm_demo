@@ -55,6 +55,8 @@ async def list_sessions(request: Request):
                     "execution_count": metadata.get("execution_count", 0),
                     "variables_count": metadata.get("variables_count", 0),
                     "files_count": metadata.get("files_count", 0),
+                    "checkpoint_size_kb": metadata.get("checkpoint_size_kb", 0),
+                    "save_timings_ms": metadata.get("save_timings_ms", {}),
                 })
 
         sessions.sort(key=lambda s: s.get("checkpointed_at") or "", reverse=True)

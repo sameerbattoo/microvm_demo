@@ -1,15 +1,18 @@
 """
 Sandbox utility routes — package management, variables, health, metrics, files.
 
+Part of: app.notebook (application layer)
+
 Endpoints:
-  POST /install      - Install a pip package
-  GET  /variables    - List namespace variables
-  POST /reset        - Clear namespace
-  POST /interrupt    - Interrupt running execution
-  GET  /health       - Health check + session stats
-  GET  /metrics      - Real-time system metrics (CPU, memory, disk, network)
-  POST /upload       - Upload and load a data file
-  GET  /files        - List uploaded files in /tmp/
+  POST /install            - Install a pip package
+  GET  /variables          - List namespace variables
+  POST /reset              - Clear namespace
+  POST /interrupt          - Interrupt running execution
+  GET  /health             - Health check + session stats
+  GET  /metrics            - Real-time system metrics (CPU, memory, disk, network)
+  POST /upload             - Upload and load a data file
+  GET  /files              - List uploaded files in /tmp/
+  GET  /checkpoint-timings - Timing breakdown from last checkpoint save/restore
 """
 
 import os
@@ -230,3 +233,40 @@ async def list_files():
             files.append({"name": filename, "path": filepath, "size": size_str, "size_bytes": size})
     files.sort(key=lambda f: f["name"])
     return {"files": files}
+
+
+@router.get("/checkpoint-timings")
+async def checkpoint_timings(request: Request):
+    """Return timing breakdown from the last checkpoint save/restore operation."""
+    cm = request.app.state.checkpoint_manager
+    return {
+        "last_save": cm.last_save_timings,
+        "last_restore": cm.last_restore_timings,
+    }
+
+@router.get("/packages")
+async def list_packages():
+    """
+    List installed Python packages.
+
+    Uses subprocess (pip list) — does NOT go through the executor.
+    This avoids stdout race conditions with code execution cells.
+    """
+    import subprocess
+    import json as json_mod
+
+    try:
+        result = subprocess.run(
+            ["pip", "list", "--format=json"],
+            capture_output=True, text=True, timeout=15
+        )
+        if result.returncode == 0:
+            packages = json_mod.loads(result.stdout)
+        else:
+            packages = []
+    except Exception:
+        packages = []
+
+    pkg_list = [{"name": p.get("name", ""), "version": p.get("version", "")} for p in packages]
+    pkg_list.sort(key=lambda p: p["name"].lower())
+    return {"packages": pkg_list, "count": len(pkg_list)}
