@@ -807,7 +807,7 @@ scipy (statistics), boto3 (AWS SDK), duckdb (SQL engine)
 
 ## 9. Tests
 
-Three end-to-end test scripts validate the major aspects of MicroVM execution. All tests launch real MicroVMs via the proxy, execute code, and verify results.
+Five end-to-end test scripts validate the major aspects of MicroVM execution. All tests launch real MicroVMs via the proxy, execute code, and verify results.
 
 ```bash
 # Run any test (requires aws_microvm_run.sh to be running)
@@ -815,6 +815,7 @@ python3 tests/test_interrupt_execution.py
 python3 tests/test_microvm_lifecycle.py
 python3 tests/test_s3_restore.py
 python3 tests/test_resume_before_expire.py
+python3 tests/test_burst_behavior.py
 ```
 
 ### 9.1 Interrupt Execution (`test_interrupt_execution.py`)
@@ -894,6 +895,35 @@ The proxy sets a timer 30 seconds before max lifetime. When the timer fires, it 
 | 5 | AWS auto-terminates at t=240s | VM is RUNNING → /terminate hook fires |
 | 6 | S3 checkpoint verified | checkpoint.pkl, metadata.json exist |
 | 7 | CloudWatch log confirmation | "POST /terminate HTTP/1.1" 200 OK in logs |
+
+### 9.5 Burst Behavior (`test_burst_behavior.py`)
+
+Tests the MicroVM burst model — validates that 4× baseline resources are pre-allocated and measures behavior under heavy load.
+
+**Key Findings (documented in test file):**
+- Resources are pre-allocated at 4× baseline from boot (not dynamically added)
+- `psutil.virtual_memory().total` always reports 4× baseline (never changes under load)
+- Exceeding the 4× ceiling causes OOM crash (hard limit, not throttling)
+- CPU cores also fixed at 4× baseline vCPU
+
+| # | Scenario | Validates |
+|---|----------|-----------|
+| 1 | Launch 1GB baseline VM | VM provisioned successfully |
+| 2 | Check idle metrics | psutil total = 4GB, 2 cores (4× baseline) |
+| 3 | Small workload (pandas DataFrame) | Memory usage within baseline |
+| 4 | Heavy workload (~3GB allocation + CPU burn) | Usage exceeds baseline — burst billing applies |
+| 5 | Poll metrics every 3s for 50s | total_mb never changes; used_mb shows actual consumption |
+| 6 | Release memory | Usage drops back to baseline |
+| 7 | Report: burst duration, peak usage, cost implications | Documents billing model |
+
+**Results (1GB baseline):**
+
+| Metric | Value |
+|--------|-------|
+| psutil total_mb | Always 3999 MB (4× baseline) |
+| Peak used_mb | 3643 MB (97% of visible 4GB) |
+| Peak CPU % | 100% sustained (2 cores) |
+| Burst duration | ~36 seconds above baseline |
 
 ---
 
