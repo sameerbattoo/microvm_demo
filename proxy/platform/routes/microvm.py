@@ -1,6 +1,8 @@
 """
 MicroVM lifecycle routes — launch, terminate, suspend, resume, proxy, instances.
 
+Part of: proxy.platform (Smart MicroVM Service layer)
+
 Endpoints:
   POST      /launch                       - Launch a new MicroVM
   POST      /terminate/{id}               - Terminate a MicroVM
@@ -23,7 +25,7 @@ import httpx
 from fastapi import APIRouter, Request, Response
 
 from proxy.storage import storage
-from proxy.microvm_manager import (
+from proxy.platform.microvm_manager import (
     AWS_REGION, IMAGE_ARN, EXEC_ROLE_ARN,
     INGRESS_CONNECTOR, EGRESS_CONNECTOR,
 )

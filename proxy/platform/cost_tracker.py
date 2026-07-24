@@ -1,6 +1,8 @@
 """
 MicroVM Cost Tracker
 
+Part of: proxy.platform (Smart MicroVM Service layer)
+
 Tracks state transitions per MicroVM and computes estimated cost
 based on time spent in each state (RUNNING vs SUSPENDED).
 

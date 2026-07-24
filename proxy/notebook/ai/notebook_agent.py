@@ -1,6 +1,8 @@
 """
 Notebook AI Agent powered by Strands Agents SDK.
 
+Part of: proxy.notebook.ai (Notebook application layer)
+
 Creates and manages per-session agent instances that can:
 - Generate and insert code cells
 - Fix errors in existing cells

@@ -1,6 +1,8 @@
 """
 MicroVM Manager — encapsulates all MicroVM lifecycle state.
 
+Part of: proxy.platform (Smart MicroVM Service layer)
+
 This class manages:
 - AWS Lambda MicroVMs client
 - Auth token cache (bounded LRU)
@@ -22,7 +24,7 @@ from datetime import datetime, timezone
 import boto3
 
 from proxy.storage import storage
-from proxy.cost_tracker import CostTracker
+from proxy.platform.cost_tracker import CostTracker
 
 logger = logging.getLogger(__name__)
 

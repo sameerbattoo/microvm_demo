@@ -1,6 +1,8 @@
 """
 Session checkpoint management and data source discovery routes.
 
+Part of: proxy.platform (Smart MicroVM Service layer)
+
 Endpoints:
   GET    /sessions            - List S3 session checkpoints
   DELETE /sessions/{id}       - Delete a session checkpoint from S3
@@ -14,7 +16,7 @@ import logging
 import boto3
 from fastapi import APIRouter, Request, Response
 
-from proxy.microvm_manager import AWS_REGION
+from proxy.platform.microvm_manager import AWS_REGION
 
 logger = logging.getLogger(__name__)
 

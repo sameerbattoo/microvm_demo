@@ -2,7 +2,7 @@
 MicroVM Notebook Proxy — Application Entrypoint
 
 A lightweight proxy that:
-1. Manages MicroVM lifecycle (launch, suspend, resume, terminate)
+1. Manages MicroVM lifecycle (launch, suspend, resume, terminate, rotation)
 2. Proxies requests to MicroVMs with auth tokens injected
 3. Serves notebook CRUD, metrics, session management, and AI chat APIs
 4. Keeps AWS credentials server-side (never exposed to the browser)
@@ -12,18 +12,20 @@ Usage:
 
 Architecture:
     proxy/
-      server.py              ← This file (app setup, startup, health)
-      microvm_manager.py     ← MicroVM lifecycle state (tokens, timers, cost)
-      routes/
-        microvm.py           ← Launch, terminate, suspend, resume, proxy, instances
-        notebooks.py         ← Notebook CRUD
-        metrics.py           ← Metrics, image tiers, packages
-        sessions.py          ← S3 session checkpoints, data sources
-        ai.py                ← AI chat, explain, fix, suggest-tag
-      storage/
-        __init__.py          ← Storage backend selection
-        interface.py         ← Abstract storage contract
-        sqlite_db.py         ← SQLite implementation
+      server.py                 ← This file (app setup, startup, health, router registration)
+      storage/                  ← Shared storage layer (interface + SQLite impl)
+      platform/                 ← Smart MicroVM Service layer (reusable, app-agnostic)
+        microvm_manager.py      ← VM lifecycle state (tokens, timers, cost, rotation)
+        cost_tracker.py         ← Burst + baseline cost tracking with DB persistence
+        routes/
+          microvm.py            ← Launch, terminate, suspend, resume, proxy, instances
+          sessions.py           ← S3 session checkpoints, data sources
+          metrics.py            ← VM metrics, image tiers
+      notebook/                 ← Notebook application layer (specific to this project)
+        ai/                     ← AI agent module (Strands SDK + Bedrock)
+        routes/
+          ai.py                 ← AI chat, explain, fix, suggest-tag
+          notebooks.py          ← Notebook CRUD
 """
 
 import os
@@ -34,7 +36,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from proxy.storage import storage, _connection_string
-from proxy.microvm_manager import MicrovmManager, POLL_INTERVAL_MS, AWS_REGION, IMAGE_ARN
+from proxy.platform.microvm_manager import MicrovmManager, POLL_INTERVAL_MS, AWS_REGION, IMAGE_ARN
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -57,11 +59,14 @@ storage.initialize(connection_string=_connection_string)
 app.state.vm_manager = MicrovmManager()
 
 # --- Register route modules ---
-from proxy.routes.microvm import router as microvm_router
-from proxy.routes.notebooks import router as notebooks_router
-from proxy.routes.metrics import router as metrics_router
-from proxy.routes.sessions import router as sessions_router
-from proxy.routes.ai import router as ai_router
+# Platform layer (MicroVM lifecycle, sessions, metrics)
+from proxy.platform.routes.microvm import router as microvm_router
+from proxy.platform.routes.sessions import router as sessions_router
+from proxy.platform.routes.metrics import router as metrics_router
+
+# Notebook layer (AI, notebook CRUD)
+from proxy.notebook.routes.notebooks import router as notebooks_router
+from proxy.notebook.routes.ai import router as ai_router
 
 app.include_router(microvm_router)
 app.include_router(notebooks_router)

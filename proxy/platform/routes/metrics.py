@@ -1,6 +1,8 @@
 """
 Metrics, image tiers, and package listing routes.
 
+Part of: proxy.platform (Smart MicroVM Service layer)
+
 Endpoints:
   GET /instances/metrics/history/{id}  - Metrics time-series for sparklines
   GET /instances/metrics/latest        - Latest metrics for all VMs
@@ -15,7 +17,7 @@ import subprocess
 from fastapi import APIRouter, Request
 
 from proxy.storage import storage
-from proxy.microvm_manager import IMAGE_ARN
+from proxy.platform.microvm_manager import IMAGE_ARN
 
 logger = logging.getLogger(__name__)
 

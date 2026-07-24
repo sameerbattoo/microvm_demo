@@ -1,6 +1,8 @@
 """
 Notebook CRUD API routes.
 
+Part of: proxy.notebook (Notebook application layer)
+
 Endpoints:
   GET    /notebooks           - List all notebooks
   GET    /notebooks/{id}      - Get a notebook

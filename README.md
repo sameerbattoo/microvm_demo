@@ -733,25 +733,29 @@ scipy (statistics), boto3 (AWS SDK), duckdb (SQL engine)
 │       └── routes.py             # Utility: /install, /variables, /health, /metrics, /upload, /files
 ├── proxy/                        # Token proxy (runs on your machine)
 │   ├── server.py                 # FastAPI entrypoint: app setup, startup, health, router registration
-│   ├── microvm_manager.py        # MicrovmManager: tokens, timers, cost, AWS client
-│   ├── cost_tracker.py           # CostTracker: per-VM cost estimation
-│   ├── routes/                   # API route modules
-│   │   ├── microvm.py            # Launch, terminate, suspend, resume, proxy, instances
-│   │   ├── notebooks.py          # Notebook CRUD
-│   │   ├── metrics.py            # Metrics, image tiers, packages
-│   │   ├── sessions.py           # S3 session checkpoints, data sources
-│   │   └── ai.py                 # AI chat, explain, fix, suggest-tag
-│   ├── storage/                  # Abstracted storage backend
+│   ├── platform/                 # Smart MicroVM Service layer (reusable, app-agnostic)
+│   │   ├── microvm_manager.py    # MicrovmManager: tokens, timers, cost, rotation, AWS client
+│   │   ├── cost_tracker.py       # CostTracker: burst + baseline cost with DB persistence
+│   │   └── routes/
+│   │       ├── microvm.py        # Launch, terminate, suspend, resume, proxy, instances
+│   │       ├── sessions.py       # S3 session checkpoints, data sources
+│   │       └── metrics.py        # VM metrics, image tiers
+│   ├── notebook/                 # Notebook application layer (specific to this project)
+│   │   ├── ai/                   # AI module (Strands Agents SDK)
+│   │   │   ├── constants.py      # All AI config constants
+│   │   │   ├── prompts.py        # XML-structured system prompts
+│   │   │   ├── sessions.py       # Per-notebook session management
+│   │   │   ├── notebook_agent.py # Strands Agent definition with tools
+│   │   │   └── tools/
+│   │   │       ├── execution_tools.py  # Agent tools: execute_code, get_variables, install_package
+│   │   │       └── notebook_tools.py   # Agent tools: insert_cell, edit_cell
+│   │   └── routes/
+│   │       ├── ai.py             # AI chat, explain, fix, suggest-tag
+│   │       └── notebooks.py      # Notebook CRUD
+│   ├── storage/                  # Shared storage backend
 │   │   ├── __init__.py           # Backend selection (STORAGE_BACKEND env var)
 │   │   ├── interface.py          # Abstract StorageBackend class (the contract)
 │   │   └── sqlite_db.py          # SqliteStorage implementation (default)
-│   ├── ai/                       # AI module (Strands Agents SDK)
-│   │   ├── constants.py          # All AI config constants
-│   │   ├── prompts.py            # XML-structured system prompts
-│   │   ├── sessions.py           # Per-notebook session management
-│   │   ├── notebook_agent.py     # Strands Agent definition with tools
-│   │   └── tools/
-│   │       └── execution_tools.py  # Agent tools: execute_code, get_variables, install_package
 │   └── data/                     # SQLite database file (auto-created, gitignored)
 │       └── microvm.db
 ├── web/

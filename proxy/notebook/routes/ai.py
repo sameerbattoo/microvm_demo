@@ -1,6 +1,8 @@
 """
 AI Notebook Agent routes — chat, explain, fix, suggest-tag.
 
+Part of: proxy.notebook (Notebook application layer)
+
 Endpoints:
   GET    /ai/config             - AI availability and model info
   POST   /ai/chat               - Conversational chat (SSE streaming)
@@ -20,18 +22,18 @@ import boto3
 from fastapi import APIRouter, Request, Response
 from starlette.responses import StreamingResponse
 
-from proxy.ai.constants import (
+from proxy.notebook.ai.constants import (
     TAG_TEMPERATURE, TAG_MAX_TOKENS, TAG_MAX_LENGTH, MAX_CELLS_FOR_TAG,
     BEDROCK_MAX_RETRIES, BEDROCK_READ_TIMEOUT, BEDROCK_CONNECT_TIMEOUT,
 )
-from proxy.ai.notebook_agent import (
+from proxy.notebook.ai.notebook_agent import (
     chat as agent_chat,
     chat_stream as agent_chat_stream,
     explain as agent_explain,
     fix_error as agent_fix_error,
     new_thread as agent_new_thread,
 )
-from proxy.microvm_manager import AWS_REGION
+from proxy.platform.microvm_manager import AWS_REGION
 from proxy.storage import storage
 
 logger = logging.getLogger(__name__)
