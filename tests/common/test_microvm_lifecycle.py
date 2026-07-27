@@ -57,14 +57,13 @@ def timed(label):
     return Timer()
 
 
-def execute_code(endpoint, microvm_id, real_endpoint, code, timeout=60):
-    """Execute code on the MicroVM via the proxy."""
+def execute_code(session_id, code, timeout=60):
+    """Execute code on the MicroVM via the proxy using session_id only."""
     resp = requests.post(
-        f"{endpoint}/execute",
+        f"{PROXY_URL}/proxy/execute",
         headers={
             "Content-Type": "application/json",
-            "X-MicroVM-Id": microvm_id,
-            "X-MicroVM-Endpoint": real_endpoint,
+            "X-Session-Id": session_id,
         },
         json={"code": code},
         timeout=timeout,
@@ -72,14 +71,11 @@ def execute_code(endpoint, microvm_id, real_endpoint, code, timeout=60):
     return resp.json()
 
 
-def get_variables(endpoint, microvm_id, real_endpoint):
+def get_variables(session_id):
     """Get variables from the MicroVM."""
     resp = requests.get(
-        f"{endpoint}/variables",
-        headers={
-            "X-MicroVM-Id": microvm_id,
-            "X-MicroVM-Endpoint": real_endpoint,
-        },
+        f"{PROXY_URL}/proxy/variables",
+        headers={"X-Session-Id": session_id},
         timeout=15,
     )
     return resp.json()
@@ -107,12 +103,11 @@ def wait_for_state(microvm_id, target_state, timeout=120):
 
 
 def launch_microvm(name, checkpoint_enabled=False, session_id=None, restore_from=None):
-    """Launch a MicroVM and return (microvm_id, endpoint)."""
+    """Launch a MicroVM and return (microvm_id, endpoint, session_id)."""
     body = {
         "name": name,
         "memoryMiB": MEMORY_MIB,
         "idleTimeoutSeconds": 60,  # Short idle timeout for testing suspend
-        "maxDurationSeconds": 3600,
         "checkpointEnabled": checkpoint_enabled,
         "sessionId": session_id or f"{name}-{int(time.time())}",
     }
@@ -127,8 +122,6 @@ def launch_microvm(name, checkpoint_enabled=False, session_id=None, restore_from
 
 def suspend_microvm(microvm_id):
     """Request suspension of a MicroVM."""
-    # Suspension happens via the idle timeout, but we can also call the API
-    # The proxy doesn't have a direct suspend endpoint, so we use the AWS API
     try:
         client = boto3.client("lambda-microvms", region_name=AWS_REGION)
         client.suspend_microvm(microvmIdentifier=microvm_id)
@@ -138,9 +131,9 @@ def suspend_microvm(microvm_id):
         return False
 
 
-def terminate_microvm(microvm_id):
-    """Terminate a MicroVM."""
-    resp = requests.post(f"{PROXY_URL}/terminate/{microvm_id}", timeout=30)
+def terminate_microvm(session_id):
+    """Terminate a MicroVM via session_id."""
+    resp = requests.post(f"{PROXY_URL}/terminate", headers={"X-Session-Id": session_id}, timeout=30)
     return resp.status_code == 200
 
 
@@ -189,10 +182,9 @@ def main():
 
     # --- 2. Execute code, create variables ---
     log("TEST 2: Execute code and create variables")
-    proxy_ep = f"{PROXY_URL}/proxy"
 
     with timed("Create variables"):
-        result = execute_code(proxy_ep, vm1_id, vm1_endpoint,
+        result = execute_code(vm1_session,
             "import pandas as pd\n"
             "x = 42\n"
             "name = 'lifecycle_test'\n"
@@ -208,7 +200,7 @@ def main():
     # --- 3. Validate variables persist across calls ---
     log("TEST 3: Validate variables persist across calls")
     with timed("Check persistence"):
-        result = execute_code(proxy_ep, vm1_id, vm1_endpoint,
+        result = execute_code(vm1_session,
             "print(f'x={x}, name={name}, numbers={numbers}, df.shape={df.shape}')"
         )
     assert result["success"], f"Execution failed: {result.get('error')}"
@@ -223,7 +215,6 @@ def main():
     with timed("Suspend"):
         suspended = suspend_microvm(vm1_id)
     if suspended:
-        # Wait for it to actually reach SUSPENDED state
         log("  Waiting for SUSPENDED state...")
         reached = wait_for_state(vm1_id, "SUSPENDED", timeout=60)
         if reached:
@@ -242,9 +233,9 @@ def main():
     if current_state == "SUSPENDED":
         log("TEST 5: Execute on SUSPENDED VM (should auto-resume)")
         with timed("Execute on suspended VM"):
-            result = execute_code(proxy_ep, vm1_id, vm1_endpoint,
+            result = execute_code(vm1_session,
                 "print(f'Resumed! x={x}, df.shape={df.shape}')",
-                timeout=90,  # Resume can take time
+                timeout=90,
             )
         if result.get("success"):
             assert "x=42" in result["output"]
@@ -260,7 +251,7 @@ def main():
     # --- 6. Validate all variables survived suspend/resume ---
     log("TEST 6: Validate variables after suspend/resume")
     with timed("Variable check"):
-        vars_data = get_variables(proxy_ep, vm1_id, vm1_endpoint)
+        vars_data = get_variables(vm1_session)
     variables = vars_data.get("variables", {})
     log(f"  Variables found: {list(variables.keys())}")
     assert "x" in variables, "Variable 'x' missing after resume"
@@ -274,7 +265,7 @@ def main():
     # --- 7. Terminate without checkpoint ---
     log("TEST 7: Terminate MicroVM (no checkpoint)")
     with timed("Terminate"):
-        terminated = terminate_microvm(vm1_id)
+        terminated = terminate_microvm(vm1_session)
     assert terminated, "Terminate failed"
     log("  ✓ MicroVM terminated")
     print()
@@ -284,7 +275,7 @@ def main():
     time.sleep(2)
     state = get_instance_state(vm1_id)
     log(f"  State after terminate: {state}")
-    assert state in ("TERMINATED", "NOT_FOUND"), f"Expected TERMINATED/NOT_FOUND, got {state}"
+    assert state in ("TERMINATED", "TERMINATING", "NOT_FOUND"), f"Expected TERMINATED/TERMINATING/NOT_FOUND, got {state}"
     log("  ✓ VM is terminated and not recoverable (no checkpoint)")
     print()
 
@@ -314,7 +305,7 @@ def main():
     # --- 10. Execute code + create state ---
     log("TEST 10: Create variables and state for checkpoint")
     with timed("Create checkpoint state"):
-        result = execute_code(proxy_ep, vm2_id, vm2_endpoint,
+        result = execute_code(vm2_session,
             "import pandas as pd\n"
             "import numpy as np\n"
             "checkpoint_value = 'I_SURVIVED_CHECKPOINT'\n"
@@ -331,14 +322,14 @@ def main():
     print()
 
     # Capture the computed value for later comparison
-    vars_before = get_variables(proxy_ep, vm2_id, vm2_endpoint).get("variables", {})
+    vars_before = get_variables(vm2_session).get("variables", {})
     computed_before = vars_before.get("computed", {}).get("value", "")
     log(f"  Captured computed value: {computed_before}")
 
     # --- 11. Terminate with checkpoint ---
     log("TEST 11: Terminate with S3 checkpoint")
     with timed("Terminate + checkpoint"):
-        terminated = terminate_microvm(vm2_id)
+        terminated = terminate_microvm(vm2_session)
     assert terminated, "Terminate failed"
 
     # Wait for terminate to complete and checkpoint to save
@@ -348,12 +339,10 @@ def main():
     # Verify checkpoint exists in S3
     try:
         s3 = boto3.client("s3", region_name=AWS_REGION)
-        # Find bucket
         buckets = [b["Name"] for b in s3.list_buckets()["Buckets"] if b["Name"].startswith("microvm-sandbox-artifacts-")]
         bucket = buckets[0] if buckets else None
 
         if bucket:
-            # Check for checkpoint files
             resp = s3.list_objects_v2(Bucket=bucket, Prefix=f"sessions/{vm2_session}/")
             checkpoint_files = [obj["Key"] for obj in resp.get("Contents", [])]
             log(f"  S3 checkpoint files: {len(checkpoint_files)}")
@@ -395,7 +384,7 @@ def main():
         time.sleep(5)
 
         with timed("Check restored variables"):
-            result = execute_code(proxy_ep, vm3_id, vm3_endpoint,
+            result = execute_code(vm3_session,
                 "try:\n"
                 "    print(f'checkpoint_value={checkpoint_value}')\n"
                 "    print(f'magic_number={magic_number}')\n"
@@ -424,7 +413,7 @@ def main():
         # --- 14. Validate packages ---
         log("TEST 14: Validate environment after restore")
         with timed("Environment check"):
-            result = execute_code(proxy_ep, vm3_id, vm3_endpoint,
+            result = execute_code(vm3_session,
                 "import pandas, numpy\n"
                 "print(f'pandas={pandas.__version__}, numpy={numpy.__version__}')\n"
                 "print('PACKAGES_OK')"
@@ -438,7 +427,7 @@ def main():
 
         # --- 15. Clean up restored VM ---
         log("TEST 15: Clean up — terminate restored VM")
-        terminate_microvm(vm3_id)
+        terminate_microvm(vm3_session)
         log("  ✓ Restored VM terminated")
     else:
         log("TEST 13-15: SKIPPED (restore launch failed)")

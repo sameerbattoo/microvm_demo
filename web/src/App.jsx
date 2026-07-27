@@ -19,7 +19,6 @@ function createTab(name, description, tag) {
     description: description || '',
     tag: tag || 'Drafts',
     microvmEndpoint: null,
-    microvmRealEndpoint: null,
     microvmId: null,
     status: 'disconnected',
     mode: null,
@@ -45,7 +44,6 @@ export default function App() {
             ...t,
             status: 'disconnected',
             microvmEndpoint: null,
-            microvmRealEndpoint: null,
             // Keep microvmId so we can auto-reconnect
             mode: null,
           }))
@@ -166,7 +164,6 @@ export default function App() {
             tag: nb.tag || 'Drafts',
             _cells: nb.cells || [],
             microvmEndpoint: null,
-            microvmRealEndpoint: null,
             microvmId: nb.microvm_id || null,
             status: 'disconnected',
             mode: null,
@@ -265,23 +262,39 @@ export default function App() {
                 return {
                   ...tab,
                   microvmEndpoint: `${PROXY_URL}/proxy`,
-                  microvmRealEndpoint: endpoint,
                   microvmMemory: inst[tab.microvmId].memory_mib || tab.microvmMemory,
                   status: 'connected',
                   mode: 'microvm',
                 }
               }
             } else if (tab.microvmId && !inst[tab.microvmId]) {
-              // VM not in instances → terminated (either by service or manually)
+              // VM not in instances → might be terminated OR rotated to a new VM
               // Don't interfere with a tab that's currently launching a new VM
               if (tab.status === 'launching') return tab
+
+              // Check if rotation happened — look for a new VM with our session_id
+              if (tab.sessionId) {
+                const rotatedVm = Object.entries(inst).find(([, info]) => info.session_id === tab.sessionId)
+                if (rotatedVm) {
+                  // Rotation completed — update tab to point to new VM
+                  const [newVmId, newInfo] = rotatedVm
+                  changed = true
+                  return {
+                    ...tab,
+                    microvmId: newVmId,
+                    microvmEndpoint: `${PROXY_URL}/proxy`,
+                    status: 'connected',
+                  }
+                }
+              }
+
+              // Not rotation — actual termination
               const updates = {
                 status: 'disconnected',
                 microvmEndpoint: null,
-                microvmRealEndpoint: null,
-                sessionSaved: tab.checkpointEnabled ? true : tab.sessionSaved,
+                sessionSaved: true,
               }
-              if (tab.status !== 'disconnected' || (tab.checkpointEnabled && !tab.sessionSaved)) {
+              if (tab.status !== 'disconnected' || !tab.sessionSaved) {
                 changed = true
                 return { ...tab, ...updates }
               }
@@ -315,11 +328,8 @@ export default function App() {
     }
 
     const headers = {}
-    if (activeTab.microvmId) {
-      headers['X-MicroVM-Id'] = activeTab.microvmId
-      if (activeTab.microvmRealEndpoint) {
-        headers['X-MicroVM-Endpoint'] = activeTab.microvmRealEndpoint
-      }
+    if (activeTab.sessionId) {
+      headers['X-Session-Id'] = activeTab.sessionId
     }
 
     try {
@@ -435,7 +445,9 @@ export default function App() {
     }
 
     if (closingTab.microvmId && closingTab.mode === 'microvm') {
-      fetch(`${PROXY_URL}/terminate/${closingTab.microvmId}`, { method: 'POST' }).catch(() => {})
+      if (closingTab.sessionId) {
+        fetch(`${PROXY_URL}/terminate`, { method: 'POST', headers: { 'X-Session-Id': closingTab.sessionId } }).catch(() => {})
+      }
     }
 
     // Delete notebook from backend storage
@@ -464,7 +476,6 @@ export default function App() {
     const tab = createTab(`VM-${microvmId.replace('microvm-', '').slice(0, 8)}`)
     tab.microvmId = microvmId
     tab.microvmEndpoint = `${PROXY_URL}/proxy`
-    tab.microvmRealEndpoint = endpoint
     tab.microvmMemory = memoryMib || 4096
     tab.status = 'connected'
     tab.mode = 'microvm'
@@ -473,11 +484,13 @@ export default function App() {
   }, [])
 
   const resumeInstance = useCallback(async (microvmId) => {
+    const sessionId = instances[microvmId]?.session_id
+    if (!sessionId) return
     try {
-      await fetch(`${PROXY_URL}/resume/${microvmId}`, { method: 'POST' })
+      await fetch(`${PROXY_URL}/resume`, { method: 'POST', headers: { 'X-Session-Id': sessionId } })
       fetchInstances()
     } catch {}
-  }, [fetchInstances])
+  }, [fetchInstances, instances])
 
   const terminateInstance = useCallback(async (microvmId) => {
     // Check if attached to a notebook
@@ -496,15 +509,18 @@ export default function App() {
   const confirmTerminateInstance = useCallback(async (microvmId) => {
     setModal(null)
     try {
-      await fetch(`${PROXY_URL}/terminate/${microvmId}`, { method: 'POST' })
+      const sid = instances[microvmId]?.session_id
+      if (sid) await fetch(`${PROXY_URL}/terminate`, { method: 'POST', headers: { 'X-Session-Id': sid } })
       fetchInstances()
     } catch {}
-  }, [fetchInstances])
+  }, [fetchInstances, instances])
 
   // Terminate & Save: terminates attached VM, detaches from notebook but preserves sessionId for restore
   const terminateAndSave = useCallback(async (microvmId) => {
     try {
-      await fetch(`${PROXY_URL}/terminate/${microvmId}`, { method: 'POST' })
+      const tab = tabs.find(t => t.microvmId === microvmId)
+      const sid = tab?.sessionId || instances[microvmId]?.session_id
+      if (sid) await fetch(`${PROXY_URL}/terminate`, { method: 'POST', headers: { 'X-Session-Id': sid } })
       // Detach from notebook tab but keep sessionId for restore
       setTabs(prev => prev.map(t => {
         if (t.microvmId !== microvmId) return t
@@ -512,7 +528,6 @@ export default function App() {
           ...t,
           microvmId: null,
           microvmEndpoint: null,
-          microvmRealEndpoint: null,
           status: 'disconnected',
           mode: null,
           sessionSaved: true, // Signal that checkpoint was saved — enables "Restore Session"
@@ -520,19 +535,20 @@ export default function App() {
       }))
       fetchInstances()
     } catch {}
-  }, [fetchInstances])
+  }, [fetchInstances, tabs, instances])
 
   // Suspend: suspends an attached VM via the AWS API
   const suspendInstance = useCallback(async (microvmId) => {
     try {
-      await fetch(`${PROXY_URL}/suspend/${microvmId}`, { method: 'POST' })
+      const sid = instances[microvmId]?.session_id || tabs.find(t => t.microvmId === microvmId)?.sessionId
+      if (sid) await fetch(`${PROXY_URL}/suspend`, { method: 'POST', headers: { 'X-Session-Id': sid } })
       // Immediately update instances state so UI reflects suspension without waiting for poll
       setInstances(prev => {
         if (!prev[microvmId]) return prev
         return { ...prev, [microvmId]: { ...prev[microvmId], state: 'SUSPENDED' } }
       })
     } catch {}
-  }, [])
+  }, [instances, tabs])
 
   const uploadFile = useCallback(async (file) => {
     // Find the active tab's connection to upload to
@@ -558,11 +574,8 @@ export default function App() {
       const base64 = ev.target.result.split(',')[1]
 
       const headers = { 'Content-Type': 'application/json' }
-      if (activeTab.microvmId) {
-        headers['X-MicroVM-Id'] = activeTab.microvmId
-        if (activeTab.microvmRealEndpoint) {
-          headers['X-MicroVM-Endpoint'] = activeTab.microvmRealEndpoint
-        }
+      if (activeTab.sessionId) {
+        headers['X-Session-Id'] = activeTab.sessionId
       }
 
       try {
@@ -623,11 +636,8 @@ export default function App() {
       ))
 
       const headers = { 'Content-Type': 'application/json' }
-      if (activeTab.microvmId) {
-        headers['X-MicroVM-Id'] = activeTab.microvmId
-        if (activeTab.microvmRealEndpoint) {
-          headers['X-MicroVM-Endpoint'] = activeTab.microvmRealEndpoint
-        }
+      if (activeTab.sessionId) {
+        headers['X-Session-Id'] = activeTab.sessionId
       }
 
       const uploadResp = await fetch(`${activeTab.microvmEndpoint}/upload`, {

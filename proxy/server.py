@@ -97,6 +97,20 @@ async def _on_startup():
     # Restore cost tracking state from database
     app.state.vm_manager.cost_tracker.load_from_db(storage)
 
+    # Set up rotation swap callback — updates session registry + active_microvms when VMs are swapped
+    def on_rotation_swap(session_id: str, new_vm_id: str, new_endpoint: str):
+        """Called by SessionRotator after a successful VM swap."""
+        vm_manager = app.state.vm_manager
+        # Update session registry to point to new VM
+        vm_manager.register_session(session_id, new_vm_id, new_endpoint)
+        # Assign session_id to the new VM's active_microvms entry
+        if new_vm_id in vm_manager.active_microvms:
+            vm_manager.active_microvms[new_vm_id]["session_id"] = session_id
+            vm_manager.active_microvms[new_vm_id].pop("_rotation_pending", None)
+        logger.info(f"🔄 Swap callback: session {session_id} → VM {new_vm_id}")
+
+    app.state.vm_manager.session_rotator.set_swap_callback(on_rotation_swap)
+
 
 # --- Health endpoint ---
 @app.get("/health")
@@ -109,4 +123,7 @@ async def health():
         "cached_tokens": len(vm_manager.token_cache),
         "active_instances": len(vm_manager.active_microvms),
         "poll_interval_ms": POLL_INTERVAL_MS,
+        "persistence_mode": os.environ.get("SESSION_PERSISTENCE_MODE", "eternal"),
+        "max_lifetime_seconds": int(os.environ.get("MAX_LIFETIME_SECONDS", "28800")),
+        "rotation_lead_seconds": int(os.environ.get("ROTATION_LEAD_SECONDS", "60")),
     }

@@ -5,13 +5,13 @@ import './ConnectionPanel.css'
 export default function ConnectionPanel({ tab, onConnect, onUpdateTab, onDismiss, attachedIds = [] }) {
   const [mode, setMode] = useState(null) // null until detected, then 'local' | 'microvm'
   const [proxyAvailable, setProxyAvailable] = useState(false)
+  const [persistenceMode, setPersistenceMode] = useState('eternal')
+  const [maxLifetime, setMaxLifetime] = useState(28800)
   const [error, setError] = useState(null)
   const [availableInstances, setAvailableInstances] = useState([])
   const [loadingInstances, setLoadingInstances] = useState(false)
   const [launchMemory, setLaunchMemory] = useState(String(tab.microvmMemory || '2048'))
   const [launchIdleTimeout, setLaunchIdleTimeout] = useState(String(tab.idleTimeoutSeconds || '60'))
-  const [launchMaxDuration, setLaunchMaxDuration] = useState(String(tab.maxDurationSeconds || '28800'))
-  const [checkpointEnabled, setCheckpointEnabled] = useState(tab.checkpointEnabled ?? true)
   const [imageTiers, setImageTiers] = useState([])
 
   // Auto-detect which mode we're in
@@ -22,6 +22,8 @@ export default function ConnectionPanel({ tab, onConnect, onUpdateTab, onDismiss
         if (data.image_arn && data.image_arn !== '(not configured)') {
           setProxyAvailable(true)
           setMode('microvm')
+          if (data.persistence_mode) setPersistenceMode(data.persistence_mode)
+          if (data.max_lifetime_seconds) setMaxLifetime(data.max_lifetime_seconds)
           fetchAvailableInstances()
           fetchImageTiers()
         } else {
@@ -96,7 +98,6 @@ export default function ConnectionPanel({ tab, onConnect, onUpdateTab, onDismiss
           name: tab.name,
           memoryMiB: parseInt(launchMemory),
           idleTimeoutSeconds: parseInt(launchIdleTimeout),
-          maxDurationSeconds: parseInt(launchMaxDuration),
           checkpointEnabled: true,
           sessionId: tab.sessionId,
           restoreFromSession: tab.sessionId,
@@ -108,7 +109,6 @@ export default function ConnectionPanel({ tab, onConnect, onUpdateTab, onDismiss
         onUpdateTab({
           microvmId: result.microvmId,
           microvmEndpoint: `${PROXY_URL}/proxy`,
-          microvmRealEndpoint: result.endpoint,
           microvmMemory: parseInt(launchMemory),
           sessionId: result.sessionId,
           checkpointEnabled: true,
@@ -140,8 +140,7 @@ export default function ConnectionPanel({ tab, onConnect, onUpdateTab, onDismiss
           name: tab.name,
           memoryMiB: parseInt(launchMemory),
           idleTimeoutSeconds: parseInt(launchIdleTimeout),
-          maxDurationSeconds: parseInt(launchMaxDuration),
-          checkpointEnabled,
+          checkpointEnabled: true,
           sessionId: crypto.randomUUID(),
         }),
       })
@@ -151,12 +150,10 @@ export default function ConnectionPanel({ tab, onConnect, onUpdateTab, onDismiss
         onUpdateTab({
           microvmId: result.microvmId,
           microvmEndpoint: `${PROXY_URL}/proxy`,
-          microvmRealEndpoint: result.endpoint,
           microvmMemory: parseInt(launchMemory),
           idleTimeoutSeconds: parseInt(launchIdleTimeout),
-          maxDurationSeconds: parseInt(launchMaxDuration),
           sessionId: result.sessionId,
-          checkpointEnabled,
+          checkpointEnabled: true,
           status: 'connected',
           mode: 'microvm',
         })
@@ -176,7 +173,6 @@ export default function ConnectionPanel({ tab, onConnect, onUpdateTab, onDismiss
     onUpdateTab({
       microvmId: instance.id,
       microvmEndpoint: `${PROXY_URL}/proxy`,
-      microvmRealEndpoint: instance.endpoint,
       microvmMemory: instance.memory_mib || 4096,
       sessionSaved: false,
       status: 'connected',
@@ -220,16 +216,6 @@ export default function ConnectionPanel({ tab, onConnect, onUpdateTab, onDismiss
                         </span>
                       </div>
                     )}
-                    {tab.maxDurationSeconds && (
-                      <div className="connection-info-row">
-                        <span className="connection-info-label">Max Lifetime</span>
-                        <span className="connection-info-spec">
-                          {tab.maxDurationSeconds >= 3600
-                            ? `${Math.floor(tab.maxDurationSeconds / 3600)} hours`
-                            : `${Math.floor(tab.maxDurationSeconds / 60)} minutes`}
-                        </span>
-                      </div>
-                    )}
                     {tab.sessionId && (
                       <div className="connection-info-row">
                         <span className="connection-info-label">Session</span>
@@ -254,11 +240,18 @@ export default function ConnectionPanel({ tab, onConnect, onUpdateTab, onDismiss
 
         <div className="connection-title">
           {tab.status === 'connected' ? 'Switch Sandbox' : 'Connect to Sandbox'}
+          {mode === 'microvm' && (
+            <span className={`vm-mode-badge vm-mode-${persistenceMode}`} style={{marginLeft: '8px', fontSize: '11px'}}>
+              {persistenceMode === 'eternal' ? '∞ eternal' : '💾 checkpoint'}
+            </span>
+          )}
         </div>
         <div className="connection-desc">
           {tab.status === 'connected'
             ? 'Launch a different MicroVM or reconnect to another instance.'
-            : 'Each notebook connects to its own execution sandbox for isolated, stateful Python.'}
+            : persistenceMode === 'checkpoint'
+              ? `Each notebook connects to its own execution sandbox. VM expires after ${maxLifetime >= 3600 ? `${Math.floor(maxLifetime/3600)}h` : `${Math.floor(maxLifetime/60)}m`} — state is auto-saved to S3 before expiry.`
+              : 'Each notebook connects to its own execution sandbox for isolated, stateful Python.'}
         </div>
 
         <div className="connection-modes">
@@ -372,34 +365,10 @@ export default function ConnectionPanel({ tab, onConnect, onUpdateTab, onDismiss
                     <option value="7200">2 hours</option>
                   </select>
                 </div>
-                <div className="launch-spec-item launch-spec-editable">
-                  <span className="launch-spec-label">Max lifetime</span>
-                  <select className="launch-spec-select" value={launchMaxDuration} onChange={(e) => setLaunchMaxDuration(e.target.value)}>
-                    <option value="300">5 minutes</option>
-                    <option value="1800">30 minutes</option>
-                    <option value="3600">1 hour</option>
-                    <option value="7200">2 hours</option>
-                    <option value="14400">4 hours</option>
-                    <option value="28800">8 hours</option>
-                  </select>
-                </div>
               </div>
               <div className="launch-config-note">
-                Auto-scales up to <strong>4× baseline</strong> during peak load. Burst resources billed only when active. Auto-resumes on traffic (~1s).
+                Auto-scales up to <strong>4× baseline</strong> during peak load. Burst resources billed only when active. Auto-resumes on traffic (~1s). Session persists indefinitely (VMs rotate automatically).
               </div>
-              <label className="launch-checkpoint-toggle">
-                <input
-                  type="checkbox"
-                  checked={checkpointEnabled}
-                  onChange={(e) => setCheckpointEnabled(e.target.checked)}
-                />
-                <span className="launch-checkpoint-label">
-                  Enable session restore
-                </span>
-                <span className="launch-checkpoint-desc">
-                  Save state to S3 on termination. Allows restoring variables, files, and packages on a new MicroVM beyond the max lifetime.
-                </span>
-              </label>
             </div>
 
             <div className="form-actions">

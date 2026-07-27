@@ -13,13 +13,13 @@ import './Cell.css'
 function deriveSqlVarName(sql) {
   if (!sql || !sql.trim()) return 'result'
   // Try to extract table name from FROM clause
-  const fromMatch = sql.match(/\bFROM\s+(?:dynamodb\.)?"?([a-zA-Z_][\w\-]*)"?/i)
+  const fromMatch = sql.match(/\bFROM\s+dynamodb\."?([a-zA-Z_][\w\-]*)"?/i)
     || sql.match(/\bFROM\s+'\/tmp\/([^']+)'/i)
     || sql.match(/\bFROM\s+read_(?:csv|json|parquet)\('[^']*\/([^'/]+)'\)/i)
-    || sql.match(/\bFROM\s+([a-zA-Z_]\w*\.)?([a-zA-Z_]\w*)/i)
+    || sql.match(/\bFROM\s+[a-zA-Z_]\w*\.([a-zA-Z_]\w*)/i)
+    || sql.match(/\bFROM\s+([a-zA-Z_]\w*)/i)
   if (fromMatch) {
-    // Get the last captured group that has a value
-    const raw = fromMatch[fromMatch.length - 1] || fromMatch[1] || 'result'
+    const raw = fromMatch[1] || 'result'
     // Sanitize: remove extension, replace non-identifier chars with underscore
     const cleaned = raw.replace(/\.\w+$/, '').replace(/[^a-zA-Z0-9_]/g, '_').replace(/^_+|_+$/g, '')
     if (cleaned && /^[a-zA-Z_]/.test(cleaned)) return cleaned
@@ -67,7 +67,7 @@ export default function Cell({
   notebookContext,
   notebookName,
   microvmId,
-  microvmRealEndpoint,
+  sessionId,
   aiAvailable,
 }) {
   const textareaRef = useRef(null)
@@ -184,7 +184,7 @@ export default function Cell({
           code: cell.code || '',
           output: (cell.output || '') + (cell.html ? ' [table output]' : ''),
           microvm_id: microvmId || '',
-          microvm_endpoint: microvmRealEndpoint || '',
+          session_id: sessionId || '',
         }),
       })
       if (resp.ok) {
@@ -220,7 +220,7 @@ export default function Cell({
           code: cell.code || '',
           error: cell.error || '',
           microvm_id: microvmId || '',
-          microvm_endpoint: microvmRealEndpoint || '',
+          session_id: sessionId || '',
         }),
       })
       if (resp.ok) {
@@ -270,7 +270,7 @@ export default function Cell({
             output: (c.output || '').slice(0, 100),
           })),
           microvm_id: microvmId || '',
-          microvm_endpoint: microvmRealEndpoint || '',
+          session_id: sessionId || '',
         }),
       })
       if (resp.ok) {
@@ -455,10 +455,11 @@ export default function Cell({
                     >🔧</button>
                   )
                 }
-                // Show explain button only when content looks like actual code
+                // Show explain button only when content looks like actual code/SQL
                 const code = cell.code.trim()
                 const looksLikeCode = /^(import |from |def |class |for |while |if |#|[a-zA-Z_]\w*\s*[=([]|print\(|plt\.|pd\.|np\.)/.test(code) || code.includes('=') || code.includes('(')
-                if (looksLikeCode) {
+                const looksLikeSql = /^(SELECT|INSERT|UPDATE|DELETE|CREATE|DROP|ALTER|WITH|SHOW|DESCRIBE|EXPLAIN)\b/i.test(code) || code.trimStart().startsWith('--')
+                if (looksLikeCode || looksLikeSql) {
                   return (
                     <button
                       className="cell-action-btn cell-ai-action-btn"

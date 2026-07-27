@@ -85,13 +85,6 @@ def get_or_create_agent(session_id: str, context: dict = None) -> Agent:
         if context and context.get("memory_mib"):
             mem_mib = int(context["memory_mib"])
             memory_tier = f"{mem_mib} MB ({mem_mib / 1024:.1f} GB / {mem_mib / 2048:.1f} vCPU)"
-        elif context and context.get("microvm_id"):
-            # Try to infer from image name suffix (e.g. agent-sandbox-4096)
-            mid = context.get("microvm_id", "")
-            for size in ["512", "1024", "2048", "4096", "8192"]:
-                if size in mid:
-                    memory_tier = f"{size} MB ({int(size) / 1024:.1f} GB / {int(size) / 2048:.1f} vCPU)"
-                    break
 
         system_prompt = NOTEBOOK_AGENT_PROMPT.format(
             current_time=now.strftime("%Y-%m-%d %H:%M UTC (%A)"),

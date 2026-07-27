@@ -219,6 +219,40 @@ class CostTracker:
             "microvm_count": len(self._records),
         }
 
+    def get_session_cost(self, session_vm_ids: list[str]) -> dict:
+        """
+        Get aggregated cost for a session (sum of all VMs that served it).
+        
+        Args:
+            session_vm_ids: List of all MicroVM IDs that served this session
+                           (including terminated ones from rotation)
+        """
+        total_running_secs = 0
+        total_suspended_secs = 0
+        total_running_cost = 0.0
+        total_suspended_cost = 0.0
+        total_burst_cost = 0.0
+
+        for vm_id in session_vm_ids:
+            record = self._records.get(vm_id)
+            if record:
+                cost = record.compute()
+                total_running_secs += cost["running_secs"]
+                total_suspended_secs += cost["suspended_secs"]
+                total_running_cost += cost["running_cost_usd"]
+                total_suspended_cost += cost["suspended_cost_usd"]
+                total_burst_cost += cost["burst_cost_usd"]
+
+        return {
+            "running_secs": total_running_secs,
+            "suspended_secs": total_suspended_secs,
+            "running_cost_usd": round(total_running_cost, 6),
+            "suspended_cost_usd": round(total_suspended_cost, 6),
+            "burst_cost_usd": round(total_burst_cost, 6),
+            "total_cost_usd": round(total_running_cost + total_suspended_cost + total_burst_cost, 6),
+            "vm_count": len(session_vm_ids),
+        }
+
     @property
     def tracked_ids(self) -> list[str]:
         """List all tracked MicroVM IDs."""

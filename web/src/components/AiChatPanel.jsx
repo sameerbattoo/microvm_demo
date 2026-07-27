@@ -110,7 +110,7 @@ export default function AiChatPanel({ activeTab, uploadedFiles = [], onClose, on
             error: (c.error || '').slice(0, 200),
           })),
           microvm_id: activeTab.microvmId || '',
-          microvm_endpoint: activeTab.microvmRealEndpoint || '',
+          session_id: activeTab.sessionId || '',
           packages: activeTab._packages || [],
           data_sources: activeTab._dataSources || null,
           uploaded_files: uploadedFiles.map(f => ({ name: f.name, size: f.size, path: `/tmp/${f.name}` })),

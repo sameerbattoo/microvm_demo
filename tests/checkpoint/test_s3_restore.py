@@ -72,17 +72,16 @@ def wait_for_terminated(microvm_id, timeout=90):
     raise TimeoutError(f"MicroVM {microvm_id} did not terminate in {timeout}s")
 
 
-def execute_code(endpoint, microvm_id, code):
-    """Execute code on a MicroVM via the proxy."""
-    headers = {
-        "Content-Type": "application/json",
-        "X-MicroVM-Id": microvm_id,
-        "X-MicroVM-Endpoint": endpoint,
-    }
+def execute_code(session_id, code, timeout=60):
+    """Execute code on the MicroVM via the proxy using session_id only."""
     resp = requests.post(
         f"{PROXY_URL}/proxy/execute",
-        headers=headers,
+        headers={
+            "Content-Type": "application/json",
+            "X-Session-Id": session_id,
+        },
         json={"code": code},
+        timeout=timeout,
     )
     return resp.json()
 
@@ -105,18 +104,17 @@ def main():
             "name": "baseline-timing",
             "memoryMiB": MEMORY_MIB,
             "idleTimeoutSeconds": 60,
-            "maxDurationSeconds": 300,
             "checkpointEnabled": False,
         })
         baseline_data = resp.json()
         assert "microvmId" in baseline_data, f"Baseline launch failed: {baseline_data}"
         baseline_vm_id = baseline_data["microvmId"]
-        baseline_endpoint = baseline_data["endpoint"]
+        baseline_session_id = baseline_data.get("sessionId", "")
     timings["bare_launch"] = t.elapsed
 
     # Quick health check to confirm it's responsive
     with timed("Bare VM first response") as t:
-        headers = {"X-MicroVM-Id": baseline_vm_id, "X-MicroVM-Endpoint": baseline_endpoint}
+        headers = {"X-Session-Id": baseline_session_id}
         for _ in range(10):
             try:
                 r = requests.get(f"{PROXY_URL}/proxy/health", headers=headers, timeout=5)
@@ -131,7 +129,7 @@ def main():
     log(f"  Launch: {timings['bare_launch']:.1f}s, First response: {timings['bare_first_response']:.1f}s")
 
     # Terminate baseline VM
-    requests.post(f"{PROXY_URL}/terminate/{baseline_vm_id}")
+    requests.post(f"{PROXY_URL}/terminate", headers={"X-Session-Id": baseline_session_id})
     log(f"  Terminated baseline VM")
     log("")
 
@@ -146,7 +144,6 @@ def main():
             "name": "test-checkpoint",
             "memoryMiB": MEMORY_MIB,
             "idleTimeoutSeconds": 1800,
-            "maxDurationSeconds": 28800,
             "checkpointEnabled": True,
             "sessionId": session_id,
         })
@@ -174,8 +171,7 @@ def main():
     log("")
     log("PHASE 2: Creating state in the MicroVM...")
 
-    # Create variables
-    result = execute_code(endpoint, microvm_id, """
+    result = execute_code(session_id, """
 import pandas as pd
 import numpy as np
 
@@ -202,7 +198,7 @@ print(f"Matrix shape: {matrix.shape}")
     log(f"  Variables created: {result.get('output', '').strip()}")
 
     # Create a local file in /tmp
-    result = execute_code(endpoint, microvm_id, """
+    result = execute_code(session_id, """
 import csv
 
 # Write a CSV file to /tmp
@@ -225,7 +221,7 @@ print("Created /tmp/test_products.csv (5 products)")
     log(f"  {result.get('output', '').strip()}")
 
     # Verify state
-    result = execute_code(endpoint, microvm_id, """
+    result = execute_code(session_id, """
 import os
 print(f"Variables: x={x}, message='{message[:20]}...', df.shape={df.shape}")
 print(f"File exists: {os.path.exists('/tmp/test_products.csv')}")
@@ -233,7 +229,6 @@ print(f"File size: {os.path.getsize('/tmp/test_products.csv')} bytes")
 """)
     log(f"  State verification: {result.get('output', '').strip()}")
 
-    # Session ID is known — we passed it at launch
     log(f"  Session ID: {session_id}")
     restore_session_id = session_id
 
@@ -244,7 +239,7 @@ print(f"File size: {os.path.getsize('/tmp/test_products.csv')} bytes")
     log("PHASE 3: Terminating MicroVM (triggers S3 checkpoint)...")
 
     with timed("Terminate MicroVM") as t:
-        resp = requests.post(f"{PROXY_URL}/terminate/{microvm_id}")
+        resp = requests.post(f"{PROXY_URL}/terminate", headers={"X-Session-Id": session_id})
         assert resp.status_code == 200, f"Terminate failed: {resp.text}"
     timings["terminate_request"] = t.elapsed
 
@@ -261,7 +256,6 @@ print(f"File size: {os.path.getsize('/tmp/test_products.csv')} bytes")
     time.sleep(3)  # Give S3 a moment for consistency
 
     with timed("Check S3 checkpoint") as t:
-        # List sessions via the proxy
         resp = requests.get(f"{PROXY_URL}/sessions")
         sessions = resp.json().get("sessions", [])
     timings["list_sessions"] = t.elapsed
@@ -270,7 +264,6 @@ print(f"File size: {os.path.getsize('/tmp/test_products.csv')} bytes")
     for s in sessions:
         log(f"    - {s['session_id']} (vars: {s.get('variables_count', '?')}, files: {s.get('files_count', '?')})")
 
-    # Find our session
     our_session = None
     for s in sessions:
         if "test-checkpoint" in s["session_id"]:
@@ -283,7 +276,6 @@ print(f"File size: {os.path.getsize('/tmp/test_products.csv')} bytes")
         log(f"     Variables: {our_session.get('variables_count', '?')}")
         log(f"     Files: {our_session.get('files_count', '?')}")
         log(f"     Checkpointed at: {our_session.get('checkpointed_at', '?')}")
-        # Extract save timings from metadata
         save_timings_ms = our_session.get('save_timings_ms', {})
         if save_timings_ms:
             log(f"     Save breakdown (inside VM):")
@@ -315,7 +307,6 @@ print(f"File size: {os.path.getsize('/tmp/test_products.csv')} bytes")
             "name": "test-restore",
             "memoryMiB": MEMORY_MIB,
             "idleTimeoutSeconds": 1800,
-            "maxDurationSeconds": 28800,
             "checkpointEnabled": False,
             "sessionId": restore_session_id_new,
             "restoreFromSession": restore_session_id,
@@ -323,7 +314,6 @@ print(f"File size: {os.path.getsize('/tmp/test_products.csv')} bytes")
         restore_data = resp.json()
         assert "microvmId" in restore_data, f"Restore launch failed: {restore_data}"
         restore_microvm_id = restore_data["microvmId"]
-        restore_endpoint = restore_data["endpoint"]
     timings["launch_restore"] = t.elapsed
 
     log(f"  New MicroVM ID: {restore_microvm_id}")
@@ -332,9 +322,9 @@ print(f"File size: {os.path.getsize('/tmp/test_products.csv')} bytes")
         wait_for_running(restore_microvm_id)
     timings["wait_running_restore"] = t.elapsed
 
-    # Measure time until restored VM responds (confirms /run hook completed)
+    # Measure time until restored VM responds
     with timed("Restore VM first response") as t:
-        headers = {"X-MicroVM-Id": restore_microvm_id, "X-MicroVM-Endpoint": restore_endpoint}
+        headers = {"X-Session-Id": restore_session_id_new}
         for _ in range(20):
             try:
                 r = requests.get(f"{PROXY_URL}/proxy/health", headers=headers, timeout=5)
@@ -355,7 +345,7 @@ print(f"File size: {os.path.getsize('/tmp/test_products.csv')} bytes")
     checks_total = 0
 
     # Check variables
-    result = execute_code(restore_endpoint, restore_microvm_id, "print(f'x={x}')")
+    result = execute_code(restore_session_id_new, "print(f'x={x}')")
     checks_total += 1
     if result.get("success") and "x=42" in result.get("output", ""):
         log("  ✅ Variable 'x' restored: x=42")
@@ -363,7 +353,7 @@ print(f"File size: {os.path.getsize('/tmp/test_products.csv')} bytes")
     else:
         log(f"  ❌ Variable 'x' NOT restored: {result.get('error') or result.get('output')}")
 
-    result = execute_code(restore_endpoint, restore_microvm_id, "print(f'message={message}')")
+    result = execute_code(restore_session_id_new, "print(f'message={message}')")
     checks_total += 1
     if result.get("success") and "Hello from checkpoint test" in result.get("output", ""):
         log("  ✅ Variable 'message' restored")
@@ -371,7 +361,7 @@ print(f"File size: {os.path.getsize('/tmp/test_products.csv')} bytes")
     else:
         log(f"  ❌ Variable 'message' NOT restored: {result.get('error') or result.get('output')}")
 
-    result = execute_code(restore_endpoint, restore_microvm_id, "print(f'len(numbers)={len(numbers)}')")
+    result = execute_code(restore_session_id_new, "print(f'len(numbers)={len(numbers)}')")
     checks_total += 1
     if result.get("success") and "len(numbers)=100" in result.get("output", ""):
         log("  ✅ Variable 'numbers' restored (100 items)")
@@ -380,7 +370,7 @@ print(f"File size: {os.path.getsize('/tmp/test_products.csv')} bytes")
         log(f"  ❌ Variable 'numbers' NOT restored: {result.get('error') or result.get('output')}")
 
     # Check DataFrame
-    result = execute_code(restore_endpoint, restore_microvm_id, "print(f'df.shape={df.shape}, columns={list(df.columns)}')")
+    result = execute_code(restore_session_id_new, "print(f'df.shape={df.shape}, columns={list(df.columns)}')")
     checks_total += 1
     if result.get("success") and "(5, 3)" in result.get("output", ""):
         log("  ✅ DataFrame 'df' restored: (5, 3)")
@@ -389,7 +379,7 @@ print(f"File size: {os.path.getsize('/tmp/test_products.csv')} bytes")
         log(f"  ❌ DataFrame 'df' NOT restored: {result.get('error') or result.get('output')}")
 
     # Check numpy array
-    result = execute_code(restore_endpoint, restore_microvm_id, "print(f'matrix.shape={matrix.shape}')")
+    result = execute_code(restore_session_id_new, "print(f'matrix.shape={matrix.shape}')")
     checks_total += 1
     if result.get("success") and "(10, 10)" in result.get("output", ""):
         log("  ✅ Numpy array 'matrix' restored: (10, 10)")
@@ -398,7 +388,7 @@ print(f"File size: {os.path.getsize('/tmp/test_products.csv')} bytes")
         log(f"  ❌ Numpy array 'matrix' NOT restored: {result.get('error') or result.get('output')}")
 
     # Check local file
-    result = execute_code(restore_endpoint, restore_microvm_id, """
+    result = execute_code(restore_session_id_new, """
 import os
 exists = os.path.exists('/tmp/test_products.csv')
 size = os.path.getsize('/tmp/test_products.csv') if exists else 0
@@ -412,7 +402,7 @@ print(f'file_exists={exists}, size={size}')
         log(f"  ❌ File NOT restored: {result.get('error') or result.get('output')}")
 
     # Check file content
-    result = execute_code(restore_endpoint, restore_microvm_id, """
+    result = execute_code(restore_session_id_new, """
 import csv
 with open('/tmp/test_products.csv', 'r') as f:
     reader = csv.reader(f)
@@ -433,7 +423,7 @@ print(f'rows={len(rows)}, header={rows[0]}, first_data={rows[1]}')
     log("PHASE 6b: Fetching checkpoint timing breakdown from VM...")
     checkpoint_timings = {}
     try:
-        headers = {"X-MicroVM-Id": restore_microvm_id, "X-MicroVM-Endpoint": restore_endpoint}
+        headers = {"X-Session-Id": restore_session_id_new}
         resp = requests.get(f"{PROXY_URL}/proxy/checkpoint-timings", headers=headers, timeout=10)
         if resp.ok:
             checkpoint_timings = resp.json()
@@ -456,10 +446,10 @@ print(f'rows={len(rows)}, header={rows[0]}, first_data={rows[1]}')
     # ================================================================
     log("")
     log("PHASE 7: Cleanup...")
-    for vm in [baseline_vm_id, microvm_id, restore_microvm_id]:
+    for sid in [baseline_session_id, session_id, restore_session_id_new]:
         try:
-            requests.post(f"{PROXY_URL}/terminate/{vm}", timeout=5)
-            log(f"  Terminated {vm[:20]}...")
+            requests.post(f"{PROXY_URL}/terminate", headers={"X-Session-Id": sid}, timeout=5)
+            log(f"  Terminated session {sid[:20]}...")
         except:
             pass
     log("  All test VMs cleaned up")

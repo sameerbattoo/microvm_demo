@@ -93,12 +93,13 @@ from app.platform.checkpoint import CheckpointManager
 app.state.checkpoint_manager = CheckpointManager(executor, session_state)
 
 # --- Register route modules ---
-from app.platform.hooks import router as hooks_router
+from app.platform.hooks import router as hooks_router, proxy_router as hooks_proxy_router
 from app.notebook.routes import router as routes_router
 from app.notebook.code_engine import router as code_router
 from app.notebook.sql_engine import router as sql_router
 
 app.include_router(hooks_router)
+app.include_router(hooks_proxy_router)
 app.include_router(routes_router)
 app.include_router(code_router)
 app.include_router(sql_router)

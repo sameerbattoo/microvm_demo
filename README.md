@@ -135,7 +135,7 @@ This single command runs the entire demo end-to-end. It is fully self-contained 
 1. Creates S3 bucket, IAM roles (if missing)
 2. Provisions sample data (DynamoDB, S3, Athena)
 3. Builds MicroVM images in parallel (~4-5 min)
-4. Starts the token proxy (`:8081`)
+4. Starts the smart proxy (`:8081`)
 5. Starts the notebook UI (`:5173`)
 
 Subsequent runs skip the build and launch in seconds.
@@ -221,14 +221,12 @@ A unified collapsible sidebar with VS Code-style icon activity bar:
 ### 3.4 MicroVM Management
 - Launch new MicroVMs from the connection panel (4 memory tiers: 1GB–8GB)
 - **Idle suspend** configurable: 1 min, 2 min, 5 min, 15 min, 30 min, 1 hr, 2 hr
-- **Max lifetime** configurable: 1 hr, 2 hr, 4 hr, 8 hr
 - Instance cards in sidebar show: spec, session, lifecycle, real-time resources, cost breakdown
-- **Lifecycle countdown** — "Terminates in" timer with urgency indicators:
-  - Normal when > 5 minutes remaining
-  - Red when ≤ 5 minutes
-  - Pulsing red when ≤ 60 seconds (VM card and activity bar icon pulse too)
+- **Two persistence modes** (`SESSION_PERSISTENCE_MODE` in config):
+  - `eternal` (default) — VMs rotate transparently before max lifetime. Session never dies.
+  - `checkpoint` — State saved to S3 before max lifetime. VM terminates. User restores manually.
+- **Transparent VM rotation** (eternal mode) — a new VM is launched, state checkpointed, restored onto the new VM, routing swapped, old VM terminated. ~8s total downtime. User never sees it.
 - **Suspend button** — manually suspend a running VM to save costs
-- **Pre-termination wake timer** — for VMs with checkpoint enabled, the proxy resumes the VM 30s before max lifetime expires so the `/terminate` hook fires and state is saved to S3 (workaround for AWS not firing the hook on suspended VMs)
 - **Live Resources** — CPU, Memory, Disk gauge bars update after each cell execution (using `psutil` inside the VM)
 - **Connection status pill** — toolbar shows actual VM state: 🟢 Running, 🟠 Suspended, 🔴 Terminated/Disconnected
 - Attach existing running instances to notebooks
@@ -246,7 +244,11 @@ A unified collapsible sidebar with VS Code-style icon activity bar:
   - Suspended duration and cost
   - Memory tier and pricing rates
   - Total cost
-- **Session total** in the panel footer (aggregated across all tracked MicroVMs)
+- **Three-level cost hierarchy**:
+  - Overall cost (all notebooks) — top of panel
+  - Per-session cost (accumulated across VM rotations) — shown per notebook in eternal mode
+  - Per-VM cost — current VM's running/suspended/burst breakdown
+- **Rotation metadata** — shows rotation count and total VMs served per session (eternal mode only)
 - Persists across proxy restarts (stored in SQLite database)
 - Uses published Lambda MicroVM pricing: `$0.0000133/GB-sec` (running), `$0.0000000309/GB-sec` (suspended)
 
@@ -263,11 +265,23 @@ A unified collapsible sidebar with VS Code-style icon activity bar:
 | 4 GB | 16 GB | Always 16 GB | 8 |
 | 8 GB | 32 GB | Always 32 GB | 16 |
 
-### 3.6 Session Checkpoint & Restore
-- Enable "session restore" when launching a MicroVM
-- On termination, state is serialized to S3 (variables, files, packages)
-- Launch a new MicroVM and select "Restore from session" to resume where you left off
-- Extends effective session lifetime beyond the 8-hour VM maximum
+### 3.6 Session Persistence — Two Modes
+
+Lambda MicroVMs have a maximum lifetime of 8 hours (AWS-imposed). To provide longer sessions, the proxy manages state persistence automatically in one of two modes:
+
+| | Eternal Mode (default) | Checkpoint Mode |
+|---|---|---|
+| Behavior | VM rotates transparently before expiry. Session never dies. | State saved to S3 on terminate. User restores manually. |
+| User experience | Seamless — no disconnect, no action needed | Sees "Session saved" → clicks "Restore" on next open |
+| Mechanism | Launch VM2 → checkpoint → restore → swap routing → terminate VM1 | `/terminate` hook saves state → VM dies → user launches new VM with `restoreFromSession` |
+| Downtime | ~5-10s (quiesced, requests queued) | Full stop until user restores |
+| Best for | Always-on notebooks, long-running analysis | Cost-sensitive, intermittent usage |
+
+**What's preserved across rotations/restores:** Python variables, DataFrames, local `/tmp/` files, pip-installed packages.
+
+**What's excluded:** Modules (re-imported automatically), matplotlib Figure objects (transient — data preserved, re-run plot cell to regenerate).
+
+> **PFR filed:** A Product Feature Request has been submitted to increase the MicroVM maximum lifetime from 8 hours to 2 weeks. Once approved, the rotation/checkpoint mechanism becomes unnecessary for most use cases — a single VM will outlive typical user sessions without any state transfer.
 
 ### 3.7 UI & Theming
 - **Light/Dark theme toggle** — persists across sessions (rotation animation on hover)
@@ -383,38 +397,50 @@ JOIN '/tmp/sales_data.csv' s ON d.name = s.product
 
 ```
 ┌──────────────────────┐           ┌───────────────────────────────────┐
-│   React Notebook UI  │  HTTP     │       Token Proxy (:8081)         │
+│   React Notebook UI  │  HTTP     │       Smart Proxy (:8081)         │
 │   (localhost:5173)   ├──────────►│                                   │
-│                      │           │  POST /launch    — provision VM   │
-│  Sidebar + Cells     │           │  POST /terminate — destroy VM     │
-│                      │           │  POST /resume    — wake suspended │
-│  AI Chat (right)     │           │  GET  /instances — list + cost    │
-│  Explain/Fix/Gen     │           │  */proxy/*       — auth + forward │
-│                      │           │  POST /ai/chat   — Strands Agent  │
-│                      │           │  POST /ai/explain— direct Bedrock │
-│                      │           │  POST /ai/fix    — direct Bedrock │
-│                      │           │  GET  /datasources — S3/DDB/Athena│
-│                      │           │  CRUD /notebooks — notebook store │
-│                      │           │  GET  /instances/metrics —ondemand│
+│                      │           │  Session-Based Routing            │
+│  Header:             │           │  ┌───────────────────────────┐    │
+│  X-Session-Id: uuid  │           │  │ Caller sends ONLY         │    │
+│                      │           │  │ X-Session-Id header.      │    │
+│                      │           │  │ Proxy resolves → VM       │    │
+│                      │           │  │ internally. No VM IDs,    │    │
+│                      │           │  │ endpoints, or auth tokens │    │
+│                      │           │  │ leak to the caller.       │    │
+│                      │           │  └───────────────────────────┘    │
 │                      │           │                                   │
-│                      │           │  ┌─────────────────────────────┐  │
-│                      │           │  │  SQLite (proxy/data/microvm.db)│
-│                      │           │  │  • notebooks                │  │
-│                      │           │  │  • vm_sessions + state_log  │  │
-│                      │           │  │  • vm_metrics (time-series) │  │
-│                      │           │  │  • ai_sessions              │  │
-│                      │           │  └─────────────────────────────┘  │
-└──────────────────────┘           └────────────┬──────────┬───────────┘
-                                                │          │
-                                   HTTPS + JWE  │          │ Bedrock
-                                                ▼          ▼
-           ┌──────────────────┐  ┌──────────────────┐  ┌──────────────────┐
-           │  MicroVM (Tab 1) │  │  MicroVM (Tab 2) │  │  Amazon Bedrock  │
-           │  Firecracker VM  │  │  Firecracker VM  │  │  Claude Sonnet   │
-           │  FastAPI+Executor│  │  FastAPI+Executor│  │  (Strands Agent) │
-           │  GET /metrics    │  │  GET /metrics    │  │                  │
-           └──────────────────┘  └──────────────────┘  └──────────────────┘
+│                      │           │  POST /launch    — provision VM   │
+│                      │           │  POST /terminate — destroy session│
+│                      │           │  POST /resume    — wake suspended │
+│                      │           │  GET  /instances — list + cost    │
+│                      │           │  */proxy/*       — forward to VM  │
+│                      │           │  POST /ai/chat   — Strands Agent  │
+│                      │           │                                   │
+│                      │           │  Internal (hidden from caller):   │
+│                      │           │  • Session Registry (sid → VM)    │
+│                      │           │  • Auth token generation (JWE)    │
+│                      │           │  • VM rotation (eternal mode)     │
+│                      │           │  • Checkpoint orchestration       │
+│                      │           │                                   │
+└──────────────────────┘           └────────────┬──────────────────────┘
+                                                │
+                                   HTTPS + JWE  │  (proxy handles auth)
+                                                ▼
+           ┌──────────────────┐  ┌──────────────────┐
+           │  MicroVM (Tab 1) │  │  MicroVM (Tab 2) │
+           │  Firecracker VM  │  │  Firecracker VM  │
+           │  FastAPI+Executor│  │  FastAPI+Executor│
+           └──────────────────┘  └──────────────────┘
+
+The proxy also calls Amazon Bedrock (Claude Sonnet) via the Strands Agents SDK for AI features (chat, explain, fix). The agent runs in the proxy process — not inside the MicroVM — to avoid image bloat and rebuild cycles.
 ```
+
+**Why session-based routing?** The proxy abstracts all MicroVM internals (VM IDs, endpoints, auth tokens) behind a single `X-Session-Id` header. This design enables:
+
+- **Transparent VM rotation** — When a VM is swapped (eternal mode), the caller doesn't notice. Same session ID, same API, different VM underneath.
+- **No credential leakage** — The caller never handles AWS auth tokens or knows the VM endpoint. The proxy generates and injects JWE tokens per-request.
+- **Simplified frontend** — The UI only tracks session IDs, not VM lifecycle state. Connection management is fully server-side.
+- **Mode-agnostic callers** — The same API works identically in eternal and checkpoint mode. The persistence strategy is a proxy concern, not a caller concern.
 
 ### 4.3 Data Source Connectivity
 
@@ -535,7 +561,7 @@ IMAGE_SIZES="1024 2048 4096 8192"  # Memory tiers to build (MiB)
 ### 6.2 Ports & Polling
 
 ```bash
-PROXY_PORT="8081"               # Token proxy port
+PROXY_PORT="8081"               # Smart proxy port
 BACKEND_PORT="8080"             # Local sandbox backend port
 POLL_INTERVAL_MS="10000"        # Instance state refresh interval (ms)
 ```
@@ -599,6 +625,25 @@ VITE_BACKEND_PORT=8080  # Used for local dev mode connections
 
 These are derived from `PROXY_PORT` and `BACKEND_PORT` in `config.sh` — no manual setup needed.
 
+### 6.6 Session Persistence
+
+```bash
+# Persistence mode: "eternal" (VMs rotate, session never dies) or "checkpoint" (save & stop)
+SESSION_PERSISTENCE_MODE="eternal"
+
+# Max lifetime before rotation/checkpoint (AWS max is 28800 = 8h)
+MAX_LIFETIME_SECONDS="28800"
+
+# How far before max lifetime to start rotation (eternal mode only)
+ROTATION_LEAD_SECONDS="60"
+```
+
+**Eternal mode** — VMs swap transparently. Rotation starts at `MAX_LIFETIME - ROTATION_LEAD_SECONDS`. User never disconnects.
+
+**Checkpoint mode** — No rotation timer. The AWS `/terminate` hook fires at max lifetime and saves the latest state to S3. User restores manually on next session.
+
+Override for testing: `SESSION_PERSISTENCE_MODE=checkpoint MAX_LIFETIME_SECONDS=180 ./aws_microvm_run.sh`
+
 ---
 
 ## 7. Technical Details
@@ -613,10 +658,11 @@ The executor automatically detects:
 - Works with both pandas and polars DataFrames
 
 ### 7.3 Token Authentication (MicroVM mode)
-- Browser never handles AWS credentials
-- Proxy generates JWE tokens via `create-microvm-auth-token`
-- Tokens cached for 25 min (expire at 30)
-- Each request forwarded with `X-aws-proxy-auth` header
+- Browser sends only `X-Session-Id` — never handles AWS credentials or VM endpoints
+- Proxy resolves session → VM internally via the session registry
+- Proxy generates JWE tokens via `create-microvm-auth-token` (cached 25 min, expire at 30)
+- Each request forwarded to the VM with the injected auth token
+- On VM rotation (eternal mode), the session registry updates — caller is unaware
 
 ### 7.4 Lifecycle Hooks
 
@@ -628,11 +674,13 @@ The executor automatically detects:
 | `/resume` | After resume | Validate state |
 | `/terminate` | Before termination | Checkpoint to S3 |
 
-### 7.5 Idle Policy
-- Auto-suspend after **30 minutes** idle
-- Stay suspended up to **8 hours**
+### 7.5 Idle Policy & VM Rotation
+- Auto-suspend after idle timeout (configurable: 1 min – 2 hr)
 - Auto-resume on traffic (~1s per 500MB)
-- Max lifetime: **8 hours**
+- Max lifetime: **8 hours** (`MAX_LIFETIME_SECONDS=28800`)
+- **Eternal mode**: Rotator fires at `max_lifetime - ROTATION_LEAD_SECONDS`. 7-step swap is transparent to the caller.
+- **Checkpoint mode**: `/terminate` hook (called by AWS at max lifetime) saves state. No pre-checkpoint timer — always captures the latest state.
+- Pre-termination wake timer ensures `/terminate` fires even if VM is suspended at expiry.
 
 ### 7.6 MicroVM Image Build
 - Base: `public.ecr.aws/lambda/microvms:al2023-minimal`
@@ -685,22 +733,25 @@ Metrics are fetched on-demand (after each cell execution), NOT continuously poll
 
 ### 7.8 Session Checkpoint & Restore
 
-**Termination flow:**
-1. `/terminate` hook fires (60s timeout)
-2. `dill.dumps(executor namespace)` → `checkpoint.pkl`
-3. `tar /tmp/*.csv,*.parquet` → `files.tar.gz`
-4. `pip freeze` → `requirements.txt`
+**Save (checkpoint.py):**
+1. Exclude Python modules (`types.ModuleType`) — they're re-importable, and including them causes `_csv.writer`-style serialization failures
+2. `dill.dumps(namespace)` — bulk serialize. If it fails, per-variable fallback skips only the broken ones.
+3. `tar /tmp/*.csv,*.parquet,...` → `files.tar.gz`
+4. User-installed packages (tracked via `/install` endpoint) → `requirements.txt`
 5. Upload all to `s3://bucket/sessions/{session_id}/`
 
-**Restore flow:**
-1. `/run` hook fires (60s timeout)
-2. Download `checkpoint.pkl` → `dill.loads()` → restore namespace
+**Restore (checkpoint.py):**
+1. Download `checkpoint.pkl` → `dill.loads()` → restore namespace
+2. `copy.deepcopy()` all mutable containers (lists, dicts, sets) — breaks dill internal references that prevent re-serialization on the next rotation
 3. Extract `files.tar.gz` → `/tmp/`
-4. `pip install -r requirements.txt`
-5. MicroVM ready with full previous state
+4. `pip install` packages from `requirements.txt`
 
-**What's checkpointed:** Variables, local data files, runtime packages.
-**What's NOT checkpointed:** Network connections, matplotlib figures, non-serializable objects.
+**What's preserved:** Variables, DataFrames, computed results, local data files, pip packages.
+**What's excluded:** Modules (re-imported), matplotlib Figure/Axes objects (transient display — data preserved, re-run plot cell).
+
+**Mode-specific behavior in `/terminate` hook:**
+- **Checkpoint mode** → always saves (captures latest state right before VM dies)
+- **Eternal mode** → skips save (rotator already handled state transfer via `/checkpoint-save` + `/restore-state`)
 
 ### 7.9 Sample Data (auto-provisioned)
 - **DynamoDB** — table `microvm-demo-data` with 10 sample products
@@ -724,20 +775,21 @@ scipy (statistics), boto3 (AWS SDK), duckdb (SQL engine)
 ├── app/                          # MicroVM sandbox (runs INSIDE the Firecracker VM)
 │   ├── server.py                 # FastAPI entrypoint: shared state, pre-loaded libs, router registration
 │   ├── platform/                 # Infrastructure layer — MicroVM lifecycle
-│   │   ├── hooks.py              # Lifecycle hooks: /run, /suspend, /resume, /terminate
-│   │   └── checkpoint.py         # S3 checkpoint/restore with per-step timing
+│   │   ├── hooks.py              # Lifecycle hooks: /run, /suspend, /resume, /terminate, /checkpoint-save, /restore-state
+│   │   └── checkpoint.py         # S3 checkpoint/restore: dill serialize, module exclusion, deepcopy on restore
 │   └── notebook/                 # Application layer — notebook execution
 │       ├── executor.py           # SandboxExecutor: stateful Python execution engine
 │       ├── code_engine.py        # Python execution: /execute endpoint
 │       ├── sql_engine.py         # SQL execution: /execute-sql with DuckDB/Athena/DynamoDB auto-routing
 │       └── routes.py             # Utility: /install, /variables, /health, /metrics, /upload, /files
-├── proxy/                        # Token proxy (runs on your machine)
-│   ├── server.py                 # FastAPI entrypoint: app setup, startup, health, router registration
+├── proxy/                        # Smart proxy (runs on your machine, hides all VM internals)
+│   ├── server.py                 # FastAPI entrypoint: app setup, swap callback, health
 │   ├── platform/                 # Smart MicroVM Service layer (reusable, app-agnostic)
-│   │   ├── microvm_manager.py    # MicrovmManager: tokens, timers, cost, rotation, AWS client
+│   │   ├── microvm_manager.py    # MicrovmManager: session registry, tokens, timers, cost, AWS client
+│   │   ├── session_rotator.py    # SessionRotator: transparent VM rotation (eternal mode)
 │   │   ├── cost_tracker.py       # CostTracker: burst + baseline cost with DB persistence
 │   │   └── routes/
-│   │       ├── microvm.py        # Launch, terminate, suspend, resume, proxy, instances
+│   │       ├── microvm.py        # /launch, /terminate, /suspend, /resume, /proxy/{path}, /instances
 │   │       ├── sessions.py       # S3 session checkpoints, data sources
 │   │       └── metrics.py        # VM metrics, image tiers
 │   ├── notebook/                 # Notebook application layer (specific to this project)
@@ -781,20 +833,30 @@ scipy (statistics), boto3 (AWS SDK), duckdb (SQL engine)
 │       │   ├── Icons.jsx         # SVG icon components (35+)
 │       │   └── Modal.jsx         # Reusable confirm/input modals
 │       └── services/
+│           ├── microvm.js        # Proxy API client (all calls use X-Session-Id)
 │           ├── notebooks.js      # Notebook API client (CRUD, migration)
 │           └── sanitize.js       # HTML sanitization (DOMPurify)
 ├── tests/
-│   ├── test_interrupt_execution.py
-│   ├── test_microvm_lifecycle.py
-│   ├── test_s3_restore.py
-│   └── test_resume_before_expire.py  # Pre-termination wake timer test
+│   ├── run_tests.sh             # Test runner — auto-detects mode, runs common + mode-specific tests
+│   ├── common/                  # Mode-agnostic tests (run in both eternal and checkpoint)
+│   │   ├── test_burst_behavior.py
+│   │   ├── test_interrupt_execution.py
+│   │   ├── test_microvm_lifecycle.py
+│   │   └── test_sql_engine.py
+│   ├── eternal/                 # Eternal-mode-only tests
+│   │   └── test_rotation.py    # 5-rotation comprehensive test (6 VMs, state across rotations)
+│   ├── checkpoint/              # Checkpoint-mode-only tests
+│   │   ├── test_auto_checkpoint.py  # Terminate hook saves + restore on new VM
+│   │   └── test_s3_restore.py      # Checkpoint/restore timing and verification
+│   └── test_resume_before_expire.py # Pre-termination wake timer test
 ├── scripts/
-│   ├── config.sh               # All config (region, ports, sizes, pricing, retention)
+│   ├── config.sh               # All config (region, ports, sizes, pricing, modes, retention)
 │   ├── setup_iam.sh            # Create IAM roles + S3 bucket
 │   ├── build_all_images.sh     # Parallel image build (all tiers) with retry
 │   ├── setup_sample_data.sh    # DynamoDB + S3 + Athena tables + workgroup
 │   └── teardown.sh             # Terminate MicroVMs + delete images
 ├── iam/                    # IAM trust and permission policies
+├── docs/                   # Customer-facing documentation
 ├── Dockerfile              # MicroVM image (al2023-minimal, Python 3.11)
 ├── requirements.txt        # MicroVM sandbox Python deps
 ├── requirements-proxy.txt  # Proxy server deps (Strands Agents, FastAPI, boto3)
@@ -807,123 +869,71 @@ scipy (statistics), boto3 (AWS SDK), duckdb (SQL engine)
 
 ## 9. Tests
 
-Five end-to-end test scripts validate the major aspects of MicroVM execution. All tests launch real MicroVMs via the proxy, execute code, and verify results.
+Tests are organized by persistence mode. The test runner auto-detects the proxy's mode and runs the appropriate suite.
+
+### Running Tests
 
 ```bash
-# Run any test (requires aws_microvm_run.sh to be running)
-python3 tests/test_interrupt_execution.py
-python3 tests/test_microvm_lifecycle.py
-python3 tests/test_s3_restore.py
-python3 tests/test_resume_before_expire.py
-python3 tests/test_burst_behavior.py
+# Start proxy in desired mode, then run:
+bash tests/run_tests.sh
 ```
 
-### 9.1 Interrupt Execution (`test_interrupt_execution.py`)
+The runner queries `/health` to detect `persistence_mode`, then executes:
+1. **Common tests** (always run) — mode-agnostic functionality
+2. **Mode-specific tests** — eternal OR checkpoint, based on detected mode
 
-Tests the ability to stop long-running or stuck cells mid-execution.
+### Test Structure
 
-| # | Scenario | Validates |
-|---|----------|-----------|
-| 1 | Normal execution | Sanity — code runs and returns output |
-| 2 | Interrupt `time.sleep()` | Blocking I/O can be interrupted |
-| 3 | Post-interrupt health | Sandbox still works after interrupt, variables preserved |
-| 4 | Interrupt CPU loop | `while True` loop can be stopped |
-| 5 | Loop variable survived | State created during the loop exists after interrupt |
-| 6 | No-op interrupt | Calling interrupt when idle is gracefully handled |
-| 7 | Final execution + HTML | Full execution with DataFrame rendering works after all interrupts |
+```
+tests/
+├── run_tests.sh              # Auto-detect mode, run common + mode-specific
+├── common/                   # Run in BOTH modes
+│   ├── test_burst_behavior.py       # 4× baseline burst model validation
+│   ├── test_interrupt_execution.py  # Kill long-running cells mid-execution
+│   ├── test_microvm_lifecycle.py    # Full state machine: launch → execute → suspend → resume → terminate → restore
+│   └── test_sql_engine.py           # 12 SQL routing tests: local, S3, Athena, DynamoDB, mixed JOINs
+├── eternal/                  # Run only when mode=eternal
+│   └── test_rotation.py            # 5-rotation test: state survives across 6 VMs, packages, files, mutations
+└── checkpoint/               # Run only when mode=checkpoint
+    ├── test_auto_checkpoint.py      # /terminate hook saves state, restore on new VM verifies all preserved
+    └── test_s3_restore.py           # Checkpoint timing, S3 artifact verification, restore fidelity
+```
 
-### 9.2 MicroVM Lifecycle (`test_microvm_lifecycle.py`)
+### Example Output
 
-Comprehensive state machine test covering all MicroVM lifecycle transitions.
+```
+============================================
+  MicroVM Test Suite
+============================================
+>> Checking proxy...
+  Mode: checkpoint
+  Max Lifetime: 180s
+>> Common tests (mode-agnostic)
+  Running test_burst_behavior... PASSED
+  Running test_interrupt_execution... PASSED
+  Running test_microvm_lifecycle... PASSED
+  Running test_sql_engine... PASSED
+>> Checkpoint mode tests
+  Running test_auto_checkpoint... PASSED
+  Running test_s3_restore... PASSED
+============================================
+  Results: 6 passed, 0 failed, 0 skipped
+============================================
+```
 
-**Part 1 — Without checkpoint:**
+### Test Configuration
 
-| # | State Transition | Validates |
-|---|-----------------|-----------|
-| 1 | PENDING → RUNNING | Launch succeeds, VM is healthy |
-| 2 | Execute + create variables | Code runs, state accumulates |
-| 3 | Cross-call persistence | Variables survive across separate /execute calls |
-| 4 | RUNNING → SUSPENDED | Programmatic suspend works |
-| 5 | SUSPENDED → RUNNING (auto) | Sending /execute auto-resumes the VM |
-| 6 | Variables after resume | All state survives the suspend/resume cycle |
-| 7 | RUNNING → TERMINATED | Terminate without checkpoint |
-| 8 | Not recoverable | Terminated VM cannot be restored |
+For fast iteration, use short lifetimes:
 
-**Part 2 — With S3 checkpoint:**
+```bash
+# Checkpoint mode (rotation fires at terminate hook)
+SESSION_PERSISTENCE_MODE=checkpoint MAX_LIFETIME_SECONDS=180 bash aws_microvm_run.sh
 
-| # | State Transition | Validates |
-|---|-----------------|-----------|
-| 9 | Launch with checkpoint | checkpointEnabled flag accepted |
-| 10 | Create rich state | DataFrames, numpy arrays, computed values |
-| 11 | Terminate → S3 | Checkpoint files written to S3 |
-| 12 | Launch new VM + restore | New VM restores from S3 checkpoint |
-| 13 | Variables restored | All variables match pre-terminate state |
-| 14 | Packages restored | pip-installed packages survive |
-| 15 | Clean up | Restored VM terminated |
+# Eternal mode (rotation fires at 120s = 180-60)
+SESSION_PERSISTENCE_MODE=eternal MAX_LIFETIME_SECONDS=180 ROTATION_LEAD_SECONDS=60 bash aws_microvm_run.sh
+```
 
-### 9.3 S3 Checkpoint & Restore (`test_s3_restore.py`)
-
-Focused deep test of the checkpoint/restore mechanism — serialization, S3 upload, and namespace restoration.
-
-| # | Scenario | Validates |
-|---|----------|-----------|
-| 1 | Launch with checkpoint | Session ID assigned |
-| 2 | Create complex state | Variables, DataFrames, local files, installed packages |
-| 3 | Terminate (triggers checkpoint) | /terminate hook fires, state serialized to S3 |
-| 4 | Verify S3 checkpoint | checkpoint.pkl, files.tar.gz, requirements.txt, metadata.json exist |
-| 5 | Launch new VM + restore | restoreFromSession flag triggers download + deserialization |
-| 6 | Validate restored namespace | All variables match, types correct |
-| 7 | Validate restored files | Local /tmp/ files exist |
-| 8 | Timing report | End-to-end latency breakdown |
-
-### 9.4 Pre-Termination Wake Timer (`test_resume_before_expire.py`)
-
-Tests the workaround for an AWS Lambda MicroVMs limitation where the `/terminate` lifecycle hook does NOT fire when the service auto-terminates a SUSPENDED VM.
-
-**The Problem:**
-When `maximumDurationInSeconds` expires on a VM that is in SUSPENDED state, AWS releases it without resuming it — the `/terminate` hook never executes and our S3 checkpoint is lost.
-
-**The Workaround:**
-The proxy sets a timer 30 seconds before max lifetime. When the timer fires, it resumes the VM (if suspended). When AWS then terminates the VM moments later, it's in RUNNING state and the `/terminate` hook fires normally — our checkpoint code runs and saves state to S3.
-
-| # | Scenario | Validates |
-|---|----------|-----------|
-| 1 | Launch with short max lifetime (240s) | Timer scheduled by proxy |
-| 2 | Create state (variables + file) | Checkpoint has something to save |
-| 3 | Wait for VM to suspend (idle timeout) | VM enters SUSPENDED state |
-| 4 | Proxy timer fires at t=210s | VM resumes to RUNNING |
-| 5 | AWS auto-terminates at t=240s | VM is RUNNING → /terminate hook fires |
-| 6 | S3 checkpoint verified | checkpoint.pkl, metadata.json exist |
-| 7 | CloudWatch log confirmation | "POST /terminate HTTP/1.1" 200 OK in logs |
-
-### 9.5 Burst Behavior (`test_burst_behavior.py`)
-
-Tests the MicroVM burst model — validates that 4× baseline resources are pre-allocated and measures behavior under heavy load.
-
-**Key Findings (documented in test file):**
-- Resources are pre-allocated at 4× baseline from boot (not dynamically added)
-- `psutil.virtual_memory().total` always reports 4× baseline (never changes under load)
-- Exceeding the 4× ceiling causes OOM crash (hard limit, not throttling)
-- CPU cores also fixed at 4× baseline vCPU
-
-| # | Scenario | Validates |
-|---|----------|-----------|
-| 1 | Launch 1GB baseline VM | VM provisioned successfully |
-| 2 | Check idle metrics | psutil total = 4GB, 2 cores (4× baseline) |
-| 3 | Small workload (pandas DataFrame) | Memory usage within baseline |
-| 4 | Heavy workload (~3GB allocation + CPU burn) | Usage exceeds baseline — burst billing applies |
-| 5 | Poll metrics every 3s for 50s | total_mb never changes; used_mb shows actual consumption |
-| 6 | Release memory | Usage drops back to baseline |
-| 7 | Report: burst duration, peak usage, cost implications | Documents billing model |
-
-**Results (1GB baseline):**
-
-| Metric | Value |
-|--------|-------|
-| psutil total_mb | Always 3999 MB (4× baseline) |
-| Peak used_mb | 3643 MB (97% of visible 4GB) |
-| Peak CPU % | 100% sustained (2 cores) |
-| Burst duration | ~36 seconds above baseline |
+All tests use `X-Session-Id` header only — no VM IDs or endpoints referenced.
 
 ---
 

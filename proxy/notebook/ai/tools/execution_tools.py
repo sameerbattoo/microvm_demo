@@ -40,13 +40,11 @@ def _get_context() -> dict:
 
 
 def _get_headers() -> dict:
-    """Build headers for MicroVM proxy requests."""
+    """Build headers for MicroVM proxy requests using session_id."""
     ctx = _get_context()
     headers = {"Content-Type": "application/json"}
-    if ctx.get("microvm_id"):
-        headers["X-MicroVM-Id"] = ctx["microvm_id"]
-    if ctx.get("microvm_endpoint"):
-        headers["X-MicroVM-Endpoint"] = ctx["microvm_endpoint"]
+    if ctx.get("session_id"):
+        headers["X-Session-Id"] = ctx["session_id"]
     return headers
 
 

@@ -42,6 +42,11 @@ async def install_package(request: Request):
 
     logger.info(f"📦 Installing package: {package}")
     result = executor.install_package(package)
+
+    # Track the installed package for checkpoint
+    if result.success:
+        request.app.state.checkpoint_manager.record_package_install(package)
+
     return {"success": result.success, "output": result.output, "error": result.error}
 
 

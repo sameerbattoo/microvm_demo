@@ -5,10 +5,9 @@ Part of: proxy.platform (Smart MicroVM Service layer)
 
 Endpoints:
   POST      /launch                       - Launch a new MicroVM
-  POST      /terminate/{id}               - Terminate a MicroVM
-  POST      /suspend/{id}                 - Suspend a running MicroVM
-  POST      /resume/{id}                  - Resume a suspended MicroVM
-  POST      /terminate-timer/cancel/{id}  - Cancel pre-termination timer
+  POST      /terminate                    - Terminate (X-Session-Id header)
+  POST      /suspend                      - Suspend (X-Session-Id header)
+  POST      /resume                       - Resume (X-Session-Id header)
   GET       /instances                    - List all active MicroVMs with state
   GET       /instances/metrics            - Get live metrics for a specific VM
   ANY       /proxy/{path}                 - Proxy requests to a MicroVM with auth
@@ -37,18 +36,60 @@ router = APIRouter(tags=["microvm"])
 
 @router.api_route("/proxy/{path:path}", methods=["GET", "POST", "PUT", "DELETE"])
 async def proxy_request(path: str, request: Request):
-    """Proxy a request to the MicroVM with auth token injected."""
-    vm_manager = request.app.state.vm_manager
-    microvm_id = request.headers.get("X-MicroVM-Id")
-    microvm_endpoint = request.headers.get("X-MicroVM-Endpoint")
+    """
+    Proxy requests to the MicroVM serving a session.
 
-    if not microvm_id or not microvm_endpoint:
+    The caller sends only `X-Session-Id` — the proxy resolves the current VM
+    endpoint internally from the session registry. This is stable across
+    VM rotations (eternal mode) and works identically in checkpoint mode.
+
+    If the session is mid-rotation (quiesced), requests are queued and replayed
+    on the new VM after the swap completes.
+    """
+    vm_manager = request.app.state.vm_manager
+    session_id = request.headers.get("X-Session-Id")
+
+    if not session_id:
         return Response(
-            content='{"error": "X-MicroVM-Id and X-MicroVM-Endpoint headers required"}',
+            content='{"error": "X-Session-Id header required"}',
             status_code=400,
             media_type="application/json",
         )
 
+    # --- Resolve session → VM from the session registry ---
+    session_vm = vm_manager.get_session_vm(session_id)
+    if not session_vm:
+        return Response(
+            content='{"error": "Session not found — VM may have been terminated"}',
+            status_code=404,
+            media_type="application/json",
+        )
+
+    microvm_id = session_vm["vm_id"]
+    microvm_endpoint = session_vm["endpoint"]
+
+    # --- Check if session is quiesced (rotation in progress) ---
+    if vm_manager.session_rotator.is_quiesced(session_id):
+        future = asyncio.get_event_loop().create_future()
+        body = await request.body()
+        request_data = {
+            "method": request.method,
+            "path": f"/{path}",
+            "headers": {"Content-Type": request.headers.get("Content-Type", "application/json")},
+            "body": body,
+        }
+        vm_manager.session_rotator.queue_request(session_id, request_data, future)
+        try:
+            response = await asyncio.wait_for(asyncio.wrap_future(future), timeout=30)
+            return Response(
+                content=response.content,
+                status_code=response.status_code,
+                media_type=response.headers.get("content-type", "application/json"),
+            )
+        except asyncio.TimeoutError:
+            return Response(content='{"error": "Request timed out during VM rotation"}', status_code=503, media_type="application/json")
+
+    # --- Get auth token and forward the request ---
     try:
         token = vm_manager.get_auth_token(microvm_id)
     except Exception as e:
@@ -86,10 +127,9 @@ async def proxy_request(path: str, request: Request):
 
             # Track health: consecutive failures
             if response.status_code >= 502:
-                health = vm_manager.active_microvms.get(microvm_id, {})
-                strikes = health.get("_502_strikes", 0) + 1
                 if microvm_id in vm_manager.active_microvms:
-                    vm_manager.active_microvms[microvm_id]["_502_strikes"] = strikes
+                    vm_manager.active_microvms[microvm_id]["_502_strikes"] = \
+                        vm_manager.active_microvms[microvm_id].get("_502_strikes", 0) + 1
             else:
                 if microvm_id in vm_manager.active_microvms:
                     vm_manager.active_microvms[microvm_id]["_502_strikes"] = 0
@@ -121,12 +161,15 @@ async def launch_microvm(request: Request):
     body = await request.json() if await request.body() else {}
     notebook_name = body.get("name", f"notebook-{int(time.time())}")
     memory_mib = body.get("memoryMiB", 4096)
-    valid_memories = [512, 1024, 2048, 4096, 8192]
+    # Valid memory tiers from config (IMAGE_SIZES env var)
+    valid_memories = [int(s) for s in os.environ.get("IMAGE_SIZES", "1024 2048 4096 8192").split()]
     if memory_mib not in valid_memories:
         memory_mib = min(valid_memories, key=lambda x: abs(x - memory_mib))
     idle_timeout_sec = body.get("idleTimeoutSeconds", 1800)
-    max_duration_sec = body.get("maxDurationSeconds", 28800)
-    checkpoint_enabled = body.get("checkpointEnabled", False)
+    # Max lifetime is controlled by config (not frontend) — enables transparent rotation
+    max_duration_sec = int(os.environ.get("MAX_LIFETIME_SECONDS", "28800"))
+    # Checkpoint is always enabled — rotation logic depends on it
+    checkpoint_enabled = True
     restore_from = body.get("restoreFromSession")
     session_id = body.get("sessionId", f"{notebook_name}-{int(time.time())}")
 
@@ -138,6 +181,7 @@ async def launch_microvm(request: Request):
             media_type="application/json",
         )
 
+    persistence_mode = os.environ.get("SESSION_PERSISTENCE_MODE", "eternal")
     logger.info(f"Launching MicroVM for: {notebook_name} (memory: {memory_mib} MiB, image: {image_arn})")
 
     try:
@@ -156,6 +200,7 @@ async def launch_microvm(request: Request):
                 "notebook_name": notebook_name,
                 "session_id": session_id,
                 "checkpoint_enabled": checkpoint_enabled,
+                "persistence_mode": persistence_mode,
                 "restore_from": restore_from,
                 "artifacts_bucket": vm_manager.get_artifacts_bucket(),
             }),
@@ -174,6 +219,7 @@ async def launch_microvm(request: Request):
             "memory_mib": memory_mib,
             "idle_timeout_sec": idle_timeout_sec,
             "max_duration_sec": max_duration_sec,
+            "session_id": session_id,
             "_502_strikes": 0,
         }
         vm_manager.cost_tracker.record(microvm_id, "RUNNING", memory_mib=memory_mib)
@@ -191,8 +237,28 @@ async def launch_microvm(request: Request):
 
         logger.info(f"MicroVM launched: {microvm_id} at {endpoint}")
 
-        if checkpoint_enabled and max_duration_sec:
-            vm_manager.schedule_pre_terminate(microvm_id, max_duration_sec)
+        # Register session → VM mapping (the single source of truth for routing)
+        vm_manager.register_session(session_id, microvm_id, endpoint)
+
+        # Mode-dependent lifecycle registration
+        if persistence_mode == "eternal" and session_id:
+            # Eternal mode: register with rotator for seamless VM swap
+            vm_manager.session_rotator.register(
+                session_id=session_id,
+                vm_id=microvm_id,
+                endpoint=endpoint,
+                memory_mib=memory_mib,
+                image_arn=image_arn,
+                idle_timeout_sec=idle_timeout_sec,
+                notebook_name=notebook_name,
+                max_lifetime=max_duration_sec,
+            )
+            # Also schedule pre-terminate resume (safety net if rotator fails)
+            vm_manager.schedule_pre_terminate(microvm_id, max_duration_sec, idle_timeout_sec)
+        elif persistence_mode == "checkpoint" and session_id:
+            # Checkpoint mode: rely on AWS /terminate hook to save state.
+            # No pre-checkpoint timer — ensures the LATEST state is always saved.
+            logger.info(f"Checkpoint mode: session {session_id} will save on terminate hook")
 
         # Poll until running (max 60s)
         for _ in range(12):
@@ -219,51 +285,88 @@ async def launch_microvm(request: Request):
         )
 
 
-@router.post("/terminate/{microvm_id}")
-async def terminate_microvm(microvm_id: str, request: Request):
-    """Terminate a MicroVM instance."""
+@router.post("/terminate")
+async def terminate_session(request: Request):
+    """Terminate the VM serving a session."""
     vm_manager = request.app.state.vm_manager
+    session_id = request.headers.get("X-Session-Id")
+    if not session_id:
+        return Response(content='{"error": "X-Session-Id header required"}', status_code=400, media_type="application/json")
+
+    session_vm = vm_manager.get_session_vm(session_id)
+    if not session_vm:
+        return Response(content='{"error": "Session not found"}', status_code=404, media_type="application/json")
+
+    microvm_id = session_vm["vm_id"]
     try:
         vm_manager.cancel_pre_terminate(microvm_id)
+        vm_manager.session_rotator.unregister(session_id)
+        vm_manager.unregister_session(session_id)
+
         client = vm_manager.get_lambda_client()
         client.terminate_microvm(microvmIdentifier=microvm_id)
         vm_manager.active_microvms.pop(microvm_id, None)
         vm_manager.token_cache.pop(microvm_id)
-        logger.info(f"MicroVM terminated: {microvm_id}")
-        return {"status": "terminated", "microvmId": microvm_id}
+        logger.info(f"MicroVM terminated: {microvm_id} (session={session_id})")
+        return {"status": "terminated", "microvmId": microvm_id, "sessionId": session_id}
     except Exception as e:
         logger.error(f"Failed to terminate: {e}")
-        return Response(
-            content=f'{{"error": "Terminate failed: {str(e)}"}}',
-            status_code=502,
-            media_type="application/json",
-        )
+        return Response(content=f'{{"error": "Terminate failed: {str(e)}"}}', status_code=502, media_type="application/json")
 
 
-@router.post("/suspend/{microvm_id}")
-async def suspend_microvm(microvm_id: str, request: Request):
-    """Suspend a running MicroVM instance."""
+@router.post("/suspend")
+async def suspend_session(request: Request):
+    """Suspend the VM serving a session."""
     vm_manager = request.app.state.vm_manager
+    session_id = request.headers.get("X-Session-Id")
+    if not session_id:
+        return Response(content='{"error": "X-Session-Id header required"}', status_code=400, media_type="application/json")
+
+    session_vm = vm_manager.get_session_vm(session_id)
+    if not session_vm:
+        return Response(content='{"error": "Session not found"}', status_code=404, media_type="application/json")
+
+    microvm_id = session_vm["vm_id"]
     try:
         client = vm_manager.get_lambda_client()
         client.suspend_microvm(microvmIdentifier=microvm_id)
-        logger.info(f"MicroVM suspend requested: {microvm_id}")
-        return {"status": "suspended", "microvmId": microvm_id}
+        logger.info(f"MicroVM suspend requested: {microvm_id} (session={session_id})")
+        return {"status": "suspended", "microvmId": microvm_id, "sessionId": session_id}
     except Exception as e:
         logger.error(f"Failed to suspend: {e}")
-        return Response(
-            content=f'{{"error": "Suspend failed: {str(e)}"}}',
-            status_code=502,
-            media_type="application/json",
-        )
+        return Response(content=f'{{"error": "Suspend failed: {str(e)}"}}', status_code=502, media_type="application/json")
 
 
-@router.post("/terminate-timer/cancel/{microvm_id}")
-async def cancel_terminate_timer(microvm_id: str, request: Request):
-    """Cancel the pre-termination timer for a VM."""
+@router.post("/resume")
+async def resume_session(request: Request):
+    """Resume the suspended VM serving a session."""
     vm_manager = request.app.state.vm_manager
-    vm_manager.cancel_pre_terminate(microvm_id)
-    return {"status": "cancelled", "microvmId": microvm_id}
+    session_id = request.headers.get("X-Session-Id")
+    if not session_id:
+        return Response(content='{"error": "X-Session-Id header required"}', status_code=400, media_type="application/json")
+
+    session_vm = vm_manager.get_session_vm(session_id)
+    if not session_vm:
+        return Response(content='{"error": "Session not found"}', status_code=404, media_type="application/json")
+
+    microvm_id = session_vm["vm_id"]
+    try:
+        client = vm_manager.get_lambda_client()
+        client.resume_microvm(microvmIdentifier=microvm_id)
+        logger.info(f"MicroVM resume requested: {microvm_id} (session={session_id})")
+
+        for _ in range(6):
+            await asyncio.sleep(5)
+            state_resp = client.get_microvm(microvmIdentifier=microvm_id)
+            state = state_resp.get("state", "PENDING")
+            if state == "RUNNING":
+                return {"status": "running", "microvmId": microvm_id, "sessionId": session_id}
+
+        return {"status": "resuming", "microvmId": microvm_id, "sessionId": session_id}
+    except Exception as e:
+        logger.error(f"Failed to resume: {e}")
+        return Response(content=f'{{"error": "Resume failed: {str(e)}"}}', status_code=502, media_type="application/json")
+
 
 
 @router.get("/instances")
@@ -321,9 +424,18 @@ async def list_instances(request: Request):
                 "state": state,
                 "launched_at": (db_session or {}).get("launched_at") or local_info.get("launched_at"),
                 "memory_mib": memory_mib,
+                "session_id": local_info.get("session_id") or (db_session or {}).get("session_id") if not local_info.get("_rotation_pending") else None,
                 "idle_timeout_sec": local_info.get("idle_timeout_sec") or (db_session or {}).get("idle_timeout_sec"),
                 "max_duration_sec": local_info.get("max_duration_sec") or (db_session or {}).get("max_duration_sec"),
                 "cost": vm_manager.cost_tracker.get_cost(microvm_id),
+                "session_cost": vm_manager.cost_tracker.get_session_cost(
+                    vm_manager.session_rotator.get_session_vm_history(
+                        local_info.get("session_id") or (db_session or {}).get("session_id") or ""
+                    )
+                ) if not local_info.get("_rotation_pending") else None,
+                "rotation_count": getattr(vm_manager.session_rotator._sessions.get(
+                    local_info.get("session_id") or (db_session or {}).get("session_id") or ""
+                ), 'rotation_count', 0),
                 "unhealthy": local_info.get("_502_strikes", 0) >= 3,
             }
             vm_manager.cost_tracker.record(microvm_id, state, memory_mib=memory_mib)
@@ -331,8 +443,9 @@ async def list_instances(request: Request):
             vm_manager.cost_tracker.persist_cost(microvm_id, storage)
 
         # Include recently launched VMs not yet in AWS API response
+        # (exclude VMs mid-rotation that haven't completed swap yet)
         for microvm_id, local_info in list(vm_manager.active_microvms.items()):
-            if microvm_id not in instances:
+            if microvm_id not in instances and not local_info.get("_rotation_pending"):
                 launched_at = local_info.get("launched_at", 0)
                 if time.time() - launched_at <= 60:
                     memory_mib = local_info.get("memory_mib", 4096)
@@ -342,6 +455,7 @@ async def list_instances(request: Request):
                         "state": "RUNNING",
                         "launched_at": launched_at,
                         "memory_mib": memory_mib,
+                        "session_id": local_info.get("session_id"),
                         "idle_timeout_sec": local_info.get("idle_timeout_sec"),
                         "max_duration_sec": local_info.get("max_duration_sec"),
                         "cost": vm_manager.cost_tracker.get_cost(microvm_id),
@@ -358,10 +472,26 @@ async def list_instances(request: Request):
         except Exception:
             pass
 
-        return {"instances": instances, "total_cost": vm_manager.cost_tracker.get_total_cost()}
+        return {
+            "instances": instances,
+            "total_cost": vm_manager.cost_tracker.get_total_cost(),
+            "persistence_mode": os.environ.get("SESSION_PERSISTENCE_MODE", "eternal"),
+        }
     except Exception as e:
         logger.error(f"Failed to list instances: {e}")
-        return {"instances": vm_manager.active_microvms, "total_cost": vm_manager.cost_tracker.get_total_cost()}
+        return {
+            "instances": vm_manager.active_microvms,
+            "total_cost": vm_manager.cost_tracker.get_total_cost(),
+            "persistence_mode": os.environ.get("SESSION_PERSISTENCE_MODE", "eternal"),
+        }
+
+
+@router.get("/rotation-history/{session_id}")
+async def get_rotation_history(session_id: str, request: Request):
+    """Get step-by-step timing for all rotations of a session."""
+    vm_manager = request.app.state.vm_manager
+    history = vm_manager.session_rotator.get_rotation_history(session_id)
+    return {"session_id": session_id, "rotations": history, "count": len(history)}
 
 
 @router.get("/instances/metrics")
@@ -429,27 +559,4 @@ async def get_instance_metrics(microvm_id: str = None, request: Request = None):
     return {"metrics": {}}
 
 
-@router.post("/resume/{microvm_id}")
-async def resume_microvm(microvm_id: str, request: Request):
-    """Resume a suspended MicroVM."""
-    vm_manager = request.app.state.vm_manager
-    try:
-        client = vm_manager.get_lambda_client()
-        client.resume_microvm(microvmIdentifier=microvm_id)
-        logger.info(f"MicroVM resume requested: {microvm_id}")
 
-        for _ in range(6):
-            await asyncio.sleep(5)
-            state_resp = client.get_microvm(microvmIdentifier=microvm_id)
-            state = state_resp.get("state", "PENDING")
-            if state == "RUNNING":
-                return {"status": "running", "microvmId": microvm_id}
-
-        return {"status": "resuming", "microvmId": microvm_id}
-    except Exception as e:
-        logger.error(f"Failed to resume: {e}")
-        return Response(
-            content=f'{{"error": "Resume failed: {str(e)}"}}',
-            status_code=502,
-            media_type="application/json",
-        )

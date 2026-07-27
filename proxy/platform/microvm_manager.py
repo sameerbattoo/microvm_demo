@@ -18,6 +18,7 @@ import os
 import time
 import asyncio
 import logging
+import httpx
 from collections import OrderedDict
 from datetime import datetime, timezone
 
@@ -92,6 +93,33 @@ class MicrovmManager:
         self._artifacts_bucket: str | None = os.environ.get("ARTIFACT_BUCKET")
         self._pre_terminate_timers: dict[str, asyncio.Task] = {}
 
+        # Session rotator — manages automatic VM rotation before max-lifetime
+        from proxy.platform.session_rotator import SessionRotator
+        self.session_rotator = SessionRotator(self)
+
+        # Session registry — maps session_id → current VM info
+        # This is the single source of truth for "which VM serves this session?"
+        # Updated on launch, rotation swap, and terminate.
+        self._session_registry: dict[str, dict] = {}  # session_id → {vm_id, endpoint}
+
+    # ============================================================
+    # SESSION REGISTRY
+    # ============================================================
+
+    def register_session(self, session_id: str, vm_id: str, endpoint: str):
+        """Register or update a session → VM mapping."""
+        self._session_registry[session_id] = {"vm_id": vm_id, "endpoint": endpoint}
+        logger.info(f"Session registered: {session_id} → {vm_id}")
+
+    def unregister_session(self, session_id: str):
+        """Remove a session from the registry (VM terminated, no rotation)."""
+        self._session_registry.pop(session_id, None)
+        logger.info(f"Session unregistered: {session_id}")
+
+    def get_session_vm(self, session_id: str) -> dict | None:
+        """Look up the current VM for a session. Returns {vm_id, endpoint} or None."""
+        return self._session_registry.get(session_id)
+
     # ============================================================
     # AWS CLIENT
     # ============================================================
@@ -144,6 +172,76 @@ class MicrovmManager:
         return None
 
     # ============================================================
+    # VM ROTATION HELPERS
+    # ============================================================
+
+    def launch_for_rotation(self, image_arn: str, memory_mib: int, idle_timeout_sec: int, notebook_name: str, session_id: str) -> tuple:
+        """
+        Launch a bare VM for rotation (no restore payload — state applied separately).
+        Uses the same API params as the main launch to ensure identical config.
+        Returns (microvm_id, endpoint).
+        """
+        import json
+
+        client = self.get_lambda_client()
+        bucket = self.get_artifacts_bucket()
+        max_duration_sec = int(os.environ.get("MAX_LIFETIME_SECONDS", "28800"))
+
+        run_payload = json.dumps({
+            "notebook_name": notebook_name,
+            "session_id": session_id,
+            "checkpoint_enabled": True,
+            "persistence_mode": "eternal",
+            "artifacts_bucket": bucket,
+        })
+
+        params = {
+            "imageIdentifier": image_arn,
+            "ingressNetworkConnectors": [INGRESS_CONNECTOR],
+            "egressNetworkConnectors": [EGRESS_CONNECTOR],
+            "idlePolicy": {
+                "autoResumeEnabled": True,
+                "maxIdleDurationSeconds": idle_timeout_sec,
+                "suspendedDurationSeconds": max_duration_sec,
+            },
+            "maximumDurationInSeconds": max_duration_sec,
+            "runHookPayload": run_payload,
+        }
+
+        if EXEC_ROLE_ARN:
+            params["executionRoleArn"] = EXEC_ROLE_ARN
+
+        resp = client.run_microvm(**params)
+        vm_id = resp["microvmId"]
+        endpoint = resp["endpoint"]
+
+        # Track locally — no session_id yet (assigned after swap completes)
+        self.active_microvms[vm_id] = {
+            "endpoint": endpoint,
+            "name": notebook_name,
+            "launched_at": time.time(),
+            "memory_mib": memory_mib,
+            "idle_timeout_sec": idle_timeout_sec,
+            "max_duration_sec": max_duration_sec,
+            "_rotation_pending": True,  # Internal flag: not yet serving traffic
+            "_502_strikes": 0,
+        }
+
+        logger.info(f"🔄 Rotation: launched bare VM {vm_id} at {endpoint}")
+        return vm_id, endpoint
+
+    def terminate(self, microvm_id: str):
+        """Terminate a MicroVM via the AWS API."""
+        try:
+            client = self.get_lambda_client()
+            client.terminate_microvm(microvmIdentifier=microvm_id)
+            self.active_microvms.pop(microvm_id, None)
+            self.cancel_pre_terminate(microvm_id)
+            logger.info(f"Terminated VM: {microvm_id}")
+        except Exception as e:
+            logger.warning(f"Terminate failed for {microvm_id}: {e}")
+
+    # ============================================================
     # PRE-TERMINATION WAKE TIMERS
     # ============================================================
     # WORKAROUND: AWS Lambda MicroVMs does NOT fire the /terminate lifecycle hook
@@ -173,11 +271,16 @@ class MicrovmManager:
         finally:
             self._pre_terminate_timers.pop(microvm_id, None)
 
-    def schedule_pre_terminate(self, microvm_id: str, max_duration_sec: int):
-        """Schedule a resume 30s before max_duration expires."""
+    def schedule_pre_terminate(self, microvm_id: str, max_duration_sec: int, idle_timeout_sec: int = 60):
+        """
+        Schedule a resume before max_duration expires — safety net so /terminate hook fires.
+        Wakes the VM (idle_timeout - 10s) before max lifetime, ensuring it stays RUNNING
+        (won't have time to re-suspend before AWS kills it).
+        """
         self.cancel_pre_terminate(microvm_id)  # Cancel existing timer if any (dedup)
-        buffer = 30
-        delay = max(max_duration_sec - buffer, 10)
+        # Wake the VM close enough to max_lifetime that it can't re-suspend
+        wake_before = max(idle_timeout_sec - 10, 15)  # At least 15s buffer
+        delay = max(max_duration_sec - wake_before, 10)
         task = asyncio.create_task(self._pre_terminate_vm(microvm_id, delay))
         self._pre_terminate_timers[microvm_id] = task
         logger.info(f"⏰ Pre-termination wake timer set for {microvm_id}: resumes in {int(delay)}s ({int(delay//60)}m)")

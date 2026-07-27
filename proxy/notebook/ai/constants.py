@@ -19,7 +19,7 @@ AGENT_MAX_TOKENS = 4096          # Max tokens for agent responses
 TAG_TEMPERATURE = 0.0            # Zero temperature for tag suggestion (single-word answers)
 TAG_MAX_TOKENS = 10              # Very short response for tag suggestions
 EXPLAIN_MAX_TOKENS = 512         # Explanation should be concise
-FIX_MAX_TOKENS = 2048            # Enough for a full cell of corrected code
+FIX_MAX_TOKENS = 4096            # Must be large enough for full cell replacement (long cells with charts)
 
 # ============================================================
 # CONTEXT TRUNCATION LIMITS

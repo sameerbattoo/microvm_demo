@@ -3,11 +3,21 @@ SQL execution engine with intelligent auto-routing.
 
 Part of: app.notebook (application layer)
 
-Transparently routes SQL queries to the appropriate engine:
-- DuckDB: local DataFrames, files (/tmp/), S3 via httpfs
-- Athena: tables detected in the Glue catalog (database.table format)
-- DynamoDB: tables referenced as dynamodb."table-name" (PartiQL first, scan fallback)
-- Mixed: materializes remote tables into DataFrames, then DuckDB handles the full query
+Transparently routes SQL queries to the appropriate engine based on
+unambiguous source detection:
+
+Source Detection Rules (each source type has a unique syntax pattern):
+  - LOCAL_FILE:  FROM '/tmp/file.csv'           — quoted path with extension
+  - S3_FILE:     FROM read_csv('s3://...')       — read_* function with s3:// URL
+  - ATHENA:      FROM database.table_name       — dot-separated, matches Glue catalog
+  - DYNAMODB:    FROM dynamodb."table-name"     — explicit dynamodb. prefix
+  - DATAFRAME:   FROM variable_name             — bare name matching namespace DataFrame
+
+Routing Logic:
+  - All sources are DuckDB-compatible (local, S3, DataFrame) → Pure DuckDB
+  - All sources are Athena tables                             → Pure Athena (send SQL as-is)
+  - Single DynamoDB table (simple query)                     → PartiQL (server-side)
+  - Mixed (any remote + any local)                           → Materialize remote → DuckDB
 
 Endpoint:
   POST /execute-sql - Execute SQL with auto-routing
@@ -15,7 +25,10 @@ Endpoint:
 
 import os
 import re
+import time as _time
 import logging
+from enum import Enum
+from dataclasses import dataclass
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
@@ -24,6 +37,159 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["sql-engine"])
 
+
+# ─── Source Classification ────────────────────────────────────────────────────
+
+class SourceType(Enum):
+    LOCAL_FILE = "local_file"      # '/tmp/file.csv' — DuckDB handles directly
+    S3_FILE = "s3_file"            # read_csv('s3://...') — DuckDB handles via httpfs
+    ATHENA = "athena"              # database.table — needs Athena or materialization
+    DYNAMODB = "dynamodb"          # dynamodb."table" — needs PartiQL or scan
+    DATAFRAME = "dataframe"        # bare variable name — DuckDB handles directly
+
+
+@dataclass
+class SourceRef:
+    """A detected source reference in the SQL."""
+    source_type: SourceType
+    full_ref: str       # As it appears in the SQL (for rewriting)
+    table_name: str     # Bare table/file name (for materialization aliases)
+
+
+# ─── Glue Catalog Cache ──────────────────────────────────────────────────────
+
+_glue_cache: dict = {}       # { "database": {"table1", "table2", ...} }
+_glue_cache_ts: float = 0    # Unix timestamp of last fetch
+GLUE_CACHE_TTL = 300         # 5 minutes
+
+
+def _get_athena_catalog(athena_db: str, aws_region: str) -> set[str]:
+    """
+    Get table names from the Glue catalog (cached with 5-min TTL).
+    Returns a set of bare table names for the given database.
+    """
+    global _glue_cache, _glue_cache_ts
+    import boto3
+
+    now = _time.time()
+    if athena_db in _glue_cache and (now - _glue_cache_ts) < GLUE_CACHE_TTL:
+        return _glue_cache[athena_db]
+
+    try:
+        glue = boto3.client("glue", region_name=aws_region)
+        tables = set()
+        paginator = glue.get_paginator("get_tables")
+        for page in paginator.paginate(DatabaseName=athena_db):
+            for t in page.get("TableList", []):
+                tables.add(t["Name"])
+        _glue_cache[athena_db] = tables
+        _glue_cache_ts = now
+        logger.info(f"Glue catalog refreshed: {athena_db} ({len(tables)} tables)")
+        return tables
+    except Exception as e:
+        logger.warning(f"Could not fetch Athena catalog: {e}")
+        return _glue_cache.get(athena_db, set())
+
+
+# ─── Source Detection ─────────────────────────────────────────────────────────
+
+def _classify_sources(sql: str, athena_db: str, athena_tables: set[str], namespace_dataframes: set[str]) -> list[SourceRef]:
+    """
+    Parse the SQL and classify every FROM/JOIN source into its type.
+
+    Detection is deterministic because each source type has a unique syntax:
+      - Local file:  quoted path '/tmp/...' with file extension
+      - S3 file:     read_csv/read_json/read_parquet('s3://...')
+      - DynamoDB:    dynamodb."table-name" or dynamodb.table_name
+      - Athena:      database.table (dot-separated, matches Glue catalog)
+      - DataFrame:   bare identifier matching a namespace DataFrame
+    """
+    sources: list[SourceRef] = []
+
+    # 1. Detect S3 files: read_csv('s3://...'), read_json('s3://...'), read_parquet('s3://...')
+    s3_pattern = re.compile(
+        r'\bread_(csv|json|parquet)\s*\(\s*[\'"]s3://[^\'"]+[\'"]\s*\)',
+        re.IGNORECASE
+    )
+    for m in s3_pattern.finditer(sql):
+        sources.append(SourceRef(
+            source_type=SourceType.S3_FILE,
+            full_ref=m.group(0),
+            table_name=m.group(0),  # DuckDB handles the full expression
+        ))
+
+    # 2. Detect local files: '/tmp/file.ext'
+    local_file_pattern = re.compile(
+        r"(?:FROM|JOIN)\s+['\"](/tmp/[^'\"]+)['\"]",
+        re.IGNORECASE
+    )
+    for m in local_file_pattern.finditer(sql):
+        sources.append(SourceRef(
+            source_type=SourceType.LOCAL_FILE,
+            full_ref=f"'{m.group(1)}'",
+            table_name=os.path.basename(m.group(1)),
+        ))
+
+    # 3. Detect DynamoDB: dynamodb."table-name" or dynamodb.table_name
+    dynamo_pattern = re.compile(
+        r'(?:FROM|JOIN)\s+(dynamodb\.(?:"[^"]+"|[a-zA-Z_][\w\-]*))',
+        re.IGNORECASE
+    )
+    for m in dynamo_pattern.finditer(sql):
+        full_ref = m.group(1)
+        name_part = full_ref.split('.', 1)[1]
+        table_name = name_part.strip('"')
+        sources.append(SourceRef(
+            source_type=SourceType.DYNAMODB,
+            full_ref=full_ref,
+            table_name=table_name,
+        ))
+
+    # 4. Detect Athena tables: database.table_name (must match Glue catalog)
+    athena_pattern = re.compile(
+        r'(?:FROM|JOIN)\s+(' + re.escape(athena_db) + r'\.([a-zA-Z_]\w*))',
+        re.IGNORECASE
+    )
+    for m in athena_pattern.finditer(sql):
+        full_ref = m.group(1)   # e.g. "microvm_demo_db.sales_data"
+        bare_name = m.group(2)  # e.g. "sales_data"
+        if bare_name in athena_tables:
+            sources.append(SourceRef(
+                source_type=SourceType.ATHENA,
+                full_ref=full_ref,
+                table_name=bare_name,
+            ))
+
+    # 5. Detect DataFrames: bare identifier after FROM/JOIN (not already classified)
+    # Excludes: paths, function calls, dynamodb., database.table
+    bare_ref_pattern = re.compile(
+        r'(?:FROM|JOIN)\s+([a-zA-Z_]\w*)\b'
+        r'(?!\s*\()'           # Not followed by ( → not a function call
+        r'(?!\s*\.)',          # Not followed by . → not database.table
+        re.IGNORECASE
+    )
+    already_classified = {s.full_ref.lower() for s in sources}
+    for m in bare_ref_pattern.finditer(sql):
+        ref = m.group(1)
+        # Skip SQL keywords and already-classified refs
+        if ref.lower() in ('select', 'from', 'join', 'where', 'group', 'order', 'having',
+                           'limit', 'offset', 'union', 'intersect', 'except', 'as',
+                           'on', 'and', 'or', 'not', 'in', 'between', 'like',
+                           'dynamodb', 'read_csv', 'read_json', 'read_parquet'):
+            continue
+        if ref.lower() in already_classified:
+            continue
+        if ref in namespace_dataframes:
+            sources.append(SourceRef(
+                source_type=SourceType.DATAFRAME,
+                full_ref=ref,
+                table_name=ref,
+            ))
+
+    return sources
+
+
+# ─── Main Endpoint ────────────────────────────────────────────────────────────
 
 @router.post("/execute-sql")
 async def execute_sql(request: Request):
@@ -36,7 +202,6 @@ async def execute_sql(request: Request):
             "output_variable": "result"  (optional, name for the result DataFrame)
         }
     """
-    import time
     import duckdb
     import pandas as pd
     import boto3
@@ -54,121 +219,99 @@ async def execute_sql(request: Request):
 
     logger.info(f"▶ Executing SQL (len={len(sql)})")
 
-    start = time.perf_counter()
+    start = _time.perf_counter()
     try:
-        # --- Step 1: Discover Athena tables from Glue catalog ---
+        # --- Configuration ---
         athena_db = os.environ.get("ATHENA_DB", "microvm_demo_db")
         athena_workgroup = os.environ.get("ATHENA_WORKGROUP", "microvm-demo")
         aws_region = os.environ.get("AWS_REGION", "us-west-2")
 
-        athena_catalog = {}  # { "database.table": "bare_table_name" }
-        try:
-            glue = boto3.client("glue", region_name=aws_region)
-            resp = glue.get_tables(DatabaseName=athena_db)
-            for t in resp.get("TableList", []):
-                table_name = t["Name"]
-                athena_catalog[f"{athena_db}.{table_name}"] = table_name
-                athena_catalog[table_name] = table_name
-        except Exception as e:
-            logger.warning(f"Could not fetch Athena catalog: {e}")
+        # --- Step 1: Get Athena catalog (cached) ---
+        athena_tables = _get_athena_catalog(athena_db, aws_region)
 
-        # --- Step 2: Parse table references from SQL ---
-        table_pattern = re.compile(
-            r'(?:FROM|JOIN)\s+'
-            r'(?!read_csv|read_parquet|read_json)'
-            r"(?!['\"/])"
-            r'([a-zA-Z_]\w*(?:\.[a-zA-Z_][\w\-]*|(?:\."[^"]+"))?)',
-            re.IGNORECASE
-        )
-        referenced_tables = set(table_pattern.findall(sql))
+        # --- Step 2: Classify all sources in the SQL ---
+        namespace_dataframes = {k for k, v in executor._namespace.items() if isinstance(v, pd.DataFrame)}
+        sources = _classify_sources(sql, athena_db, athena_tables, namespace_dataframes)
 
-        # --- Step 2b: Detect DynamoDB references (dynamodb."table-name") ---
-        dynamo_pattern = re.compile(
-            r'(?:FROM|JOIN)\s+dynamodb\.(?:"([^"]+)"|([a-zA-Z_][\w\-]*))',
-            re.IGNORECASE
-        )
-        dynamo_refs = {}
-        for m in dynamo_pattern.finditer(sql):
-            table_name = m.group(1) or m.group(2)
-            full_ref = m.group(0).split(None, 1)[1]
-            dynamo_refs[full_ref] = table_name
+        # Group by type
+        source_types = {s.source_type for s in sources}
+        athena_sources = [s for s in sources if s.source_type == SourceType.ATHENA]
+        dynamo_sources = [s for s in sources if s.source_type == SourceType.DYNAMODB]
+        duckdb_types = {SourceType.LOCAL_FILE, SourceType.S3_FILE, SourceType.DATAFRAME}
 
-        # --- Step 3: Classify references ---
-        namespace_vars = set(executor._namespace.keys())
-        athena_refs = {}
-        local_refs = set()
-
-        for ref in referenced_tables:
-            if ref.lower().startswith('dynamodb.'):
-                continue
-            if ref in athena_catalog:
-                athena_refs[ref] = athena_catalog[ref]
-            elif ref in namespace_vars:
-                local_refs.add(ref)
-
-        # --- Step 4: Route execution ---
+        # --- Step 3: Route execution ---
         engine_used = "duckdb"
-        has_local_sources = bool(re.search(r"'/tmp/|read_csv\(|read_json\(|read_parquet\(|'s3://", sql, re.IGNORECASE))
-        has_dynamo = bool(dynamo_refs)
+        result_df = None
 
-        if athena_refs and not local_refs and not has_local_sources and not has_dynamo and not any(r in namespace_vars for r in referenced_tables - set(athena_refs.keys())):
-            # Pure Athena
+        if source_types <= duckdb_types or len(sources) == 0:
+            # Pure DuckDB: all sources are local files, S3 files, or DataFrames
+            engine_used = "duckdb"
+            result_df = _run_duckdb_query(sql, executor)
+
+        elif source_types == {SourceType.ATHENA}:
+            # Pure Athena: all sources are Athena tables, send SQL directly
             engine_used = "athena"
             result_df = await _run_athena_query(sql, athena_workgroup, aws_region)
-        elif athena_refs or has_dynamo:
-            # Mixed — materialize remote tables, then DuckDB
-            engine_used = "duckdb+athena" if athena_refs else "duckdb+dynamodb"
-            if athena_refs and has_dynamo:
-                engine_used = "duckdb+athena+dynamodb"
+
+        elif source_types == {SourceType.DYNAMODB} and len(dynamo_sources) == 1:
+            # Single DynamoDB table — try PartiQL first
+            table_name = dynamo_sources[0].table_name
+            full_ref = dynamo_sources[0].full_ref
+            partiql_sql = sql.replace(full_ref, f'"{table_name}"')
+
+            partiql_result = _try_partiql(partiql_sql, table_name, aws_region)
+            if partiql_result is not None:
+                engine_used = "dynamodb-partiql"
+                result_df = partiql_result
+            else:
+                # Fallback: scan table into DataFrame, then DuckDB
+                engine_used = "duckdb+dynamodb"
+                dynamo_limit = None
+                limit_match = re.search(r'\bLIMIT\s+(\d+)\s*$', sql, re.IGNORECASE)
+                if limit_match:
+                    dynamo_limit = int(limit_match.group(1))
+                safe_alias = f"_dynamo_{table_name.replace('-', '_')}"
+                materialized = {safe_alias: _scan_dynamodb_table(table_name, aws_region, limit=dynamo_limit)}
+                rewritten_sql = sql.replace(full_ref, safe_alias)
+                result_df = _run_duckdb_query(rewritten_sql, executor, materialized)
+
+        else:
+            # Mixed sources — materialize remote tables (Athena, DynamoDB) into DataFrames, then DuckDB
+            engine_parts = []
             materialized = {}
             rewritten_sql = sql
 
             # Materialize Athena tables
-            for ref, bare_name in athena_refs.items():
-                athena_sql = f"SELECT * FROM {athena_db}.{bare_name}"
-                safe_alias = f"_athena_{bare_name}"
-                materialized[safe_alias] = await _run_athena_query(athena_sql, athena_workgroup, aws_region)
-                rewritten_sql = re.sub(r'\b' + re.escape(ref) + r'\b', safe_alias, rewritten_sql)
+            if athena_sources:
+                engine_parts.append("athena")
+                for src in athena_sources:
+                    athena_sql = f"SELECT * FROM {athena_db}.{src.table_name}"
+                    safe_alias = f"_athena_{src.table_name}"
+                    materialized[safe_alias] = await _run_athena_query(athena_sql, athena_workgroup, aws_region)
+                    rewritten_sql = re.sub(r'\b' + re.escape(src.full_ref) + r'\b', safe_alias, rewritten_sql)
 
-            # Materialize DynamoDB tables (PartiQL first, scan fallback)
-            for ref, table_name in dynamo_refs.items():
-                safe_alias = f"_dynamo_{table_name.replace('-', '_')}"
+            # Materialize DynamoDB tables
+            if dynamo_sources:
+                engine_parts.append("dynamodb")
+                for src in dynamo_sources:
+                    safe_alias = f"_dynamo_{src.table_name.replace('-', '_')}"
+                    dynamo_limit = None
+                    if len(dynamo_sources) == 1 and not athena_sources:
+                        limit_match = re.search(r'\bLIMIT\s+(\d+)\s*$', sql, re.IGNORECASE)
+                        if limit_match:
+                            dynamo_limit = int(limit_match.group(1))
+                    materialized[safe_alias] = _scan_dynamodb_table(src.table_name, aws_region, limit=dynamo_limit)
+                    rewritten_sql = rewritten_sql.replace(src.full_ref, safe_alias)
 
-                # Try PartiQL for pure single-DynamoDB queries
-                logger.info(f"🔶 DynamoDB routing: dynamo_refs={len(dynamo_refs)}, athena_refs={bool(athena_refs)}, local_refs={local_refs}, has_local_sources={has_local_sources}, ref='{ref}'")
-                if len(dynamo_refs) == 1 and not athena_refs and not local_refs and not has_local_sources:
-                    partiql_sql = rewritten_sql.replace(ref, f'"{table_name}"')
-                    logger.info(f"🔶 Trying PartiQL: '{partiql_sql[:100]}'")
-                    partiql_result = _try_partiql(partiql_sql, table_name, aws_region)
-                    if partiql_result is not None:
-                        result_df = partiql_result
-                        engine_used = "dynamodb-partiql"
-                        materialized = None
-                        break
+            engine_used = "duckdb+" + "+".join(engine_parts)
+            result_df = _run_duckdb_query(rewritten_sql, executor, materialized)
 
-                # Fallback: scan + DuckDB
-                dynamo_limit = None
-                if len(dynamo_refs) == 1 and not athena_refs and not local_refs:
-                    limit_match = re.search(r'\bLIMIT\s+(\d+)\s*$', sql, re.IGNORECASE)
-                    if limit_match:
-                        dynamo_limit = int(limit_match.group(1))
-                materialized[safe_alias] = _scan_dynamodb_table(table_name, aws_region, limit=dynamo_limit)
-                rewritten_sql = rewritten_sql.replace(ref, safe_alias)
+        elapsed_ms = (_time.perf_counter() - start) * 1000
 
-            # Run in DuckDB (unless PartiQL handled it)
-            if materialized is not None:
-                result_df = _run_duckdb_query(rewritten_sql, executor, materialized)
-        else:
-            # Pure DuckDB
-            result_df = _run_duckdb_query(sql, executor)
-
-        elapsed_ms = (time.perf_counter() - start) * 1000
-
-        # Store result in namespace
+        # --- Step 4: Store result and format output ---
         if output_var and output_var.isidentifier():
             executor._namespace[output_var] = result_df
 
-        # Generate HTML table output
         row_count = len(result_df)
         col_count = len(result_df.columns)
         max_rows = 50
@@ -190,16 +333,14 @@ async def execute_sql(request: Request):
         }
         output = f"{output}  •  {engine_label.get(engine_used, engine_used)}"
 
-        # Large table warning
-        if dynamo_refs:
-            for ref, table_name in dynamo_refs.items():
-                cache_key = f"{table_name}:{aws_region}"
-                if hasattr(_scan_dynamodb_table, '_cache') and cache_key in _scan_dynamodb_table._cache:
-                    cached_size = len(_scan_dynamodb_table._cache[cache_key])
-                    if cached_size > 10000:
-                        output += f"\n⚠️ DynamoDB '{table_name}' has {cached_size:,} rows — consider adding LIMIT"
+        # Large DynamoDB table warning
+        for src in dynamo_sources:
+            cache_key = f"{src.table_name}:{aws_region}"
+            if hasattr(_scan_dynamodb_table, '_cache') and cache_key in _scan_dynamodb_table._cache:
+                cached_size = len(_scan_dynamodb_table._cache[cache_key])
+                if cached_size > 10000:
+                    output += f"\n⚠️ DynamoDB '{src.table_name}' has {cached_size:,} rows — consider adding LIMIT"
 
-        # Execution count (shared with Python cells)
         executor._execution_count += 1
 
         return {
@@ -216,7 +357,7 @@ async def execute_sql(request: Request):
         }
 
     except Exception as e:
-        elapsed_ms = (time.perf_counter() - start) * 1000
+        elapsed_ms = (_time.perf_counter() - start) * 1000
         error_msg = str(e)
         logger.warning(f"SQL execution error: {error_msg}")
         return {
@@ -228,7 +369,7 @@ async def execute_sql(request: Request):
         }
 
 
-# --- Helper functions ---
+# ─── Execution Engines ────────────────────────────────────────────────────────
 
 
 def _run_duckdb_query(sql: str, executor, extra_dataframes: dict = None):
@@ -261,7 +402,7 @@ def _run_duckdb_query(sql: str, executor, extra_dataframes: dict = None):
         if isinstance(value, pd.DataFrame):
             con.register(name, value)
 
-    # Register extra materialized DataFrames
+    # Register extra materialized DataFrames (from Athena/DynamoDB)
     if extra_dataframes:
         for name, df in extra_dataframes.items():
             con.register(name, df)
@@ -309,6 +450,7 @@ async def _run_athena_query(sql: str, workgroup: str, region: str):
 
     df = pd.DataFrame(data, columns=header)
 
+    # Auto-convert numeric columns
     for col in df.columns:
         try:
             df[col] = pd.to_numeric(df[col])
@@ -321,20 +463,30 @@ async def _run_athena_query(sql: str, workgroup: str, region: str):
 def _scan_dynamodb_table(table_name: str, region: str, limit: int = None):
     """
     Scan a DynamoDB table and return all items as a DataFrame.
-    Supports LIMIT pushdown and caching.
+    Supports LIMIT pushdown and caching with 5-minute TTL.
     """
     import boto3
     import pandas as pd
     from decimal import Decimal
 
+    CACHE_TTL_SECONDS = 300  # 5 minutes
+
     cache_key = f"{table_name}:{region}"
     if not hasattr(_scan_dynamodb_table, '_cache'):
         _scan_dynamodb_table._cache = {}
+    if not hasattr(_scan_dynamodb_table, '_cache_ts'):
+        _scan_dynamodb_table._cache_ts = {}
 
+    # Check cache (with TTL)
     if cache_key in _scan_dynamodb_table._cache and not limit:
-        cached = _scan_dynamodb_table._cache[cache_key]
-        logger.info(f"🔶 DynamoDB cache hit: {table_name} ({len(cached)} rows)")
-        return cached
+        cached_at = _scan_dynamodb_table._cache_ts.get(cache_key, 0)
+        if _time.time() - cached_at < CACHE_TTL_SECONDS:
+            cached = _scan_dynamodb_table._cache[cache_key]
+            logger.info(f"🔶 DynamoDB cache hit: {table_name} ({len(cached)} rows)")
+            return cached
+        else:
+            del _scan_dynamodb_table._cache[cache_key]
+            del _scan_dynamodb_table._cache_ts[cache_key]
 
     dynamodb = boto3.resource("dynamodb", region_name=region)
     table = dynamodb.Table(table_name)
@@ -370,7 +522,8 @@ def _scan_dynamodb_table(table_name: str, region: str, limit: int = None):
 
     if not limit:
         _scan_dynamodb_table._cache[cache_key] = df
-        logger.info(f"🔶 DynamoDB scanned & cached: {table_name} ({len(df)} rows)")
+        _scan_dynamodb_table._cache_ts[cache_key] = _time.time()
+        logger.info(f"🔶 DynamoDB scanned & cached: {table_name} ({len(df)} rows, TTL=5m)")
     else:
         logger.info(f"🔶 DynamoDB scanned (limit={limit}): {table_name} ({len(df)} rows)")
 
@@ -381,6 +534,9 @@ def _try_partiql(sql: str, table_name: str, region: str):
     """
     Try executing SQL via DynamoDB PartiQL.
     Returns a DataFrame on success, or None if PartiQL can't handle it.
+
+    PartiQL supports: SELECT, WHERE (with partition/sort key), LIMIT (via API param).
+    PartiQL does NOT support: JOIN, GROUP BY, HAVING, UNION, ORDER BY (without WHERE).
     """
     import boto3
     import pandas as pd

@@ -27,12 +27,13 @@ let nextCellId = (() => {
 // Derive default output variable name from SQL query
 function _deriveSqlVarName(sql) {
   if (!sql || !sql.trim()) return 'result'
-  const fromMatch = sql.match(/\bFROM\s+(?:dynamodb\.)?"?([a-zA-Z_][\w\-]*)"?/i)
+  const fromMatch = sql.match(/\bFROM\s+dynamodb\."?([a-zA-Z_][\w\-]*)"?/i)
     || sql.match(/\bFROM\s+'\/tmp\/([^']+)'/i)
     || sql.match(/\bFROM\s+read_(?:csv|json|parquet)\('[^']*\/([^'/]+)'\)/i)
-    || sql.match(/\bFROM\s+([a-zA-Z_]\w*\.)?([a-zA-Z_]\w*)/i)
+    || sql.match(/\bFROM\s+[a-zA-Z_]\w*\.([a-zA-Z_]\w*)/i)
+    || sql.match(/\bFROM\s+([a-zA-Z_]\w*)/i)
   if (fromMatch) {
-    const raw = fromMatch[fromMatch.length - 1] || fromMatch[1] || 'result'
+    const raw = fromMatch[1] || 'result'
     const cleaned = raw.replace(/\.\w+$/, '').replace(/[^a-zA-Z0-9_]/g, '_').replace(/^_+|_+$/g, '')
     if (cleaned && /^[a-zA-Z_]/.test(cleaned)) return cleaned
   }
@@ -260,9 +261,8 @@ export default function Notebook({ tab, instances = {}, onUpdateTab, onMarkVmRun
     if (!tab.microvmEndpoint || tab.status !== 'connected') return
     try {
       const headers = { 'Content-Type': 'application/json' }
-      if (tab.microvmId) {
-        headers['X-MicroVM-Id'] = tab.microvmId
-        if (tab.microvmRealEndpoint) headers['X-MicroVM-Endpoint'] = tab.microvmRealEndpoint
+      if (tab.sessionId) {
+        headers['X-Session-Id'] = tab.sessionId
       }
       const resp = await fetch(`${tab.microvmEndpoint}/variables`, { headers })
       if (resp.ok) {
@@ -271,7 +271,7 @@ export default function Notebook({ tab, instances = {}, onUpdateTab, onMarkVmRun
         onUpdateTab({ _variables: data.variables || {} })
       }
     } catch {}
-  }, [tab.microvmEndpoint, tab.microvmId, tab.microvmRealEndpoint, tab.status])
+  }, [tab.microvmEndpoint, tab.sessionId, tab.status])
 
   const executeCell = useCallback(async (cellId) => {
     // If no VM linked at all, can't execute
@@ -279,22 +279,20 @@ export default function Notebook({ tab, instances = {}, onUpdateTab, onMarkVmRun
 
     // Ensure we have an endpoint (might be missing after page refresh)
     let endpoint = tab.microvmEndpoint
-    let realEndpoint = tab.microvmRealEndpoint
     if (!endpoint) {
       endpoint = `${PROXY_URL}/proxy`
-      // Discover real endpoint from instances
+      // Check if VM exists in instances
       try {
         const instResp = await fetch(`${PROXY_URL}/instances`)
         const instData = await instResp.json()
         const inst = instData.instances?.[tab.microvmId]
         if (inst?.endpoint) {
-          realEndpoint = inst.endpoint
-          onUpdateTab({ microvmEndpoint: endpoint, microvmRealEndpoint: realEndpoint, status: 'connected' })
+          onUpdateTab({ microvmEndpoint: endpoint, status: 'connected' })
         }
       } catch {}
     }
 
-    if (!realEndpoint) {
+    if (!endpoint || (tab.status !== 'connected' && tab.status !== 'launching')) {
       // Auto-restore: if VM was terminated but has a checkpoint, auto-launch + restore
       if (tab.sessionSaved && tab.sessionId) {
         // Set a guard state to prevent polling from interfering
@@ -310,7 +308,6 @@ export default function Notebook({ tab, instances = {}, onUpdateTab, onMarkVmRun
               notebookName: tab.name || 'Restored',
               memoryMiB: tab.microvmMemory || 2048,
               idleTimeoutSeconds: tab.idleTimeoutSeconds || 60,
-              maxDurationSeconds: tab.maxDurationSeconds || 14400,
               checkpointEnabled: true,
               sessionId: tab.sessionId,
               restoreFromSession: tab.sessionId,
@@ -321,7 +318,6 @@ export default function Notebook({ tab, instances = {}, onUpdateTab, onMarkVmRun
             onUpdateTab({
               microvmId: data.microvmId,
               microvmEndpoint: `${PROXY_URL}/proxy`,
-              microvmRealEndpoint: data.endpoint,
               microvmMemory: tab.microvmMemory || 2048,
               status: 'connected',
               mode: 'microvm',
@@ -362,22 +358,8 @@ export default function Notebook({ tab, instances = {}, onUpdateTab, onMarkVmRun
 
       // Build headers
       const headers = { 'Content-Type': 'application/json' }
-      if (tab.microvmId) {
-        headers['X-MicroVM-Id'] = tab.microvmId
-        let realEndpoint = tab.microvmRealEndpoint
-        if (!realEndpoint) {
-          try {
-            const instResp = await fetch(`${PROXY_URL}/instances`)
-            const instData = await instResp.json()
-            const inst = instData.instances?.[tab.microvmId]
-            if (inst?.endpoint) {
-              realEndpoint = inst.endpoint
-            }
-          } catch {}
-        }
-        if (realEndpoint) {
-          headers['X-MicroVM-Endpoint'] = realEndpoint
-        }
+      if (tab.sessionId) {
+        headers['X-Session-Id'] = tab.sessionId
       }
 
       try {
@@ -483,7 +465,7 @@ export default function Notebook({ tab, instances = {}, onUpdateTab, onMarkVmRun
         }, 100)
       }
     }
-  }, [tab.microvmEndpoint, tab.microvmId, tab.microvmRealEndpoint, tab.status, tab.tag, tab.name, tab.description, isExecuting])
+  }, [tab.microvmEndpoint, tab.microvmId, tab.sessionId, tab.status, tab.tag, tab.name, tab.description, isExecuting])
 
   const executeAllCells = useCallback(async () => {
     if (!tab.microvmId) return
@@ -511,11 +493,8 @@ export default function Notebook({ tab, instances = {}, onUpdateTab, onMarkVmRun
     if (!tab.microvmEndpoint || !tab.microvmId) return
 
     const headers = { 'Content-Type': 'application/json' }
-    if (tab.microvmId) {
-      headers['X-MicroVM-Id'] = tab.microvmId
-      if (tab.microvmRealEndpoint) {
-        headers['X-MicroVM-Endpoint'] = tab.microvmRealEndpoint
-      }
+    if (tab.sessionId) {
+      headers['X-Session-Id'] = tab.sessionId
     }
 
     try {
@@ -531,7 +510,7 @@ export default function Notebook({ tab, instances = {}, onUpdateTab, onMarkVmRun
         ? { ...c, status: 'error', error: 'Execution interrupted by user' }
         : c
     ))
-  }, [tab.microvmEndpoint, tab.microvmId, tab.microvmRealEndpoint, tab.status])
+  }, [tab.microvmEndpoint, tab.microvmId, tab.sessionId, tab.status])
 
   const deleteActiveCell = useCallback(() => {
     if (activeCellId) {
@@ -663,7 +642,7 @@ export default function Notebook({ tab, instances = {}, onUpdateTab, onMarkVmRun
             code: cell.code || '',
             output: (cell.output || '') + (cell.html ? ' [table output]' : ''),
             microvm_id: tab.microvmId || '',
-            microvm_endpoint: tab.microvmRealEndpoint || '',
+            session_id: tab.sessionId || '',
           }),
         })
         if (resp.ok) {
@@ -687,7 +666,7 @@ export default function Notebook({ tab, instances = {}, onUpdateTab, onMarkVmRun
       } catch {}
     }
     setIsAnnotating(false)
-  }, [cells, tab.microvmId, tab.microvmRealEndpoint])
+  }, [cells, tab.microvmId, tab.sessionId])
 
   const saveNotebook = useCallback(() => {
     const notebook = {
@@ -1147,7 +1126,7 @@ export default function Notebook({ tab, instances = {}, onUpdateTab, onMarkVmRun
             notebookContext={cells}
             notebookName={tab.name}
             microvmId={tab.microvmId}
-            microvmRealEndpoint={tab.microvmRealEndpoint}
+            sessionId={tab.sessionId}
             aiAvailable={aiAvailable}
           />
         ))}

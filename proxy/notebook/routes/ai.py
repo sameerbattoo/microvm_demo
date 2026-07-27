@@ -86,8 +86,6 @@ async def ai_chat(request: Request):
     session_id = body.get("session_id", "")
     message = body.get("message", "").strip()
     notebook_cells = body.get("cells", [])
-    microvm_id = body.get("microvm_id", "")
-    microvm_endpoint = body.get("microvm_endpoint", "")
     packages = body.get("packages", [])
     data_sources = body.get("data_sources")
 
@@ -98,10 +96,9 @@ async def ai_chat(request: Request):
 
     context = {
         "proxy_url": f"http://localhost:{os.environ.get('PROXY_PORT', '8081')}",
-        "microvm_id": microvm_id,
-        "microvm_endpoint": microvm_endpoint,
+        "session_id": session_id,
         "notebook_cells": notebook_cells,
-        "memory_mib": vm_manager.active_microvms.get(microvm_id, {}).get("memory_mib"),
+        "memory_mib": vm_manager.get_session_vm(session_id) and vm_manager.active_microvms.get(vm_manager.get_session_vm(session_id).get("vm_id", ""), {}).get("memory_mib"),
         "data_sources": data_sources,
         "packages": packages,
         "uploaded_files": body.get("uploaded_files", []),
@@ -129,8 +126,6 @@ async def ai_chat_sync(request: Request):
     session_id = body.get("session_id", "")
     message = body.get("message", "").strip()
     notebook_cells = body.get("cells", [])
-    microvm_id = body.get("microvm_id", "")
-    microvm_endpoint = body.get("microvm_endpoint", "")
     active_cell_index = body.get("active_cell_index")
     packages = body.get("packages", [])
     data_sources = body.get("data_sources")
@@ -149,13 +144,12 @@ async def ai_chat_sync(request: Request):
 
     context = {
         "proxy_url": f"http://localhost:{os.environ.get('PROXY_PORT', '8081')}",
-        "microvm_id": microvm_id,
-        "microvm_endpoint": microvm_endpoint,
+        "session_id": session_id,
         "notebook_cells": notebook_cells,
         "data_sources": data_sources,
         "packages": packages,
         "uploaded_files": body.get("uploaded_files", []),
-        "memory_mib": vm_manager.active_microvms.get(microvm_id, {}).get("memory_mib"),
+        "memory_mib": vm_manager.get_session_vm(session_id) and vm_manager.active_microvms.get(vm_manager.get_session_vm(session_id).get("vm_id", ""), {}).get("memory_mib"),
     }
 
     try:

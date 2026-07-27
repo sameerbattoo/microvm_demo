@@ -1022,17 +1022,6 @@
   word-break: break-all;
 }
 
-.vm-countdown-warning {
-  color: var(--accent-danger) !important;
-  font-weight: 600;
-}
-
-.vm-countdown-critical {
-  color: var(--accent-danger) !important;
-  font-weight: 700;
-  animation: pulse-red 1s ease-in-out infinite;
-}
-
 .vm-item-warning {
   border: 1px solid var(--accent-danger);
   border-radius: 6px;
@@ -1042,6 +1031,17 @@
   border: 1px solid var(--accent-danger);
   border-radius: 6px;
   animation: pulse-border-red 1s ease-in-out infinite;
+}
+
+.vm-countdown-warning {
+  color: var(--accent-danger) !important;
+  font-weight: 600;
+}
+
+.vm-countdown-critical {
+  color: var(--accent-danger) !important;
+  font-weight: 700;
+  animation: pulse-red 1s ease-in-out infinite;
 }
 
 @keyframes pulse-red {
@@ -1189,6 +1189,64 @@
   font-weight: 700;
   color: var(--text-primary);
   font-family: var(--font-mono);
+}
+
+.vm-session-group {
+  margin-bottom: var(--space-2);
+}
+
+.vm-session-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px var(--space-3);
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+}
+
+.vm-session-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.vm-session-notebook {
+  font-size: var(--font-size-xs);
+  font-weight: 600;
+  color: var(--accent-primary);
+}
+
+.vm-session-meta {
+  font-size: 10px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+}
+
+.vm-session-cost {
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+}
+
+.vm-mode-badge {
+  font-size: 10px;
+  font-weight: 500;
+  padding: 1px 6px;
+  border-radius: 8px;
+  margin-left: auto;
+  margin-right: 4px;
+}
+
+.vm-mode-eternal {
+  background: rgba(79, 139, 255, 0.15);
+  color: var(--accent-primary);
+}
+
+.vm-mode-checkpoint {
+  background: rgba(249, 168, 37, 0.15);
+  color: var(--accent-warning);
 }
 
 .vm-action-btn {

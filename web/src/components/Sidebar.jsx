@@ -86,6 +86,7 @@ export default function Sidebar({
 
   // VM badge state (for activity bar badge count)
   const [vmBadgeInstances, setVmBadgeInstances] = useState({})
+  const [persistenceMode, setPersistenceMode] = useState('eternal')
 
   // Persist active panel
   useEffect(() => {
@@ -169,9 +170,8 @@ export default function Sidebar({
     setPkgLoading(true)
     try {
       const headers = { 'Content-Type': 'application/json' }
-      if (activeTab.microvmId) {
-        headers['X-MicroVM-Id'] = activeTab.microvmId
-        if (activeTab.microvmRealEndpoint) headers['X-MicroVM-Endpoint'] = activeTab.microvmRealEndpoint
+      if (activeTab.sessionId) {
+        headers['X-Session-Id'] = activeTab.sessionId
       }
       const resp = await fetch(`${activeTab.microvmEndpoint}/packages`, {
         method: 'GET',
@@ -188,7 +188,7 @@ export default function Sidebar({
     } catch {}
     setPkgLoading(false)
     setPkgFetched(true)
-  }, [activeTab?.microvmEndpoint, activeTab?.microvmId, activeTab?.microvmRealEndpoint, activeTab?.status])
+  }, [activeTab?.microvmEndpoint, activeTab?.sessionId, activeTab?.status])
 
   // Load packages when connected
   useEffect(() => {
@@ -211,9 +211,8 @@ export default function Sidebar({
     if (!activeTab?.microvmEndpoint) return { success: false, error: 'No VM connected' }
     try {
       const headers = { 'Content-Type': 'application/json' }
-      if (activeTab.microvmId) {
-        headers['X-MicroVM-Id'] = activeTab.microvmId
-        if (activeTab.microvmRealEndpoint) headers['X-MicroVM-Endpoint'] = activeTab.microvmRealEndpoint
+      if (activeTab.sessionId) {
+        headers['X-Session-Id'] = activeTab.sessionId
       }
       const resp = await fetch(`${activeTab.microvmEndpoint}/install`, {
         method: 'POST',
@@ -239,6 +238,7 @@ export default function Sidebar({
       if (resp.ok) {
         const data = await resp.json()
         setVmBadgeInstances(data.instances || {})
+        if (data.persistence_mode) setPersistenceMode(data.persistence_mode)
       } else {
         setVmBadgeInstances({})
       }
@@ -288,6 +288,7 @@ export default function Sidebar({
         <div className="activity-bar-spacer" />
         <button
           className={`activity-bar-item activity-bar-item-bottom ${activePanel === 'microvms' ? 'activity-bar-item-active' : ''} ${(() => {
+            if (persistenceMode !== 'checkpoint') return ''
             const now = Date.now()
             for (const inst of Object.values(vmBadgeInstances)) {
               if (!inst.launched_at || !inst.max_duration_sec) continue

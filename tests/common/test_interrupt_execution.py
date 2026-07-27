@@ -46,14 +46,13 @@ def timed(label):
     return Timer()
 
 
-def execute_code(endpoint, microvm_id, real_endpoint, code, timeout=60):
-    """Execute code on the MicroVM via the proxy. Returns response dict."""
+def execute_code(session_id, code, timeout=60):
+    """Execute code on the MicroVM via the proxy using session_id only."""
     resp = requests.post(
-        f"{endpoint}/execute",
+        f"{PROXY_URL}/proxy/execute",
         headers={
             "Content-Type": "application/json",
-            "X-MicroVM-Id": microvm_id,
-            "X-MicroVM-Endpoint": real_endpoint,
+            "X-Session-Id": session_id,
         },
         json={"code": code},
         timeout=timeout,
@@ -61,24 +60,23 @@ def execute_code(endpoint, microvm_id, real_endpoint, code, timeout=60):
     return resp.json()
 
 
-def interrupt_execution(endpoint, microvm_id, real_endpoint):
+def interrupt_execution(session_id):
     """Send interrupt signal to the MicroVM."""
     resp = requests.post(
-        f"{endpoint}/interrupt",
+        f"{PROXY_URL}/proxy/interrupt",
         headers={
             "Content-Type": "application/json",
-            "X-MicroVM-Id": microvm_id,
-            "X-MicroVM-Endpoint": real_endpoint,
+            "X-Session-Id": session_id,
         },
         timeout=10,
     )
     return resp.json()
 
 
-def execute_async(endpoint, microvm_id, real_endpoint, code, result_holder):
+def execute_async(session_id, code, result_holder):
     """Execute code in a background thread (for testing interrupt)."""
     try:
-        result = execute_code(endpoint, microvm_id, real_endpoint, code, timeout=120)
+        result = execute_code(session_id, code, timeout=120)
         result_holder["result"] = result
     except Exception as e:
         result_holder["error"] = str(e)
@@ -108,7 +106,6 @@ def main():
             "name": NOTEBOOK_NAME,
             "memoryMiB": MEMORY_MIB,
             "idleTimeoutSeconds": 1800,
-            "maxDurationSeconds": 3600,
             "checkpointEnabled": False,
             "sessionId": f"interrupt-test-{int(time.time())}",
         }, timeout=120)
@@ -116,17 +113,16 @@ def main():
         launch_data = resp.json()
 
     microvm_id = launch_data["microvmId"]
-    real_endpoint = launch_data["endpoint"]
-    proxy_endpoint = f"{PROXY_URL}/proxy"
+    session_id = launch_data.get("sessionId", f"interrupt-test-{int(time.time())}")
 
     log(f"  MicroVM ID: {microvm_id}")
-    log(f"  Endpoint: {real_endpoint}")
+    log(f"  Session ID: {session_id}")
     print()
 
     # --- Test 1: Normal execution works ---
     log("TEST 1: Normal execution (sanity check)")
     with timed("Simple execution"):
-        result = execute_code(proxy_endpoint, microvm_id, real_endpoint, "x = 42\nprint(x * 2)")
+        result = execute_code(session_id, "x = 42\nprint(x * 2)")
     assert result["success"], f"Expected success, got: {result}"
     assert "84" in result["output"], f"Expected '84' in output, got: {result['output']}"
     log("  ✓ Normal execution works")
@@ -139,7 +135,7 @@ def main():
     result_holder = {}
     exec_thread = threading.Thread(
         target=execute_async,
-        args=(proxy_endpoint, microvm_id, real_endpoint, "import time\ntime.sleep(300)\nprint('should not reach here')", result_holder),
+        args=(session_id, "import time\ntime.sleep(300)\nprint('should not reach here')", result_holder),
     )
     exec_thread.start()
 
@@ -148,7 +144,7 @@ def main():
     log("  Cell is running... sending interrupt")
 
     with timed("Interrupt"):
-        interrupt_result = interrupt_execution(proxy_endpoint, microvm_id, real_endpoint)
+        interrupt_result = interrupt_execution(session_id)
     log(f"  Interrupt response: {interrupt_result}")
 
     # Wait for the execution thread to finish
@@ -169,7 +165,7 @@ def main():
     # --- Test 3: Sandbox still healthy after interrupt ---
     log("TEST 3: Sandbox health after interrupt")
     with timed("Post-interrupt execution"):
-        result = execute_code(proxy_endpoint, microvm_id, real_endpoint, "y = x + 1\nprint(f'State preserved: x={x}, y={y}')")
+        result = execute_code(session_id, "y = x + 1\nprint(f'State preserved: x={x}, y={y}')")
     assert result["success"], f"Post-interrupt execution failed: {result}"
     assert "State preserved" in result["output"], f"Unexpected output: {result['output']}"
     assert "x=42" in result["output"], f"Variable x lost after interrupt: {result['output']}"
@@ -183,7 +179,7 @@ def main():
     result_holder = {}
     exec_thread = threading.Thread(
         target=execute_async,
-        args=(proxy_endpoint, microvm_id, real_endpoint, "counter = 0\nwhile True:\n    counter += 1", result_holder),
+        args=(session_id, "counter = 0\nwhile True:\n    counter += 1", result_holder),
     )
     exec_thread.start()
 
@@ -192,7 +188,7 @@ def main():
     log("  Loop running... sending interrupt")
 
     with timed("Interrupt CPU loop"):
-        interrupt_result = interrupt_execution(proxy_endpoint, microvm_id, real_endpoint)
+        interrupt_result = interrupt_execution(session_id)
     log(f"  Interrupt response: {interrupt_result}")
 
     exec_thread.join(timeout=15)
@@ -208,7 +204,7 @@ def main():
     # --- Test 5: Verify counter was set (loop ran for some iterations) ---
     log("TEST 5: Verify loop variable survived")
     with timed("Check counter"):
-        result = execute_code(proxy_endpoint, microvm_id, real_endpoint, "print(f'Counter reached: {counter}')")
+        result = execute_code(session_id, "print(f'Counter reached: {counter}')")
     if result["success"] and "Counter reached:" in result["output"]:
         log(f"  ✓ {result['output'].strip()}")
     else:
@@ -218,7 +214,7 @@ def main():
     # --- Test 6: Interrupt when nothing is running (no-op) ---
     log("TEST 6: Interrupt with nothing running (should be no-op)")
     with timed("No-op interrupt"):
-        interrupt_result = interrupt_execution(proxy_endpoint, microvm_id, real_endpoint)
+        interrupt_result = interrupt_execution(session_id)
     log(f"  Response: {interrupt_result}")
     assert interrupt_result.get("status") in ("idle", "interrupted"), \
         f"Unexpected response: {interrupt_result}"
@@ -228,7 +224,7 @@ def main():
     # --- Test 7: Execute normally after all interrupts ---
     log("TEST 7: Final execution (full health check)")
     with timed("Final execution"):
-        result = execute_code(proxy_endpoint, microvm_id, real_endpoint,
+        result = execute_code(session_id,
             "import pandas as pd\ndf = pd.DataFrame({'a': [1,2,3], 'b': [4,5,6]})\nprint(f'DataFrame OK: {df.shape}')\ndf")
     assert result["success"], f"Final execution failed: {result}"
     assert "DataFrame OK" in result["output"], f"Unexpected output: {result['output']}"
@@ -240,7 +236,7 @@ def main():
     # --- Terminate ---
     log("Terminating MicroVM...")
     with timed("Terminate"):
-        resp = requests.post(f"{PROXY_URL}/terminate/{microvm_id}", timeout=30)
+        resp = requests.post(f"{PROXY_URL}/terminate", headers={"X-Session-Id": session_id}, timeout=30)
     log(f"  Status: {resp.status_code}")
     print()
 

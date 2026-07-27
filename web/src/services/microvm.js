@@ -19,9 +19,10 @@
  */
 
 export class MicroVMClient {
-  constructor(endpoint, { proxyUrl = null } = {}) {
+  constructor(endpoint, { proxyUrl = null, sessionId = null } = {}) {
     this.endpoint = endpoint
     this.proxyUrl = proxyUrl
+    this.sessionId = sessionId
     this.isLocal = endpoint.includes('localhost') || endpoint.includes('127.0.0.1')
   }
 
@@ -35,9 +36,9 @@ export class MicroVMClient {
       ...(options.headers || {}),
     }
 
-    // If using the proxy, add the target endpoint header
-    if (!this.isLocal && this.proxyUrl) {
-      headers['X-MicroVM-Endpoint'] = this.endpoint
+    // If using the proxy, add the session ID header
+    if (!this.isLocal && this.proxyUrl && this.sessionId) {
+      headers['X-Session-Id'] = this.sessionId
     }
 
     const response = await fetch(url, {

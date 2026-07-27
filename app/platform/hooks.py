@@ -24,6 +24,9 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/aws/lambda-microvms/runtime/v1", tags=["lifecycle"])
 
+# Separate router for proxy-facing endpoints (no prefix — called directly by our proxy)
+proxy_router = APIRouter(tags=["rotation"])
+
 
 @router.post("/ready")
 async def hook_ready(request: Request):
@@ -72,11 +75,13 @@ async def hook_run(request: Request):
         payload = json.loads(run_payload)
         session_state["session_id"] = payload.get("session_id", run_payload)
         session_state["checkpoint_enabled"] = payload.get("checkpoint_enabled", False)
+        session_state["persistence_mode"] = payload.get("persistence_mode", "eternal")
         session_state["artifacts_bucket"] = payload.get("artifacts_bucket")
         restore_from = payload.get("restore_from")
     except (json.JSONDecodeError, TypeError):
         session_state["session_id"] = run_payload
         session_state["checkpoint_enabled"] = False
+        session_state["persistence_mode"] = "eternal"
 
     logger.info(f"🚀 HOOK /run — Sandbox started")
     logger.info(f"   MicroVM ID: {session_state['microvm_id']}")
@@ -145,11 +150,87 @@ async def hook_terminate(request: Request):
     logger.info(f"   Total resumes: {session_state['resume_count']}")
 
     if session_state.get("checkpoint_enabled") and session_state.get("session_id"):
-        logger.info(f"   📦 Checkpointing session to S3...")
-        try:
-            request.app.state.checkpoint_manager.save(session_state["session_id"])
-            logger.info(f"   ✅ Checkpoint saved: sessions/{session_state['session_id']}/")
-        except Exception as e:
-            logger.error(f"   ❌ Checkpoint failed: {e}")
+        # Only save on terminate in checkpoint mode.
+        # In eternal mode, the rotator owns state transfer (/checkpoint-save + /restore-state)
+        # and the /terminate hook should never waste time re-serializing.
+        if session_state.get("persistence_mode") == "checkpoint":
+            logger.info(f"   📦 Checkpointing session to S3...")
+            try:
+                checkpoint_manager = request.app.state.checkpoint_manager
+                checkpoint_manager.save(session_state["session_id"])
+                logger.info(f"   ✅ Checkpoint saved: sessions/{session_state['session_id']}/")
+            except Exception as e:
+                logger.error(f"   ❌ Checkpoint failed: {e}")
+        else:
+            logger.info(f"   ⏭️  Eternal mode — rotator handles state transfer, skipping checkpoint")
 
     return {"status": "terminated"}
+
+
+@proxy_router.post("/checkpoint-save")
+async def checkpoint_save(request: Request):
+    """
+    On-demand checkpoint save — saves state to S3 WITHOUT terminating.
+    Called by the proxy's rotation logic before swapping to a new VM.
+
+    Request body (optional):
+        {"session_id": "override-session-id"}
+    """
+    session_state = request.app.state.session_state
+    checkpoint_manager = request.app.state.checkpoint_manager
+
+    body = await request.json() if request.headers.get("content-type") == "application/json" else {}
+    session_id = body.get("session_id") or session_state.get("session_id")
+
+    if not session_id:
+        return {"success": False, "error": "No session_id available"}
+
+    logger.info(f"📦 /checkpoint-save — Saving state on demand (session={session_id})")
+    try:
+        checkpoint_manager.save(session_id)
+        logger.info(f"   ✅ Checkpoint saved: sessions/{session_id}/")
+        return {
+            "success": True,
+            "session_id": session_id,
+            "save_timings_ms": checkpoint_manager.last_save_timings,
+        }
+    except Exception as e:
+        import traceback
+        tb = traceback.format_exc()
+        logger.error(f"   ❌ Checkpoint save failed: {e}\n{tb}")
+        return {"success": False, "error": str(e), "traceback": tb}
+
+
+@proxy_router.post("/restore-state")
+async def restore_state(request: Request):
+    """
+    On-demand state restore — loads state from S3 onto this running VM.
+    Called by the proxy's rotation logic after launching a new VM.
+
+    Request body:
+        {"session_id": "session-to-restore-from"}
+    """
+    checkpoint_manager = request.app.state.checkpoint_manager
+    session_state = request.app.state.session_state
+
+    body = await request.json()
+    session_id = body.get("session_id")
+
+    if not session_id:
+        return {"success": False, "error": "session_id required"}
+
+    logger.info(f"♻️ /restore-state — Restoring from S3 (session={session_id})")
+    try:
+        checkpoint_manager.restore(session_id)
+        # Update session state to reflect the restored session
+        session_state["session_id"] = session_id
+        session_state["checkpoint_enabled"] = True
+        logger.info(f"   ✅ State restored from: {session_id}")
+        return {
+            "success": True,
+            "session_id": session_id,
+            "restore_timings": checkpoint_manager.last_restore_timings,
+        }
+    except Exception as e:
+        logger.error(f"   ❌ Restore failed: {e}")
+        return {"success": False, "error": str(e)}

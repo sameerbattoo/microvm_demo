@@ -49,9 +49,9 @@ PROXY = "http://localhost:8081"
 MEMORY_MIB = 1024  # 1GB baseline — peak is 4GB (4x)
 
 
-def get_metrics(vm_id, endpoint):
+def get_metrics(session_id):
     """Fetch psutil metrics from the VM via proxy."""
-    headers = {"X-MicroVM-Id": vm_id, "X-MicroVM-Endpoint": endpoint}
+    headers = {"X-Session-Id": session_id}
     try:
         resp = requests.get(f"{PROXY}/proxy/metrics", headers=headers, timeout=10)
         if resp.ok:
@@ -61,14 +61,13 @@ def get_metrics(vm_id, endpoint):
     return None
 
 
-def execute_code(vm_id, endpoint, code):
+def execute_code(session_id, code, timeout=120):
     """Execute Python code on the VM."""
     headers = {
         "Content-Type": "application/json",
-        "X-MicroVM-Id": vm_id,
-        "X-MicroVM-Endpoint": endpoint,
+        "X-Session-Id": session_id,
     }
-    resp = requests.post(f"{PROXY}/proxy/execute", headers=headers, json={"code": code}, timeout=120)
+    resp = requests.post(f"{PROXY}/proxy/execute", headers=headers, json={"code": code}, timeout=timeout)
     return resp.json() if resp.ok else None
 
 
@@ -97,7 +96,6 @@ def main():
         "notebookName": "Burst Test",
         "memoryMiB": MEMORY_MIB,
         "idleTimeoutSeconds": 300,
-        "maxDurationSeconds": 600,
         "checkpointEnabled": False,
     })
     if not resp.ok:
@@ -106,28 +104,28 @@ def main():
 
     data = resp.json()
     vm_id = data["microvmId"]
-    endpoint = data["endpoint"]
+    session_id = data.get("sessionId", "")
     print(f"  VM: {vm_id}")
-    print(f"  Endpoint: {endpoint}")
+    print(f"  Session: {session_id}")
     print("  Waiting for VM to initialize...")
     time.sleep(5)
 
     # --- Step 2: Idle metrics ---
     print("\n>> Step 1: Idle metrics")
-    m = get_metrics(vm_id, endpoint)
+    m = get_metrics(session_id)
     print_metrics("IDLE", m)
     idle_total = m["memory"]["total_mb"] if m else 0
 
     # --- Step 3: Small workload ---
     print("\n>> Step 2: Small workload (load pandas, create small DataFrame)")
-    execute_code(vm_id, endpoint, """
+    execute_code(session_id, """
 import pandas as pd
 import numpy as np
 df = pd.DataFrame(np.random.randn(10000, 50), columns=[f'col_{i}' for i in range(50)])
 print(f"DataFrame: {df.shape}, memory: {df.memory_usage(deep=True).sum() / 1024 / 1024:.1f} MB")
 """)
     time.sleep(1)
-    m = get_metrics(vm_id, endpoint)
+    m = get_metrics(session_id)
     print_metrics("SMALL LOAD", m)
 
     # --- Step 4: Heavy workload (safely under 4× ceiling) ---
@@ -180,7 +178,7 @@ print("Released. Process alive.")
 
     result_holder = [None]
     def run_heavy():
-        result_holder[0] = execute_code(vm_id, endpoint, heavy_code)
+        result_holder[0] = execute_code(session_id, heavy_code)
 
     t = threading.Thread(target=run_heavy)
     t.start()
@@ -189,7 +187,7 @@ print("Released. Process alive.")
     poll_results = []
     for i in range(17):
         time.sleep(3)
-        m = get_metrics(vm_id, endpoint)
+        m = get_metrics(session_id)
         if m:
             mem = m["memory"]
             cpu = m["cpu"]
@@ -259,7 +257,7 @@ print("Released. Process alive.")
 
     # --- Cleanup ---
     print(f"\n>> Terminating VM {vm_id}...")
-    requests.post(f"{PROXY}/terminate/{vm_id}")
+    requests.post(f"{PROXY}/terminate", headers={"X-Session-Id": session_id})
     print("  Done.")
 
 

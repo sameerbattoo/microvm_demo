@@ -16,10 +16,11 @@ export default function MicroVMsPanel({
   const [vmInstances, setVmInstances] = useState({})
   const [vmLoading, setVmLoading] = useState(false)
   const [vmFetched, setVmFetched] = useState(false)
+  const [persistenceMode, setPersistenceMode] = useState('eternal')
   const [expandedVmId, setExpandedVmId] = useState(null)
   const [vmActionInProgress, setVmActionInProgress] = useState(new Set())
 
-  // Tick every 30s to keep countdown timers fresh
+  // Periodic refresh to keep VM state current
   const [, setTick] = useState(0)
   useEffect(() => {
     const interval = setInterval(() => setTick(t => t + 1), 30000)
@@ -33,6 +34,7 @@ export default function MicroVMsPanel({
       if (resp.ok) {
         const data = await resp.json()
         setVmInstances(data.instances || {})
+        if (data.persistence_mode) setPersistenceMode(data.persistence_mode)
       } else {
         setVmInstances({})
       }
@@ -64,7 +66,8 @@ export default function MicroVMsPanel({
   const handleVmResume = async (id) => {
     setVmActionInProgress(prev => new Set([...prev, id]))
     try {
-      const resp = await fetch(`${PROXY_URL}/resume/${id}`, { method: 'POST' })
+      const sessionId = vmInstances[id]?.session_id
+      const resp = sessionId ? await fetch(`${PROXY_URL}/resume`, { method: 'POST', headers: { 'X-Session-Id': sessionId } }) : { ok: false }
       if (resp.ok) await fetchVmInstances()
     } catch {}
     setVmActionInProgress(prev => { const n = new Set(prev); n.delete(id); return n })
@@ -73,7 +76,8 @@ export default function MicroVMsPanel({
   const handleVmTerminate = async (id) => {
     setVmActionInProgress(prev => new Set([...prev, id]))
     try {
-      await fetch(`${PROXY_URL}/terminate/${id}`, { method: 'POST' })
+      const sessionId = vmInstances[id]?.session_id
+      if (sessionId) await fetch(`${PROXY_URL}/terminate`, { method: 'POST', headers: { 'X-Session-Id': sessionId } })
       await fetchVmInstances()
     } catch {}
     setVmActionInProgress(prev => { const n = new Set(prev); n.delete(id); return n })
@@ -84,18 +88,23 @@ export default function MicroVMsPanel({
       <div className="sidebar-panel-header">
         <span className="sidebar-panel-title">MicroVMs</span>
         <span className="sidebar-panel-count">{Object.keys(vmInstances).length}</span>
+        <span className={`vm-mode-badge vm-mode-${persistenceMode}`}>
+          {persistenceMode === 'eternal' ? '∞ eternal' : '💾 checkpoint'}
+        </span>
         <button className="sidebar-panel-action" onClick={() => { setVmFetched(false); fetchVmInstances() }} title="Refresh">
           <IconRefresh width={14} height={14} />
         </button>
         <button className="sidebar-panel-close" onClick={onClose} title="Close panel"><IconX width={12} height={12} /></button>
       </div>
       <div className="sidebar-panel-body">
-        {/* Total cost summary */}
+        {/* Overall cost (all notebooks) */}
         {Object.keys(vmInstances).length > 0 && (
           <div className="vm-total-cost-bar">
-            <span className="vm-total-cost-label">Total session cost</span>
+            <span className="vm-total-cost-label">
+              {persistenceMode === 'eternal' ? 'Overall cost (all notebooks)' : 'Total cost'}
+            </span>
             <span className="vm-total-cost-value">
-              ${Object.values(vmInstances).reduce((sum, inst) => sum + (inst.cost?.total_cost_usd || 0), 0).toFixed(4)}
+              ${Object.values(vmInstances).filter(i => i.state !== 'TERMINATED' && i.state !== 'TERMINATING').reduce((sum, inst) => sum + (persistenceMode === 'eternal' ? (inst.session_cost?.total_cost_usd || inst.cost?.total_cost_usd || 0) : (inst.cost?.total_cost_usd || 0)), 0).toFixed(4)}
             </span>
           </div>
         )}
@@ -104,6 +113,7 @@ export default function MicroVMsPanel({
           <div className="sidebar-empty">No MicroVM instances. Launch one from a notebook.</div>
         )}
         {Object.entries(vmInstances)
+          .filter(([, inst]) => inst.state !== 'TERMINATED' && inst.state !== 'TERMINATING')
           .sort((a, b) => (b[1].launched_at || 0) - (a[1].launched_at || 0))
           .map(([id, inst]) => {
           const isExpanded = expandedVmId === id
@@ -112,19 +122,39 @@ export default function MicroVMsPanel({
           const state = inst.state || 'UNKNOWN'
           const attachedTab = tabs.find(t => t.microvmId === id)
           const memGb = (inst.memory_mib || 4096) / 1024
+          const sessionCost = inst.session_cost?.total_cost_usd || inst.cost?.total_cost_usd || 0
+          const rotationCount = inst.rotation_count || 0
+          const vmCount = inst.session_cost?.vm_count || 1
 
-          // Compute remaining lifetime for urgency indicators
+          // Countdown urgency — only in checkpoint mode (VM will die at max_lifetime)
           let remainingSec = Infinity
-          if (inst.launched_at && inst.max_duration_sec) {
+          let vmUrgency = ''
+          if (persistenceMode === 'checkpoint' && inst.launched_at && inst.max_duration_sec) {
             const launchMs = typeof inst.launched_at === 'number'
               ? inst.launched_at * 1000
               : new Date(inst.launched_at).getTime()
             remainingSec = Math.max(0, Math.floor((launchMs + inst.max_duration_sec * 1000 - Date.now()) / 1000))
+            if (remainingSec <= 10) vmUrgency = 'vm-item-critical'
+            else if (remainingSec <= 60) vmUrgency = 'vm-item-warning'
           }
-          const vmUrgency = remainingSec <= 60 ? 'vm-item-critical' : remainingSec <= 300 ? 'vm-item-warning' : ''
 
           return (
-            <div key={id} className={`vm-item ${isActive ? 'vm-item-active' : ''} ${vmUrgency}`}>
+            <div key={id} className="vm-session-group">
+              {/* Session-level row — only in eternal mode (rotation tracking) */}
+              {persistenceMode === 'eternal' && (
+              <div className="vm-session-header">
+                <div className="vm-session-info">
+                  <span className="vm-session-notebook">{attachedTab?.name || inst.name || 'Notebook'}</span>
+                  <span className="vm-session-meta">
+                    {rotationCount > 0 && <>Rotation #{rotationCount} · {vmCount} VMs served</>}
+                  </span>
+                </div>
+                <span className="vm-session-cost">${sessionCost.toFixed(4)}</span>
+              </div>
+              )}
+
+              {/* Current VM row */}
+              <div className={`vm-item ${isActive ? 'vm-item-active' : ''} ${vmUrgency}`}>
               <div className="vm-item-row" onClick={() => setExpandedVmId(isExpanded ? null : id)}>
                 <span className={`vm-state-dot vm-state-${state.toLowerCase()}`} />
                 <div className="vm-item-info">
@@ -194,35 +224,14 @@ export default function MicroVMsPanel({
                           <span className="vm-detail-value">{formatDuration(inst.idle_timeout_sec)}</span>
                         </div>
                       )}
-                      {inst.max_duration_sec && (
-                        <div className="vm-detail-row">
-                          <span className="vm-detail-label">Max lifetime</span>
-                          <span className="vm-detail-value">{formatDuration(inst.max_duration_sec)}</span>
-                        </div>
-                      )}
-                      {inst.launched_at && inst.max_duration_sec && (
+                      {persistenceMode === 'checkpoint' && remainingSec < Infinity && (
                         <div className="vm-detail-row">
                           <span className="vm-detail-label">Terminates in</span>
-                          <span className={`vm-detail-value vm-countdown ${(() => {
-                            const launchMs = typeof inst.launched_at === 'number'
-                              ? inst.launched_at * 1000
-                              : new Date(inst.launched_at).getTime()
-                            const remainingSec = Math.max(0, Math.floor((launchMs + inst.max_duration_sec * 1000 - Date.now()) / 1000))
-                            if (remainingSec <= 60) return 'vm-countdown-critical'
-                            if (remainingSec <= 300) return 'vm-countdown-warning'
-                            return ''
-                          })()}`}>{(() => {
-                            const launchMs = typeof inst.launched_at === 'number'
-                              ? inst.launched_at * 1000
-                              : new Date(inst.launched_at).getTime()
-                            const expiresMs = launchMs + inst.max_duration_sec * 1000
-                            const remainingSec = Math.max(0, Math.floor((expiresMs - Date.now()) / 1000))
-                            if (remainingSec <= 0) return 'expired'
-                            const h = Math.floor(remainingSec / 3600)
-                            const m = Math.floor((remainingSec % 3600) / 60)
-                            const s = remainingSec % 60
-                            return h > 0 ? `${h}h ${m}m` : `${m}m ${s}s`
-                          })()}</span>
+                          <span className={`vm-detail-value ${remainingSec <= 10 ? 'vm-countdown-critical' : remainingSec <= 60 ? 'vm-countdown-warning' : ''}`}>
+                            {remainingSec <= 0 ? 'expired' : remainingSec >= 3600
+                              ? `${Math.floor(remainingSec / 3600)}h ${Math.floor((remainingSec % 3600) / 60)}m`
+                              : `${Math.floor(remainingSec / 60)}m ${remainingSec % 60}s`}
+                          </span>
                         </div>
                       )}
                     </div>
@@ -363,6 +372,7 @@ export default function MicroVMsPanel({
                   </div>
                 </div>
               )}
+            </div>
             </div>
           )
         })}

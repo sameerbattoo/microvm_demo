@@ -55,6 +55,27 @@ export METRICS_RETENTION_HOURS="168"
 # S3 session checkpoint retention (days)
 export S3_CHECKPOINT_RETENTION_DAYS="30"
 
+# MicroVM lifetime & persistence
+# Max lifetime before action is taken (seconds). AWS max is 28800 (8h).
+# Set to smaller values (e.g., 180) for testing rotation logic.
+# Override: MAX_LIFETIME_SECONDS=180 ./aws_microvm_run.sh
+export MAX_LIFETIME_SECONDS="${MAX_LIFETIME_SECONDS:-28800}"
+# Buffer before max lifetime to start rotation/checkpoint (seconds).
+# Must be larger than worst-case rotation time (~10-15s for large states).
+# With 8h lifetime, 60s buffer is negligible but gives safe margin.
+export ROTATION_LEAD_SECONDS="${ROTATION_LEAD_SECONDS:-60}"
+
+# Pre-terminate wake: computed dynamically per VM as (idle_timeout - 10s).
+# Not configurable — derived from each VM's idle timeout at launch time.
+# Ensures the VM stays RUNNING when AWS kills it (can't re-suspend in time).
+
+# Session persistence mode:
+#   "eternal"     — VMs rotate transparently before max lifetime. Session never dies.
+#                   User sees no interruption. Cost accumulates across rotated VMs.
+#   "checkpoint"  — State is saved to S3 before max lifetime. VM terminates.
+#                   User must manually restore next time they open the notebook.
+export SESSION_PERSISTENCE_MODE="${SESSION_PERSISTENCE_MODE:-eternal}"
+
 # Port configuration
 export PROXY_PORT="8081"
 export BACKEND_PORT="8080"
