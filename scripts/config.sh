@@ -74,7 +74,7 @@ export ROTATION_LEAD_SECONDS="${ROTATION_LEAD_SECONDS:-60}"
 #                   User sees no interruption. Cost accumulates across rotated VMs.
 #   "checkpoint"  — State is saved to S3 before max lifetime. VM terminates.
 #                   User must manually restore next time they open the notebook.
-export SESSION_PERSISTENCE_MODE="${SESSION_PERSISTENCE_MODE:-eternal}"
+export SESSION_PERSISTENCE_MODE="${SESSION_PERSISTENCE_MODE:-checkpoint}"
 
 # Port configuration
 export PROXY_PORT="8081"

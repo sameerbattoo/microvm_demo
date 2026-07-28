@@ -7,6 +7,7 @@ import { sanitizeHtml, sanitizeMarkdown } from '../services/sanitize'
 import MarkdownCell from './MarkdownCell'
 import { IconPlay, IconPlus, IconTrash, IconX, IconStop, IconChevronDown, IconChevronRight, IconGripVertical, IconEraser, IconCode, IconDatabase, IconZap } from './Icons'
 import { PROXY_URL } from '../config'
+import SortableTable from './SortableTable'
 import './Cell.css'
 
 // Derive a default variable name from SQL (based on the primary table being queried)
@@ -545,7 +546,7 @@ export default function Cell({
                 )}
                 {cell.output && <pre className="output-text">{cell.output}</pre>}
                 {cell.html && (
-                  <div className="output-html" dangerouslySetInnerHTML={{ __html: sanitizeHtml(cell.html) }} />
+                  <SortableTable html={cell.html} sanitizer={sanitizeHtml} />
                 )}
                 {cell.error && <pre className="output-error">{cell.error}</pre>}
                 {cell.executionTime != null && (
