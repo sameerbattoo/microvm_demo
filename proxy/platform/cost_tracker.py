@@ -10,7 +10,9 @@ Persists across browser page refreshes (lives in proxy process memory).
 Does not survive proxy restarts — acceptable since a restart means
 a fresh session.
 
-Pricing is based on published Lambda MicroVM rates (us-west-2, 2026).
+Pricing is based on published Lambda MicroVM rates (Graviton/ARM64, us-east-1, 2026).
+AWS bills on two axes: vCPU (per vCPU-second) + Memory (per GB-second).
+CPU is allocated at 2 GB : 1 vCPU ratio.
 """
 
 import os
@@ -18,9 +20,12 @@ import time
 from dataclasses import dataclass, field
 
 
-# Pricing constants (per GB-second) — override via env vars
-PRICE_RUNNING_PER_GB_SEC = float(os.environ.get("PRICE_RUNNING_PER_GB_SEC", "0.0000133"))
-PRICE_SUSPENDED_PER_GB_SEC = float(os.environ.get("PRICE_SUSPENDED_PER_GB_SEC", "0.0000000309"))
+# Pricing constants — override via env vars
+PRICE_VCPU_PER_SEC = float(os.environ.get("PRICE_VCPU_PER_SEC", "0.0000276944"))
+PRICE_MEMORY_PER_GB_SEC = float(os.environ.get("PRICE_MEMORY_PER_GB_SEC", "0.0000036667"))
+PRICE_SNAPSHOT_PER_GB_MONTH = float(os.environ.get("PRICE_SNAPSHOT_PER_GB_MONTH", "0.08"))
+# Derived: snapshot per GB-second (for suspended state tracking)
+PRICE_SNAPSHOT_PER_GB_SEC = PRICE_SNAPSHOT_PER_GB_MONTH / (30 * 24 * 3600)
 
 
 @dataclass
@@ -43,6 +48,11 @@ class MicroVMCostRecord:
     @property
     def memory_gb(self) -> float:
         return self.memory_mib / 1024.0
+
+    @property
+    def vcpus(self) -> float:
+        """vCPUs allocated (2 GB : 1 vCPU ratio)."""
+        return self.memory_gb / 2.0
 
     def record_state(self, state: str):
         """Record a state transition (only if state actually changed)."""
@@ -109,11 +119,18 @@ class MicroVMCostRecord:
             elif t.state == "SUSPENDED":
                 suspended_secs += duration
 
-        running_cost = self.memory_gb * running_secs * PRICE_RUNNING_PER_GB_SEC
-        suspended_cost = self.memory_gb * suspended_secs * PRICE_SUSPENDED_PER_GB_SEC
-        # Burst cost: overage MB-seconds converted to GB-seconds, same rate as running
+        running_cost = (
+            self.vcpus * running_secs * PRICE_VCPU_PER_SEC +
+            self.memory_gb * running_secs * PRICE_MEMORY_PER_GB_SEC
+        )
+        suspended_cost = self.memory_gb * suspended_secs * PRICE_SNAPSHOT_PER_GB_SEC
+        # Burst cost: overage MB-seconds converted to GB-seconds, billed at combined rate
         burst_gb_seconds = self.burst_mb_seconds / 1024.0
-        burst_cost = burst_gb_seconds * PRICE_RUNNING_PER_GB_SEC
+        burst_vcpu_seconds = burst_gb_seconds / 2.0  # same 2GB:1vCPU ratio for burst
+        burst_cost = (
+            burst_vcpu_seconds * PRICE_VCPU_PER_SEC +
+            burst_gb_seconds * PRICE_MEMORY_PER_GB_SEC
+        )
         total_cost = running_cost + suspended_cost + burst_cost
 
         return {

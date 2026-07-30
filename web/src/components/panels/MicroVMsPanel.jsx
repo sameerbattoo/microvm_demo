@@ -299,7 +299,7 @@ export default function MicroVMsPanel({
                         </div>
                         <div className="vm-detail-row vm-detail-row-sub">
                           <span className="vm-detail-label">Rate</span>
-                          <span className="vm-detail-value">{memGb} GB × $0.0000133/s</span>
+                          <span className="vm-detail-value">{(memGb / 2).toFixed(1)} vCPU × $0.0000277/s + {memGb} GB × $0.0000037/s</span>
                         </div>
                         <div className="vm-detail-row vm-detail-row-sub">
                           <span className="vm-detail-label">Subtotal</span>
@@ -314,7 +314,7 @@ export default function MicroVMsPanel({
                           </div>
                           <div className="vm-detail-row vm-detail-row-sub">
                             <span className="vm-detail-label">Rate</span>
-                            <span className="vm-detail-value">{memGb} GB × $0.0000000309/s</span>
+                            <span className="vm-detail-value">{memGb} GB × $0.08/GB-month</span>
                           </div>
                           <div className="vm-detail-row vm-detail-row-sub">
                             <span className="vm-detail-label">Subtotal</span>
@@ -330,7 +330,7 @@ export default function MicroVMsPanel({
                           </div>
                           <div className="vm-detail-row vm-detail-row-sub">
                             <span className="vm-detail-label">Rate</span>
-                            <span className="vm-detail-value">$0.0000133/GB-sec (same as running)</span>
+                            <span className="vm-detail-value">vCPU + memory rate (same as running)</span>
                           </div>
                           <div className="vm-detail-row vm-detail-row-sub">
                             <span className="vm-detail-label">Subtotal</span>

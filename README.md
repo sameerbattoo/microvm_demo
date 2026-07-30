@@ -4,6 +4,33 @@ A Python & SQL notebook running on **AWS Lambda MicroVMs** — each session gets
 
 > Proof-of-concept demonstrating Lambda MicroVMs as stateful code execution sandboxes. Extensible to other runtimes (R, Node.js, Julia) by swapping the executor and image.
 
+**Contents:** [Demo Videos](#demo-videos) · [Quick Start](#quick-start) · [Why MicroVMs?](#why-lambda-microvms-for-notebooks) · [Architecture](#architecture) · [Features](#features) · [Data Sources](#data-source-connectivity) · [Configuration](#configuration) · [Testing](#testing) · [Project Structure](#project-structure) · [Technical Details](#technical-details) · [Prerequisites](#prerequisites) · [Cost](#cost)
+
+## Demo Videos
+
+<table>
+<tr>
+<td width="33%">
+<a href="https://share.descript.com/view/8BAokQd9eTy">
+<img src="https://img.shields.io/badge/▶_Video_1-Building_a_Data_Science_MicroVM_Image-blue?style=for-the-badge&labelColor=1a1a2e" width="100%"/>
+</a>
+<br/><sub>How to create a Docker image for a data science environment and deploy it as Lambda MicroVM images</sub>
+</td>
+<td width="33%">
+<a href="https://share.descript.com/view/AAPf8FAOKcl">
+<img src="https://img.shields.io/badge/▶_Video_2-Running_Notebooks_on_Lambda_MicroVMs-blue?style=for-the-badge&labelColor=1a1a2e" width="100%"/>
+</a>
+<br/><sub>Running Notebooks on Lambda MicroVMs</sub>
+</td>
+<td width="33%">
+<a href="https://share.descript.com/view/7WSjbHaxXKb">
+<img src="https://img.shields.io/badge/▶_Video_3-AI_Assistant_with_Full_VM_Context-blue?style=for-the-badge&labelColor=1a1a2e" width="100%"/>
+</a>
+<br/><sub>AI Assistant with Full MicroVM Context</sub>
+</td>
+</tr>
+</table>
+
 ## Quick Start
 
 ```bash
@@ -15,6 +42,38 @@ Opens at http://localhost:5173. Each notebook tab auto-launches a MicroVM. Closi
 **Requirements:** AWS CLI 2.35.10+, Python 3.11+, Node.js 18+, configured AWS credentials. See [Prerequisites](#prerequisites) for details.
 
 **Teardown:** `bash scripts/teardown.sh` (terminates all VMs, deletes images)
+
+---
+
+## Why Lambda MicroVMs for Notebooks?
+
+Traditional notebook platforms run kernels as containers on shared Kubernetes nodes. Lambda MicroVMs offer a fundamentally better primitive for this workload:
+
+| | EKS Pods (containers) | Lambda MicroVMs |
+|---|---|---|
+| **Isolation** | Shared host kernel (namespaces + cgroups) | Dedicated Firecracker guest kernel per session — hardware VM boundary |
+| **Idle cost** | 5-min eviction tail + 24/7 EBS volumes | Suspends to ~$0 instantly, snapshot only |
+| **Resume** | Kill pod → recreate → reattach EBS (~10-30s) | Snapshot restore with memory + disk intact (~1-2s) |
+| **Infra overhead** | Cluster autoscaler, node pools, PDBs, etcd tuning | None — fully managed, no cluster to operate |
+| **Blast radius** | Runaway kernel affects co-located pods on same node | Confined to its own VM, terminated cleanly |
+
+**Key benefits for notebook use cases:**
+
+- **VM-level tenant isolation** — Customer-supplied Python runs in its own Firecracker VM with a dedicated guest kernel. Container escapes, fork bombs, and malicious dependencies cannot cross the boundary. Materially stronger for SOC 2 and enterprise security reviews.
+
+- **Instant suspend, zero idle cost** — No eviction timers, no EBS volumes running 24/7. The VM freezes the moment the user stops typing and resumes in 1-2 seconds when they return. You pay only for active compute.
+
+- **Eliminates control-plane churn** — Notebook kernels stop being Kubernetes pods, so they generate zero scheduling, eviction, and etcd write load. The control-plane stability problem disappears for this workload.
+
+- **Simpler operations** — No cluster autoscaler, node drain logic, or EBS reattach choreography. Lifecycle is a single API: `run → suspend → resume → terminate`.
+
+**Cost comparison** (directional, per user/month, 2 vCPU / 4 GB kernel, ~2.5 hr/day session of which ~30 min is active cell execution):
+
+| Scale | Lambda MicroVMs | EKS + EBS (evict-on-idle) | Saving |
+|-------|----------------|---------------------------|--------|
+| Per user | ~$3.25 | ~$5.71 | ~43% |
+| 1,000 users | ~$3,254 | ~$5,781 | ~$30K/yr |
+| 2,000 users | ~$6,508 | ~$11,490 | ~$60K/yr |
 
 ---
 
@@ -337,7 +396,26 @@ Amazon Bedrock access with Claude Sonnet enabled. If not configured, AI buttons 
 
 ## Cost
 
-4 GB / 2 vCPU sandbox, 1 hour active per day: **~$5.60/month** (compute + snapshot storage).
+**Pricing rates** (from [AWS Lambda MicroVM pricing](https://aws.amazon.com/lambda/pricing/), Graviton/ARM64, us-east-1):
+
+| Component | Rate |
+|-----------|------|
+| vCPU (compute) | $0.0000276944 / vCPU-second |
+| Memory | $0.0000036667 / GB-second |
+| Snapshot (suspended) | ~$0.08 / GB-month |
+
+**Note:** CPU is allocated at 2 GB : 1 vCPU. A 4 GB kernel = 2 vCPU.
+
+**Example breakdown** — 2 vCPU / 4 GB kernel, ~2.5 hr/day session of which ~30 min is active cell execution (~11 hr/month compute, 22 workdays):
+
+| Component | Calculation | Monthly Cost |
+|-----------|-------------|-------------|
+| vCPU | 2 vCPU × 39,600s × $0.0000276944 | $2.19 |
+| Memory | 4 GB × 39,600s × $0.0000036667 | $0.58 |
+| Snapshot storage | ~6 GB × $0.08/GB-month | $0.48 |
+| **Total** | | **~$3.25** |
+
+See [Why MicroVMs](#why-lambda-microvms-for-notebooks) for comparison vs EKS (~43% savings).
 
 ---
 

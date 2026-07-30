@@ -45,9 +45,12 @@ export STORAGE_BACKEND="sqlite"
 # Postgres: export STORAGE_CONNECTION="postgresql://user:pass@host:5432/microvm_db"
 export STORAGE_CONNECTION=""
 
-# Pricing (per GB-second, Lambda MicroVM rates)
-export PRICE_RUNNING_PER_GB_SEC="0.0000133"
-export PRICE_SUSPENDED_PER_GB_SEC="0.0000000309"
+# Pricing (Lambda MicroVM rates, Graviton/ARM64, us-east-1)
+# AWS bills on TWO axes: vCPU + Memory (separately)
+# CPU allocated at 2 GB : 1 vCPU ratio
+export PRICE_VCPU_PER_SEC="0.0000276944"       # per vCPU-second
+export PRICE_MEMORY_PER_GB_SEC="0.0000036667"   # per GB-second
+export PRICE_SNAPSHOT_PER_GB_MONTH="0.08"       # suspended snapshot storage
 
 # Metrics retention (hours) — how long VM metrics are kept in the DB
 export METRICS_RETENTION_HOURS="168"
