@@ -234,11 +234,14 @@ print("Released. Process alive.")
             print(f"    Burst detected:       {len(burst_samples)}/{len(valid)} samples ({burst_duration}s above baseline)")
 
             print(f"\n  Cost implications:")
-            print(f"    Baseline cost:  {MEMORY_MIB/1024:.1f} GB × running_seconds × $0.0000133/GB-sec")
+            print(f"    Baseline cost:  {MEMORY_MIB/1024:.1f} GB × $0.0000037/GB-s + {MEMORY_MIB/1024/2:.1f} vCPU × $0.0000277/vCPU-s")
             if burst_samples:
                 avg_burst = sum(r["used_mb"] - MEMORY_MIB for r in burst_samples) / len(burst_samples)
-                print(f"    Burst surcharge: avg {avg_burst:.0f} MB above baseline × {burst_duration}s × rate")
-                print(f"    Estimated burst surcharge for this test: ${avg_burst/1024 * burst_duration * 0.0000133:.6f}")
+                print(f"    Burst surcharge: avg {avg_burst:.0f} MB above baseline × {burst_duration}s × (vCPU + memory rate)")
+                burst_gb = avg_burst / 1024
+                burst_vcpu = burst_gb / 2
+                burst_cost = burst_duration * (burst_vcpu * 0.0000276944 + burst_gb * 0.0000036667)
+                print(f"    Estimated burst surcharge for this test: ${burst_cost:.6f}")
             else:
                 print(f"    No burst billing (usage stayed within baseline)")
 

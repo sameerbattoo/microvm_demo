@@ -358,7 +358,7 @@ scripts/                      # config.sh, setup_iam.sh, build_all_images.sh, te
 7-step process: launch VM2 → health check → quiesce traffic → checkpoint VM1 → restore VM2 → swap routing → terminate VM1. Requests during quiesce are queued and replayed. Typical: ~5-10s total.
 
 ### Burst Model
-VMs get 4× baseline resources pre-allocated from boot. Usage above baseline incurs burst billing. Exceeding 4× = OOM crash. Rate: `$0.0000133/GB-sec` (both baseline and burst).
+VMs get 4× baseline resources pre-allocated from boot. Usage above baseline incurs burst billing at the same vCPU + memory rates. Exceeding 4× = OOM crash.
 
 ### Pre-Termination Wake
 AWS doesn't fire `/terminate` on suspended VMs. The proxy resumes the VM before max lifetime so the hook fires and state is saved.
