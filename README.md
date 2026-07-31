@@ -11,19 +11,19 @@ A Python & SQL notebook running on **AWS Lambda MicroVMs** — each session gets
 <table>
 <tr>
 <td width="33%">
-<a href="https://share.descript.com/view/8BAokQd9eTy">
+<a href="https://share.descript.com/view/8BAokQd9eTy" target="_blank" rel="noopener">
 <img src="https://img.shields.io/badge/▶_Video_1-Building_a_Data_Science_MicroVM_Image-blue?style=for-the-badge&labelColor=1a1a2e" width="100%"/>
 </a>
 <br/><sub>How to create a Docker image for a data science environment and deploy it as Lambda MicroVM images</sub>
 </td>
 <td width="33%">
-<a href="https://share.descript.com/view/AAPf8FAOKcl">
+<a href="https://share.descript.com/view/AAPf8FAOKcl" target="_blank" rel="noopener">
 <img src="https://img.shields.io/badge/▶_Video_2-Running_Notebooks_on_Lambda_MicroVMs-blue?style=for-the-badge&labelColor=1a1a2e" width="100%"/>
 </a>
 <br/><sub>Running Notebooks on Lambda MicroVMs</sub>
 </td>
 <td width="33%">
-<a href="https://share.descript.com/view/7WSjbHaxXKb">
+<a href="https://share.descript.com/view/7WSjbHaxXKb" target="_blank" rel="noopener">
 <img src="https://img.shields.io/badge/▶_Video_3-AI_Assistant_with_Full_VM_Context-blue?style=for-the-badge&labelColor=1a1a2e" width="100%"/>
 </a>
 <br/><sub>AI Assistant with Full MicroVM Context</sub>
