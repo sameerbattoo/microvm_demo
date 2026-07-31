@@ -326,6 +326,7 @@
 .cell-output {
   border-top: 1px solid var(--border-subtle);
   padding: var(--space-3);
+  padding-bottom: var(--space-4, 16px);
   background: color-mix(in srgb, var(--cell-gutter-bg) 80%, var(--bg-primary) 20%);
   animation: slideDown 0.2s ease;
   margin-top: 1px;
@@ -348,7 +349,7 @@
   color: var(--text-secondary);
   white-space: pre-wrap;
   word-break: break-word;
-  margin: 0;
+  margin: 8px 0 0 0;
 }
 
 .output-error {
@@ -1352,6 +1353,7 @@
 
 .cell-output-collapsed {
   padding: 0;
+  padding-bottom: 6px;
 }
 
 .cell-add-md-btn {
