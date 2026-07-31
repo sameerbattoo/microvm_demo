@@ -619,6 +619,19 @@
   box-shadow: var(--shadow-sm);
 }
 
+/* Plotly interactive charts (rendered in sandboxed iframe) */
+.output-plotly {
+  margin-top: 8px;
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  border: 1px solid var(--border-subtle);
+  background: var(--surface-0);
+}
+
+.output-plotly iframe {
+  display: block;
+}
+
 /* Rich output: HTML tables (DataFrames) */
 .output-html {
   overflow-x: auto;

@@ -31,3 +31,6 @@ dill==0.4.0
 
 # SQL engine (query DataFrames, CSV/Parquet files, and S3 directly with SQL)
 duckdb==1.2.2
+
+# Interactive charting (renders as HTML with zoom, pan, hover)
+plotly==6.9.0

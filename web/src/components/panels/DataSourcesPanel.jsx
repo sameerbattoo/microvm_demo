@@ -1,11 +1,84 @@
-import { useState, useRef, useEffect } from 'react'
+import { useState, useRef, useEffect, useCallback } from 'react'
 import { IconUpload, IconFile, IconDatabase, IconBucket, IconRefresh, IconX, IconNotebook, IconTable, IconCode } from '../Icons'
+import { PROXY_URL } from '../../config'
+
+/**
+ * SchemaExpander — lazy-loads and displays column schema for a data source.
+ * Click the expand arrow to fetch schema from /datasources/schema endpoint.
+ */
+function SchemaExpander({ sourceType, sourceId, onInsertCode, sessionId }) {
+  const [expanded, setExpanded] = useState(false)
+  const [schema, setSchema] = useState(null)
+  const [loading, setLoading] = useState(false)
+
+  const loadSchema = useCallback(async () => {
+    if (schema) { setExpanded(!expanded); return }
+    setLoading(true)
+    setExpanded(true)
+    try {
+      let url = `${PROXY_URL}/datasources/schema?source_type=${encodeURIComponent(sourceType)}&source_id=${encodeURIComponent(sourceId)}`
+      if (sessionId) url += `&session_id=${encodeURIComponent(sessionId)}`
+      const resp = await fetch(url)
+      if (resp.ok) {
+        setSchema(await resp.json())
+      }
+    } catch (e) {
+      console.warn('Schema load failed:', e)
+    }
+    setLoading(false)
+  }, [sourceType, sourceId, sessionId, schema, expanded])
+
+  const handleColumnClick = (e, colName) => {
+    e.stopPropagation()
+    if (sourceType === 'athena') {
+      onInsertCode(`SELECT ${colName} FROM ${sourceId} LIMIT 100`, 'sql')
+    } else if (sourceType === 'dynamodb') {
+      onInsertCode(`SELECT ${colName} FROM dynamodb."${sourceId}" LIMIT 10`, 'sql')
+    } else {
+      onInsertCode(`SELECT ${colName} FROM '${sourceId}' LIMIT 100`, 'sql')
+    }
+  }
+
+  return (
+    <>
+      <button className="ds-schema-toggle" onClick={(e) => { e.stopPropagation(); loadSchema() }} title="Show columns">
+        {expanded ? '▾' : '▸'}
+      </button>
+      {expanded && (
+        <div className="ds-schema-panel" onClick={(e) => e.stopPropagation()}>
+          {loading && <div className="ds-schema-loading">Loading schema...</div>}
+          {schema && schema.columns && (
+            <>
+              {schema.row_count != null && (
+                <div className="ds-schema-meta">{schema.row_count.toLocaleString()} rows · {schema.size || ''}</div>
+              )}
+              <div className="ds-schema-columns">
+                {schema.columns.map((col, i) => (
+                  <div key={i} className="ds-schema-col" onClick={(e) => handleColumnClick(e, col.name)} title={`Click to query ${col.name}`}>
+                    <span className="ds-col-name">{col.name}</span>
+                    <span className={`ds-col-type ds-type-${col.dtype}`}>{col.dtype}</span>
+                    {col.sample && <span className="ds-col-sample">{col.sample}</span>}
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
+          {schema && (!schema.columns || schema.columns.length === 0) && (
+            <div className="ds-schema-loading">No columns found</div>
+          )}
+        </div>
+      )}
+    </>
+  )
+}
 
 /**
  * Small popover that appears on a datasource item click to let user choose Python or SQL insertion.
+ * Fetches the code snippet from the backend DataSourceProvider.
  */
-function InsertChoicePopover({ pythonCode, sqlCode, onInsert, onClose, anchorRef }) {
+function InsertChoicePopover({ sourceType, sourceId, onInsert, onClose }) {
   const popRef = useRef(null)
+  const [loading, setLoading] = useState(false)
 
   useEffect(() => {
     const handleClick = (e) => {
@@ -15,29 +88,44 @@ function InsertChoicePopover({ pythonCode, sqlCode, onInsert, onClose, anchorRef
     return () => document.removeEventListener('mousedown', handleClick)
   }, [onClose])
 
+  const handleInsert = async (language) => {
+    setLoading(true)
+    try {
+      const resp = await fetch(
+        `${PROXY_URL}/datasources/snippet?source_type=${encodeURIComponent(sourceType)}&source_id=${encodeURIComponent(sourceId)}&language=${language}`
+      )
+      if (resp.ok) {
+        const data = await resp.json()
+        onInsert(data.code, data.cell_type)
+      }
+    } catch (e) {
+      console.warn('Snippet fetch failed:', e)
+    }
+    setLoading(false)
+    onClose()
+  }
+
   return (
     <div className="ds-insert-popover" ref={popRef}>
-      <button className="ds-insert-btn ds-insert-python" onClick={() => { onInsert(pythonCode, 'code'); onClose() }}>
+      <button className="ds-insert-btn ds-insert-python" onClick={() => handleInsert('python')} disabled={loading}>
         <IconCode width={11} height={11} /> Python
       </button>
-      {sqlCode && (
-        <button className="ds-insert-btn ds-insert-sql" onClick={() => { onInsert(sqlCode, 'sql'); onClose() }}>
-          <IconDatabase width={11} height={11} /> SQL
-        </button>
-      )}
+      <button className="ds-insert-btn ds-insert-sql" onClick={() => handleInsert('sql')} disabled={loading}>
+        <IconDatabase width={11} height={11} /> SQL
+      </button>
     </div>
   )
 }
 
 const PUBLIC_APIS = [
-  { id: 'worldbank', name: 'World Bank', icon: '🌍', desc: 'Country indicators & economics', code: `import pandas as pd, requests\n\n# Indicators: NY.GDP.MKTP.CD=GDP($), SP.POP.TOTL=Population, EN.ATM.CO2E.KT=CO2 emissions\ndef world_bank(indicator='NY.GDP.MKTP.CD', country='all', date='2018:2023'):\n    url = f'https://api.worldbank.org/v2/country/{country}/indicator/{indicator}?date={date}&format=json&per_page=300'\n    resp = requests.get(url).json()\n    df = pd.DataFrame(resp[1])[['country','date','value']]\n    df['country'] = df['country'].apply(lambda x: x['value'])\n    return df.dropna(subset=['value'])\n\ndf = world_bank()  # GDP in current US$ for all countries\ndf.head(20)` },
-  { id: 'countries', name: 'World Countries', icon: '🗺️', desc: '200+ countries with region, income, capital', code: `import pandas as pd, requests\n\nresp = requests.get('https://api.worldbank.org/v2/country/all?format=json&per_page=300').json()\ndf = pd.DataFrame(resp[1])[['name','region','capitalCity','incomeLevel','longitude','latitude']]\ndf['region'] = df['region'].apply(lambda x: x['value'])\ndf['incomeLevel'] = df['incomeLevel'].apply(lambda x: x['value'])\ndf = df[df['capitalCity'] != '']  # Filter out aggregates\ndf.head(20)` },
-  { id: 'coingecko', name: 'CoinGecko', icon: '💰', desc: 'Cryptocurrency market data', code: `import pandas as pd, requests\n\nresp = requests.get('https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=50').json()\ndf = pd.DataFrame(resp)[['name','symbol','current_price','market_cap','price_change_percentage_24h','total_volume']]\ndf.head(20)` },
-  { id: 'openmeteo', name: 'Open-Meteo', icon: '🌤️', desc: 'Weather forecast & historical data', code: `import pandas as pd, requests\n\ndef weather_forecast(lat, lon, days=7):\n    """Hourly weather forecast. Cities: NYC(40.71,-74.01), London(51.5,-0.12), Tokyo(35.68,139.69)"""\n    url = f'https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&hourly=temperature_2m,precipitation,wind_speed_10m&timezone=auto&forecast_days={days}'\n    data = requests.get(url).json()\n    df = pd.DataFrame(data['hourly'])\n    df['time'] = pd.to_datetime(df['time'])\n    return df\n\ndf = weather_forecast(40.71, -74.01)  # New York\ndf.head(20)` },
-  { id: 'earthquakes', name: 'USGS Earthquakes', icon: '🌋', desc: 'Recent seismic activity worldwide', code: `import pandas as pd, requests\n\ndef earthquakes(min_mag='4.5', period='month'):\n    """Seismic activity.\n    min_mag: '1.0', '2.5', '4.5', or 'significant' (only these are valid)\n    period: 'hour', 'day', 'week', or 'month'"""\n    valid_mags = ['1.0', '2.5', '4.5', 'significant']\n    if min_mag not in valid_mags:\n        raise ValueError(f'min_mag must be one of {valid_mags}')\n    url = f'https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/{min_mag}_{period}.geojson'\n    data = requests.get(url).json()\n    eqs = pd.json_normalize(data['features'])\n    df = eqs[['properties.mag','properties.place','properties.time']].copy()\n    df.columns = ['magnitude','place','time']\n    df['time'] = pd.to_datetime(df['time'], unit='ms')\n    return df.sort_values('magnitude', ascending=False)\n\ndf = earthquakes('4.5', 'month')\ndf.head(20)` },
-  { id: 'nasa', name: 'NASA APOD', icon: '🚀', desc: 'Astronomy Picture of the Day', code: `import pandas as pd, requests\n\ndef nasa_apod(count=20):\n    """Astronomy Picture of the Day. count: number of random entries to fetch"""\n    resp = requests.get(f'https://api.nasa.gov/planetary/apod?api_key=DEMO_KEY&count={count}').json()\n    return pd.DataFrame(resp)[['date','title','url','explanation']]\n\ndf = nasa_apod(20)\ndf` },
-  { id: 'openlibrary', name: 'Open Library', icon: '📚', desc: 'Search books and authors', code: `import pandas as pd, requests\n\ndef search_books(query='machine learning', limit=20):\n    """Search Open Library. Returns title, author, year, editions."""\n    resp = requests.get(f'https://openlibrary.org/search.json?q={query}&limit={limit}').json()\n    df = pd.DataFrame(resp['docs'])[['title','author_name','first_publish_year','edition_count']]\n    df['author_name'] = df['author_name'].apply(lambda x: x[0] if isinstance(x, list) and x else None)\n    return df.sort_values('edition_count', ascending=False)\n\ndf = search_books('machine learning', 20)\ndf` },
-  { id: 'publicholidays', name: 'Public Holidays', icon: '📅', desc: 'Holidays by country and year', code: `import pandas as pd, requests\n\ndef public_holidays(country='US', year=2025):\n    """Get holidays. Countries: US, GB, DE, FR, JP, IN, AU, CA"""\n    resp = requests.get(f'https://date.nager.at/api/v3/publicholidays/{year}/{country}').json()\n    return pd.DataFrame(resp)[['date','localName','name','countryCode']]\n\ndf = public_holidays('US', 2025)\ndf` },
+  { id: 'worldbank', name: 'World Bank', icon: '🌍', desc: 'Country indicators & economics', code: `import pandas as pd, requests\n\n# Indicators: NY.GDP.MKTP.CD=GDP($), SP.POP.TOTL=Population, EN.ATM.CO2E.KT=CO2 emissions\ndef world_bank(indicator='NY.GDP.MKTP.CD', country='all', date='2018:2023'):\n    url = f'https://api.worldbank.org/v2/country/{country}/indicator/{indicator}?date={date}&format=json&per_page=300'\n    resp = requests.get(url, timeout=60).json()\n    df = pd.DataFrame(resp[1])[['country','date','value']]\n    df['country'] = df['country'].apply(lambda x: x['value'])\n    return df.dropna(subset=['value'])\n\ndf = world_bank()  # GDP in current US$ for all countries\ndf.head(20)` },
+  { id: 'countries', name: 'World Countries', icon: '🗺️', desc: '200+ countries with region, income, capital', code: `import pandas as pd, requests\n\nresp = requests.get('https://api.worldbank.org/v2/country/all?format=json&per_page=300', timeout=60).json()\ndf = pd.DataFrame(resp[1])[['name','region','capitalCity','incomeLevel','longitude','latitude']]\ndf['region'] = df['region'].apply(lambda x: x['value'])\ndf['incomeLevel'] = df['incomeLevel'].apply(lambda x: x['value'])\ndf = df[df['capitalCity'] != '']  # Filter out aggregates\ndf.head(20)` },
+  { id: 'coingecko', name: 'CoinGecko', icon: '💰', desc: 'Cryptocurrency market data', code: `import pandas as pd, requests\n\nresp = requests.get('https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=50', timeout=60).json()\ndf = pd.DataFrame(resp)[['name','symbol','current_price','market_cap','price_change_percentage_24h','total_volume']]\ndf.head(20)` },
+  { id: 'openmeteo', name: 'Open-Meteo', icon: '🌤️', desc: 'Weather forecast & historical data', code: `import pandas as pd, requests\n\ndef weather_forecast(lat, lon, days=7):\n    """Hourly weather forecast. Cities: NYC(40.71,-74.01), London(51.5,-0.12), Tokyo(35.68,139.69)"""\n    url = f'https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&hourly=temperature_2m,precipitation,wind_speed_10m&timezone=auto&forecast_days={days}'\n    data = requests.get(url, timeout=60).json()\n    df = pd.DataFrame(data['hourly'])\n    df['time'] = pd.to_datetime(df['time'])\n    return df\n\ndf = weather_forecast(40.71, -74.01)  # New York\ndf.head(20)` },
+  { id: 'earthquakes', name: 'USGS Earthquakes', icon: '🌋', desc: 'Recent seismic activity worldwide', code: `import pandas as pd, requests\n\ndef earthquakes(min_mag='4.5', period='month'):\n    """Seismic activity.\n    min_mag: '1.0', '2.5', '4.5', or 'significant' (only these are valid)\n    period: 'hour', 'day', 'week', or 'month'"""\n    valid_mags = ['1.0', '2.5', '4.5', 'significant']\n    if min_mag not in valid_mags:\n        raise ValueError(f'min_mag must be one of {valid_mags}')\n    url = f'https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/{min_mag}_{period}.geojson'\n    data = requests.get(url, timeout=60).json()\n    eqs = pd.json_normalize(data['features'])\n    df = eqs[['properties.mag','properties.place','properties.time']].copy()\n    df.columns = ['magnitude','place','time']\n    df['time'] = pd.to_datetime(df['time'], unit='ms')\n    return df.sort_values('magnitude', ascending=False)\n\ndf = earthquakes('4.5', 'month')\ndf.head(20)` },
+  { id: 'nasa', name: 'NASA APOD', icon: '🚀', desc: 'Astronomy Picture of the Day', code: `import pandas as pd, requests\n\ndef nasa_apod(count=20):\n    """Astronomy Picture of the Day. count: number of random entries to fetch"""\n    resp = requests.get(f'https://api.nasa.gov/planetary/apod?api_key=DEMO_KEY&count={count}', timeout=60).json()\n    return pd.DataFrame(resp)[['date','title','url','explanation']]\n\ndf = nasa_apod(20)\ndf` },
+  { id: 'openlibrary', name: 'Open Library', icon: '📚', desc: 'Search books and authors', code: `import pandas as pd, requests\n\ndef search_books(query='machine learning', limit=20):\n    """Search Open Library. Returns title, author, year, editions."""\n    resp = requests.get(f'https://openlibrary.org/search.json?q={query}&limit={limit}', timeout=60).json()\n    df = pd.DataFrame(resp['docs'])[['title','author_name','first_publish_year','edition_count']]\n    df['author_name'] = df['author_name'].apply(lambda x: x[0] if isinstance(x, list) and x else None)\n    return df.sort_values('edition_count', ascending=False)\n\ndf = search_books('machine learning', 20)\ndf` },
+  { id: 'publicholidays', name: 'Public Holidays', icon: '📅', desc: 'Holidays by country and year', code: `import pandas as pd, requests\n\ndef public_holidays(country='US', year=2025):\n    """Get holidays. Countries: US, GB, DE, FR, JP, IN, AU, CA"""\n    resp = requests.get(f'https://date.nager.at/api/v3/publicholidays/{year}/{country}', timeout=60).json()\n    return pd.DataFrame(resp)[['date','localName','name','countryCode']]\n\ndf = public_holidays('US', 2025)\ndf` },
 ]
 
 const SAMPLE_DATA_FILES = [
@@ -123,10 +211,13 @@ export default function DataSourcesPanel({
                 >
                   <IconX width={11} height={11} />
                 </button>
+                {activeTab?.sessionId && (
+                  <SchemaExpander sourceType="local" sourceId={`/tmp/${file.name}`} onInsertCode={onInsertCode} sessionId={activeTab.sessionId} />
+                )}
                 {activePopover === `file-${file.name}` && (
                   <InsertChoicePopover
-                    pythonCode={`import pandas as pd\n\n${file.variable || 'df'} = pd.read_csv('/tmp/${file.name}')\n${file.variable || 'df'}.head()`}
-                    sqlCode={`SELECT * FROM '/tmp/${file.name}' LIMIT 10`}
+                    sourceType="local"
+                    sourceId={`/tmp/${file.name}`}
                     onInsert={onInsertCode}
                     onClose={() => setActivePopover(null)}
                   />
@@ -182,19 +273,15 @@ export default function DataSourcesPanel({
                   <span className="sidebar-file-name">{file.key}</span>
                   <span className="sidebar-file-meta">{file.size}</span>
                 </div>
-                {activePopover === `s3-${file.key}` && (() => {
-                  const ext = file.key.split('.').pop().toLowerCase()
-                  const readFn = ext === 'json' ? 'read_json' : ext === 'parquet' ? 'read_parquet' : 'read_csv'
-                  const pdReader = ext === 'json' ? 'pd.read_json' : ext === 'parquet' ? 'pd.read_parquet' : 'pd.read_csv'
-                  return (
+                <SchemaExpander sourceType="s3" sourceId={file.uri} onInsertCode={onInsertCode} />
+                {activePopover === `s3-${file.key}` && (
                   <InsertChoicePopover
-                    pythonCode={`import boto3, pandas as pd\n\ndef read_s3_file(bucket, key):\n    obj = boto3.client('s3').get_object(Bucket=bucket, Key=key)\n    return ${pdReader}(obj['Body'])\n\ndf = read_s3_file('${file.bucket}', '${file.key}')\ndf.head()`}
-                    sqlCode={`SELECT * FROM ${readFn}('s3://${file.bucket}/${file.key}') LIMIT 10`}
+                    sourceType="s3"
+                    sourceId={file.uri}
                     onInsert={onInsertCode}
                     onClose={() => setActivePopover(null)}
                   />
-                  )
-                })()}
+                )}
               </div>
             ))}
           </>
@@ -222,10 +309,11 @@ export default function DataSourcesPanel({
                   <span className="sidebar-file-name">{table.name}</span>
                   <span className="sidebar-file-meta">{table.item_count} items · {table.region}</span>
                 </div>
+                <SchemaExpander sourceType="dynamodb" sourceId={table.name} onInsertCode={onInsertCode} />
                 {activePopover === `dynamo-${table.name}` && (
                   <InsertChoicePopover
-                    pythonCode={`import boto3, pandas as pd\n\ndef scan_dynamodb(table_name, region='${table.region}'):\n    table = boto3.resource('dynamodb', region_name=region).Table(table_name)\n    return pd.DataFrame(table.scan()['Items'])\n\ndf = scan_dynamodb('${table.name}')\ndf.head()`}
-                    sqlCode={`SELECT * FROM dynamodb."${table.name}" LIMIT 10`}
+                    sourceType="dynamodb"
+                    sourceId={table.name}
                     onInsert={onInsertCode}
                     onClose={() => setActivePopover(null)}
                   />
@@ -257,10 +345,11 @@ export default function DataSourcesPanel({
                   <span className="sidebar-file-name">{table.name}</span>
                   <span className="sidebar-file-meta">{table.column_count} cols · {table.database}</span>
                 </div>
+                <SchemaExpander sourceType="athena" sourceId={`${table.database}.${table.name}`} onInsertCode={onInsertCode} />
                 {activePopover === `athena-${table.database}.${table.name}` && (
                   <InsertChoicePopover
-                    pythonCode={`import boto3, pandas as pd, time\n\ndef athena_query(sql, workgroup='${athenaWorkgroup}', region='${table.region}'):\n    c = boto3.client('athena', region_name=region)\n    eid = c.start_query_execution(QueryString=sql, WorkGroup=workgroup)['QueryExecutionId']\n    while c.get_query_execution(QueryExecutionId=eid)['QueryExecution']['Status']['State'] in ('QUEUED','RUNNING'): time.sleep(0.5)\n    rows = c.get_query_results(QueryExecutionId=eid)['ResultSet']['Rows']\n    header = [col['VarCharValue'] for col in rows[0]['Data']]\n    data = [[col.get('VarCharValue','') for col in row['Data']] for row in rows[1:]]\n    return pd.DataFrame(data, columns=header)\n\ndf = athena_query("SELECT * FROM ${table.database}.${table.name} LIMIT 100")\ndf`}
-                    sqlCode={`SELECT * FROM ${table.database}.${table.name} LIMIT 100`}
+                    sourceType="athena"
+                    sourceId={`${table.database}.${table.name}`}
                     onInsert={onInsertCode}
                     onClose={() => setActivePopover(null)}
                   />
@@ -280,7 +369,7 @@ export default function DataSourcesPanel({
           <div
             key={api.id}
             className="sidebar-file-item sidebar-ds-clickable"
-            onClick={() => onInsertCode && onInsertCode(api.code, 'code')}
+            onClick={() => setActivePopover(activePopover === `api-${api.id}` ? null : `api-${api.id}`)}
             title={api.desc}
           >
             <span className="sidebar-file-icon">{api.icon}</span>
@@ -288,6 +377,13 @@ export default function DataSourcesPanel({
               <span className="sidebar-file-name">{api.name}</span>
               <span className="sidebar-file-meta">{api.desc}</span>
             </div>
+            {activePopover === `api-${api.id}` && (
+              <div className="ds-insert-popover" ref={null}>
+                <button className="ds-insert-btn ds-insert-python" onClick={(e) => { e.stopPropagation(); onInsertCode(api.code, 'code'); setActivePopover(null) }}>
+                  <IconCode width={11} height={11} /> Python
+                </button>
+              </div>
+            )}
           </div>
         ))}
       </div>

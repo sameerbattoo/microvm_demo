@@ -280,14 +280,17 @@ class CostTracker:
         record = self._records.get(microvm_id)
         if not record:
             return
-        cost = record.compute()
-        storage.vm_session_update_cost(
-            microvm_id=microvm_id,
-            running_secs=cost["running_secs"],
-            suspended_secs=cost["suspended_secs"],
-            total_cost=cost["total_cost_usd"],
-            burst_mb_seconds=cost["burst_mb_seconds"],
-        )
+        try:
+            cost = record.compute()
+            storage.vm_session_update_cost(
+                microvm_id=microvm_id,
+                running_secs=cost["running_secs"],
+                suspended_secs=cost["suspended_secs"],
+                total_cost=cost["total_cost_usd"],
+                burst_mb_seconds=cost["burst_mb_seconds"],
+            )
+        except Exception:
+            pass  # Non-critical — cost data is also in memory
 
     def load_from_db(self, storage) -> None:
         """

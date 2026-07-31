@@ -354,24 +354,30 @@ export default function MicroVMsPanel({
                     {state === 'RUNNING' && attachedIds.includes(id) && (
                       <>
                         <button className="vm-action-btn vm-btn-suspend" onClick={() => { onSuspendInstance && onSuspendInstance(id) }} disabled={isActioning}>
-                          Suspend
+                          {isActioning ? <><span className="vm-btn-spinner" /> Suspending...</> : 'Suspend'}
                         </button>
                         <button className="vm-action-btn vm-btn-terminate" onClick={() => { onTerminateAndSave && onTerminateAndSave(id) }} disabled={isActioning}>
-                          {attachedTab?.checkpointEnabled ? 'Terminate & Save' : 'Terminate'}
+                          {isActioning ? <><span className="vm-btn-spinner" /> Terminating...</> : (attachedTab?.checkpointEnabled ? 'Terminate & Save' : 'Terminate')}
                         </button>
                       </>
                     )}
                     {state === 'RUNNING' && !attachedIds.includes(id) && (
                       <>
                         <button className="vm-action-btn vm-btn-attach" onClick={() => onAttachInstance && onAttachInstance(id, inst.endpoint, inst.memory_mib)} disabled={isActioning}>Attach</button>
-                        <button className="vm-action-btn vm-btn-terminate" onClick={() => handleVmTerminate(id)} disabled={isActioning}>{isActioning ? '...' : 'Terminate'}</button>
+                        <button className="vm-action-btn vm-btn-terminate" onClick={() => handleVmTerminate(id)} disabled={isActioning}>
+                          {isActioning ? <><span className="vm-btn-spinner" /> Terminating...</> : 'Terminate'}
+                        </button>
                       </>
                     )}
                     {state === 'SUSPENDED' && !attachedIds.includes(id) && (
-                      <button className="vm-action-btn vm-btn-terminate" onClick={() => handleVmTerminate(id)} disabled={isActioning}>{isActioning ? '...' : 'Terminate'}</button>
+                      <button className="vm-action-btn vm-btn-terminate" onClick={() => handleVmTerminate(id)} disabled={isActioning}>
+                        {isActioning ? <><span className="vm-btn-spinner" /> Terminating...</> : 'Terminate'}
+                      </button>
                     )}
                     {state === 'SUSPENDED' && attachedIds.includes(id) && (
-                      <button className="vm-action-btn vm-btn-attach" onClick={async () => { await handleVmResume(id) }} disabled={isActioning}>{isActioning ? '...' : 'Resume'}</button>
+                      <button className="vm-action-btn vm-btn-attach" onClick={async () => { await handleVmResume(id) }} disabled={isActioning}>
+                        {isActioning ? <><span className="vm-btn-spinner" /> Resuming...</> : 'Resume'}
+                      </button>
                     )}
                   </div>
                 </div>

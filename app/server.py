@@ -36,23 +36,55 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# --- Pre-import heavy libraries so they're in the snapshot ---
-# (eliminates first-cell import latency on MicroVM launch)
-import pandas
-import numpy
-import matplotlib
-matplotlib.use('Agg')
-import matplotlib.pyplot
-import boto3
-import boto3.session
-import duckdb
+# =============================================================================
+# PRE-LOADED LIBRARIES (Hot-loaded into the MicroVM image snapshot)
+# =============================================================================
+# Everything imported here is captured in the Firecracker memory snapshot at
+# image build time. When a MicroVM launches, these are already in memory —
+# eliminating first-cell import latency.
+#
+# ADD NEW LIBRARIES HERE if they're:
+#   - Large (>100ms import time)
+#   - Commonly used in notebook cells
+#   - Pre-installed in requirements.txt
+#
+# DO NOT add libraries here that are only used by the proxy or internal code.
+# This section is ONLY for user-facing notebook performance.
+# =============================================================================
 
-# Pre-warm common pandas/numpy sub-modules that are lazy-loaded on first use
-import pandas.io.parsers  # read_csv
-import pandas.io.excel    # read_excel
+# Data manipulation
+import pandas
+import pandas.io.parsers       # read_csv (lazy-loaded by default)
+import pandas.io.excel         # read_excel (lazy-loaded by default)
+import numpy
 import numpy.random
 import numpy.linalg
+
+# Visualization
+import matplotlib
+matplotlib.use('Agg')          # Non-interactive backend (required before pyplot import)
+import matplotlib.pyplot
 import matplotlib.figure
+import plotly
+import plotly.express
+import plotly.graph_objects
+
+# SQL engine
+import duckdb
+
+# AWS SDK
+import boto3
+import boto3.session
+
+# DuckDB httpfs extension (S3 access from SQL cells)
+# Pre-install so first SQL query against S3 doesn't pay the 3-4s cold start
+_duckdb_warmup = duckdb.connect()
+try:
+    _duckdb_warmup.execute("INSTALL httpfs; LOAD httpfs;")
+except Exception as e:
+    logger.warning(f"Failed to pre-install httpfs extension: {e}")
+_duckdb_warmup.close()
+del _duckdb_warmup
 
 # --- Persistent State ---
 # These survive across requests AND across suspend/resume.

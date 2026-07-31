@@ -225,6 +225,19 @@ class SandboxExecutor:
                     display_val = val.head(MAX_DISPLAY_ROWS)
                     return self._linkify_urls(display_val.to_pandas().to_html(classes='df-table', max_rows=MAX_DISPLAY_ROWS, max_cols=20))
 
+            # Check for Plotly figures — render as interactive HTML
+            if 'plotly' in module and type_name == 'Figure':
+                try:
+                    html = val.to_html(
+                        full_html=False,
+                        include_plotlyjs='cdn',
+                        config={'responsive': True, 'displayModeBar': True},
+                    )
+                    # Wrap in a marker div so the frontend can detect it's a Plotly chart
+                    return f'<div class="plotly-chart" data-plotly="true">{html}</div>'
+                except Exception:
+                    return ""
+
         except Exception:
             pass
         return ""

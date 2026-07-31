@@ -546,7 +546,26 @@ export default function Cell({
                 )}
                 {cell.output && <pre className="output-text">{cell.output}</pre>}
                 {cell.html && (
-                  <SortableTable html={cell.html} sanitizer={sanitizeHtml} />
+                  cell.html.includes('data-plotly="true"') ? (
+                    <div className="output-plotly">
+                      <iframe
+                        srcDoc={cell.html}
+                        sandbox="allow-scripts"
+                        style={{ width: '100%', height: '600px', border: 'none', borderRadius: '8px' }}
+                        title="Plotly Chart"
+                        onLoad={(e) => {
+                          // Auto-resize iframe to fit content
+                          try {
+                            const doc = e.target.contentDocument || e.target.contentWindow.document
+                            const h = doc.body.scrollHeight
+                            if (h > 100) e.target.style.height = `${h + 20}px`
+                          } catch (err) { /* sandbox may block access */ }
+                        }}
+                      />
+                    </div>
+                  ) : (
+                    <SortableTable html={cell.html} sanitizer={sanitizeHtml} />
+                  )
                 )}
                 {cell.error && <pre className="output-error">{cell.error}</pre>}
                 {cell.executionTime != null && (

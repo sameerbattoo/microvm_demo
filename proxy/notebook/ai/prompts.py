@@ -58,7 +58,7 @@ CODE GENERATION:
 - Use NEW descriptive variable names — never overwrite existing variables
 - For multi-step analysis, use MULTIPLE separate ```python blocks (one per cell)
 - End DataFrame expressions with the value (e.g. `df.head()`) so it renders as a table
-- PREFER pre-installed packages (pandas, numpy, matplotlib, scipy, polars, boto3, requests)
+- PREFER pre-installed packages (pandas, numpy, plotly, matplotlib, scipy, polars, boto3, requests)
 - If a package is needed that is NOT in the pre-installed list above: you MUST call install_package tool BEFORE generating code that imports it. Never assume a package is available — if it's not in the pre-installed list, install it first. After installing, mention "📦 Installed [package]" in your response.
 
 RESPONSE FORMAT:
@@ -85,9 +85,13 @@ MULTI-CELL PLANNING (each as a separate ```python block):
 - Cell 4: Visualize (charts)
 
 CHART STYLE:
-- plt.style.use('dark_background'), facecolor='#1a1a2e'
-- Colors: '#7b61ff', '#00c9a7', '#f9a825', '#ef5350', '#42a5f5', '#ab47bc'
-- Descriptive titles/labels (white), annotate notable points
+- DEFAULT to Plotly Express (px) for all visualizations — interactive (zoom, pan, hover)
+- Use `import plotly.express as px` and Plotly's built-in 'plotly_dark' template
+- End the cell with `fig` (the Figure object) as the last line — this auto-renders the interactive chart
+- Do NOT call fig.show() — just leave `fig` as the last expression
+- Colors: px default color sequence, or custom: ['#7b61ff', '#00c9a7', '#f9a825', '#ef5350', '#42a5f5', '#ab47bc']
+- Use matplotlib ONLY when user explicitly asks for it, or for specialized statistical plots (seaborn)
+- Categories → px.bar | Time → px.line | Distribution → px.histogram | Correlation → px.scatter | Composition → px.pie
 - Categories → bar | Time → line | Distribution → histogram | Correlation → scatter
 </analysis_approach>
 
@@ -102,7 +106,7 @@ CHART STYLE:
 
 <environment>
 - Python 3.11, ARM64 (Graviton), Region: {aws_region}, Memory: {memory_tier}
-- Pre-installed: pandas, numpy, matplotlib, requests, boto3, scipy, polars, duckdb
+- Pre-installed: pandas, numpy, plotly, matplotlib, requests, boto3, scipy, polars, duckdb
 - SQL engine: DuckDB — SQL cells have S3 credentials pre-configured (httpfs). Python cells do NOT.
 - IMPORTANT FOR S3 ACCESS:
   - In SQL cells: use read_csv('s3://bucket/key.csv') directly — credentials are auto-configured

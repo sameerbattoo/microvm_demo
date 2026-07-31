@@ -170,3 +170,141 @@ async def list_datasources(request: Request):
         "artifact_bucket": bucket_name,
         "athena_workgroup": ATHENA_WORKGROUP,
     }
+
+
+@router.get("/datasources/schema")
+async def get_datasource_schema(source_type: str, source_id: str, request: Request, session_id: str = None):
+    """
+    Get column schema for a specific data source.
+
+    Args:
+        source_type: 'athena', 'dynamodb', 's3', 'local'
+        source_id: Table name, S3 URI, or file path
+        session_id: Required for 'local' type (to forward request to the VM)
+
+    Returns:
+        {
+            "source_type": "athena",
+            "source_id": "microvm_demo_db.customers",
+            "display_name": "customers",
+            "columns": [{"name": "customer_id", "dtype": "string", "sample": "CUST-0100"}, ...],
+            "row_count": 200,
+            "size": "13 KB"
+        }
+    """
+    from proxy.platform.datasources import (
+        AthenaSchemaProvider,
+        DynamoDBSchemaProvider,
+        S3SchemaProvider,
+        LocalFileSchemaProvider,
+    )
+    from dataclasses import asdict
+    import httpx
+
+    # For local files, we need to execute code on the VM
+    if source_type == "local":
+        if not session_id:
+            return Response(
+                content='{"error": "session_id required for local file schema"}',
+                status_code=400,
+                media_type="application/json",
+            )
+        vm_manager = request.app.state.vm_manager
+        session_vm = vm_manager.get_session_vm(session_id)
+        if not session_vm:
+            return Response(
+                content='{"error": "Session not found"}',
+                status_code=404,
+                media_type="application/json",
+            )
+
+        async def execute_on_vm(sid, code):
+            token = vm_manager.get_auth_token(session_vm["vm_id"])
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                resp = await client.post(
+                    f"https://{session_vm['endpoint']}/execute",
+                    headers={"X-aws-proxy-auth": token, "Content-Type": "application/json"},
+                    json={"code": code},
+                )
+                if resp.status_code == 200:
+                    return resp.json()
+                return None
+
+        provider = LocalFileSchemaProvider(execute_fn=execute_on_vm)
+        schema = await provider.get_schema(source_id, session_id=session_id)
+    else:
+        providers = {
+            "athena": AthenaSchemaProvider(),
+            "dynamodb": DynamoDBSchemaProvider(),
+            "s3": S3SchemaProvider(),
+        }
+
+        provider = providers.get(source_type)
+        if not provider:
+            return Response(
+                content=f'{{"error": "Unknown source type: {source_type}"}}',
+                status_code=400,
+                media_type="application/json",
+            )
+
+        schema = await provider.get_schema(source_id)
+    if not schema:
+        return Response(
+            content=f'{{"error": "Schema not found for {source_id}"}}',
+            status_code=404,
+            media_type="application/json",
+        )
+
+    return {
+        "source_type": schema.source_type,
+        "source_id": schema.source_id,
+        "display_name": schema.display_name,
+        "columns": [asdict(col) for col in schema.columns],
+        "row_count": schema.row_count,
+        "size": schema.size,
+    }
+
+
+@router.get("/datasources/snippet")
+async def get_datasource_snippet(source_type: str, source_id: str, language: str = "python"):
+    """
+    Get a ready-to-run code snippet for a data source.
+
+    Args:
+        source_type: 'athena', 'dynamodb', 's3', 'local'
+        source_id: Table name, S3 URI, or file path
+        language: 'python' or 'sql'
+
+    Returns:
+        {"code": "...", "cell_type": "code" or "sql"}
+    """
+    from proxy.platform.datasources import (
+        AthenaSchemaProvider,
+        DynamoDBSchemaProvider,
+        S3SchemaProvider,
+        LocalFileSchemaProvider,
+    )
+
+    providers = {
+        "athena": AthenaSchemaProvider(),
+        "dynamodb": DynamoDBSchemaProvider(),
+        "s3": S3SchemaProvider(),
+        "local": LocalFileSchemaProvider(),
+    }
+
+    provider = providers.get(source_type)
+    if not provider:
+        return Response(
+            content=f'{{"error": "Unknown source type: {source_type}"}}',
+            status_code=400,
+            media_type="application/json",
+        )
+
+    if language == "sql":
+        code = provider.get_sql_snippet(source_id)
+        cell_type = "sql"
+    else:
+        code = provider.get_python_snippet(source_id)
+        cell_type = "code"
+
+    return {"code": code, "cell_type": cell_type}

@@ -1,0 +1,216 @@
+"""
+Athena schema provider — uses AWS Glue catalog for fast schema discovery.
+"""
+
+import os
+import time
+import logging
+from typing import Optional
+
+import boto3
+
+from .interface import DataSourceProvider, SourceSchema, ColumnInfo
+
+logger = logging.getLogger(__name__)
+
+# Cache TTL for Glue catalog lookups
+CACHE_TTL_SEC = 300  # 5 minutes
+
+
+class AthenaSchemaProvider(DataSourceProvider):
+    """Schema provider for Athena tables via Glue catalog."""
+
+    def __init__(self):
+        self._region = os.environ.get("AWS_REGION", "us-west-2")
+        self._database = os.environ.get("ATHENA_DB", "microvm_demo_db")
+        self._workgroup = os.environ.get("ATHENA_WORKGROUP", "microvm-demo")
+        self._cache: dict[str, tuple[float, SourceSchema]] = {}
+
+    @property
+    def source_type(self) -> str:
+        return "athena"
+
+    async def get_schema(self, source_id: str, session_id: str = None) -> Optional[SourceSchema]:
+        """
+        Get schema for an Athena table.
+        source_id: 'table_name' or 'database.table_name'
+        """
+        # Check cache
+        if source_id in self._cache:
+            ts, schema = self._cache[source_id]
+            if time.time() - ts < CACHE_TTL_SEC:
+                return schema
+
+        # Parse database.table
+        if '.' in source_id:
+            database, table_name = source_id.split('.', 1)
+        else:
+            database = self._database
+            table_name = source_id
+
+        try:
+            glue = boto3.client("glue", region_name=self._region)
+            resp = glue.get_table(DatabaseName=database, Name=table_name)
+            table = resp["Table"]
+
+            columns = []
+            for col in table.get("StorageDescriptor", {}).get("Columns", []):
+                columns.append(ColumnInfo(
+                    name=col["Name"],
+                    dtype=self._map_athena_type(col.get("Type", "string")),
+                    nullable=True,
+                ))
+            # Partition keys are also columns
+            for col in table.get("PartitionKeys", []):
+                columns.append(ColumnInfo(
+                    name=col["Name"],
+                    dtype=self._map_athena_type(col.get("Type", "string")),
+                    nullable=True,
+                ))
+
+            # Try to get row count from table parameters
+            params = table.get("Parameters", {})
+            row_count = None
+            if "recordCount" in params:
+                try:
+                    row_count = int(params["recordCount"])
+                except (ValueError, TypeError):
+                    pass
+
+            size = params.get("sizeKey", params.get("totalSize", ""))
+            if size:
+                try:
+                    size_bytes = int(size)
+                    if size_bytes < 1024:
+                        size = f"{size_bytes} B"
+                    elif size_bytes < 1024 * 1024:
+                        size = f"{size_bytes / 1024:.1f} KB"
+                    else:
+                        size = f"{size_bytes / (1024 * 1024):.1f} MB"
+                except (ValueError, TypeError):
+                    size = ""
+
+            schema = SourceSchema(
+                source_type="athena",
+                source_id=f"{database}.{table_name}",
+                display_name=table_name,
+                columns=columns,
+                row_count=row_count,
+                size=size,
+            )
+
+            # Populate sample values from a quick query
+            try:
+                preview = await self.get_preview(source_id, limit=1)
+                if preview:
+                    row = preview[0]
+                    for col in schema.columns:
+                        if col.name in row and row[col.name] is not None:
+                            col.sample = str(row[col.name])[:50]
+            except Exception:
+                pass
+
+            self._cache[source_id] = (time.time(), schema)
+            return schema
+
+        except Exception as e:
+            logger.warning(f"Athena schema lookup failed for {source_id}: {e}")
+            return None
+
+    async def get_preview(self, source_id: str, limit: int = 5) -> list[dict]:
+        """Run a LIMIT query via Athena and return rows."""
+        if '.' in source_id:
+            database, table_name = source_id.split('.', 1)
+        else:
+            database = self._database
+            table_name = source_id
+
+        try:
+            import asyncio
+            athena = boto3.client("athena", region_name=self._region)
+
+            sql = f'SELECT * FROM "{database}"."{table_name}" LIMIT {limit}'
+            exec_resp = athena.start_query_execution(
+                QueryString=sql,
+                WorkGroup=self._workgroup,
+            )
+            execution_id = exec_resp["QueryExecutionId"]
+
+            # Poll for completion (max 15s)
+            for _ in range(30):
+                status = athena.get_query_execution(QueryExecutionId=execution_id)
+                state = status["QueryExecution"]["Status"]["State"]
+                if state in ("SUCCEEDED", "FAILED", "CANCELLED"):
+                    break
+                await asyncio.sleep(0.5)
+
+            if state != "SUCCEEDED":
+                return []
+
+            results = athena.get_query_results(QueryExecutionId=execution_id)
+            rows_data = results.get("ResultSet", {}).get("Rows", [])
+            if len(rows_data) < 2:
+                return []
+
+            # First row is headers
+            headers = [col.get("VarCharValue", "") for col in rows_data[0].get("Data", [])]
+            rows = []
+            for row in rows_data[1:]:
+                row_dict = {}
+                for i, cell in enumerate(row.get("Data", [])):
+                    if i < len(headers):
+                        row_dict[headers[i]] = cell.get("VarCharValue", "")
+                rows.append(row_dict)
+            return rows
+
+        except Exception as e:
+            logger.warning(f"Athena preview failed for {source_id}: {e}")
+            return []
+
+    def get_python_snippet(self, source_id: str) -> str:
+        if '.' in source_id:
+            database, table_name = source_id.split('.', 1)
+        else:
+            database = self._database
+            table_name = source_id
+        return (
+            f"import boto3, pandas as pd, time\n"
+            f"\n"
+            f"def athena_query(sql, workgroup='{self._workgroup}', region='{self._region}'):\n"
+            f"    c = boto3.client('athena', region_name=region)\n"
+            f"    eid = c.start_query_execution(QueryString=sql, WorkGroup=workgroup)['QueryExecutionId']\n"
+            f"    while c.get_query_execution(QueryExecutionId=eid)['QueryExecution']['Status']['State'] in ('QUEUED','RUNNING'):\n"
+            f"        time.sleep(0.5)\n"
+            f"    rows = c.get_query_results(QueryExecutionId=eid)['ResultSet']['Rows']\n"
+            f"    header = [col['VarCharValue'] for col in rows[0]['Data']]\n"
+            f"    data = [[col.get('VarCharValue','') for col in row['Data']] for row in rows[1:]]\n"
+            f"    return pd.DataFrame(data, columns=header)\n"
+            f"\n"
+            f"{table_name} = athena_query(\"SELECT * FROM {database}.{table_name} LIMIT 100\")\n"
+            f"{table_name}.head()"
+        )
+
+    def get_sql_snippet(self, source_id: str) -> str:
+        if '.' in source_id:
+            return f"SELECT * FROM {source_id} LIMIT 100"
+        return f"SELECT * FROM {self._database}.{source_id} LIMIT 100"
+
+    @staticmethod
+    def _map_athena_type(athena_type: str) -> str:
+        """Map Athena/Hive types to simple display types."""
+        t = athena_type.lower()
+        if t in ("string", "varchar", "char"):
+            return "string"
+        if t in ("int", "integer", "bigint", "smallint", "tinyint"):
+            return "int"
+        if t in ("double", "float", "decimal"):
+            return "float"
+        if t in ("date",):
+            return "date"
+        if t in ("timestamp",):
+            return "datetime"
+        if t in ("boolean",):
+            return "boolean"
+        if t.startswith("array") or t.startswith("map") or t.startswith("struct"):
+            return "json"
+        return t

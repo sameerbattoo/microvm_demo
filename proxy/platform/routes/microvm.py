@@ -295,6 +295,22 @@ async def terminate_session(request: Request):
 
     session_vm = vm_manager.get_session_vm(session_id)
     if not session_vm:
+        # Fallback: session registry lost (proxy restart). Find VM by session_id in active_microvms or DB.
+        for vm_id, info in vm_manager.active_microvms.items():
+            if info.get("session_id") == session_id:
+                session_vm = {"vm_id": vm_id, "endpoint": info.get("endpoint")}
+                break
+    if not session_vm:
+        # Last resort: check the database
+        from proxy.storage import storage
+        active_sessions = storage.vm_session_list_active()
+        for s in active_sessions:
+            if s.get("session_id") == session_id:
+                vm_id = s["microvm_id"]
+                endpoint = s.get("endpoint", "")
+                session_vm = {"vm_id": vm_id, "endpoint": endpoint}
+                break
+    if not session_vm:
         return Response(content='{"error": "Session not found"}', status_code=404, media_type="application/json")
 
     microvm_id = session_vm["vm_id"]

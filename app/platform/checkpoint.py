@@ -180,8 +180,12 @@ class CheckpointManager:
             if skipped_vars:
                 logger.info(f"   Skipped details: {skipped_vars}")
             namespace_to_save = safe_namespace
-            checkpoint_bytes = dill.dumps(namespace_to_save)
-            logger.info(f"   Fallback serialize OK: {len(checkpoint_bytes)} bytes")
+            try:
+                checkpoint_bytes = dill.dumps(namespace_to_save)
+                logger.info(f"   Fallback serialize OK: {len(checkpoint_bytes)} bytes")
+            except Exception as fallback_err:
+                logger.error(f"   Fallback serialize also FAILED: {fallback_err}")
+                raise RuntimeError(f"Cannot serialize namespace: {fallback_err}") from fallback_err
 
         step_timings["serialize"] = _time.perf_counter() - t0
 
