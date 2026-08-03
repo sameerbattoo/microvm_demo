@@ -31,14 +31,14 @@
 }
 
 .cell-active {
-  border-color: rgba(137, 180, 250, 0.5);
-  border-left: 4px solid #4f8bff !important;
-  box-shadow: 0 0 0 1px rgba(79, 139, 255, 0.2), 0 2px 8px rgba(79, 139, 255, 0.1);
-  background: color-mix(in srgb, var(--cell-bg) 97%, #4f8bff 3%);
+  border-color: var(--accent-primary-muted);
+  border-left: 4px solid var(--accent-primary) !important;
+  box-shadow: 0 0 0 1px var(--accent-primary-subtle), 0 2px 8px var(--accent-primary-subtle);
+  background: color-mix(in srgb, var(--cell-bg) 97%, var(--accent-primary) 3%);
 }
 
 .cell-active .cell-gutter {
-  background: rgba(79, 139, 255, 0.08);
+  background: var(--accent-primary-subtle);
 }
 
 .cell-active .cell-number {
@@ -46,8 +46,11 @@
   background: var(--accent-primary-muted);
 }
 
-.cell:focus-within {
-  border-color: var(--accent-primary-muted);
+.cell:focus-within:not(.cell-active) {
+  border-color: var(--border-strong);
+}
+
+.cell-active:focus-within {
   box-shadow: var(--shadow-glow-blue);
 }
 
@@ -62,7 +65,7 @@
 }
 
 .cell-success.cell-active {
-  border-left: 4px solid #4f8bff !important;
+  border-left: 4px solid var(--accent-primary) !important;
 }
 
 .cell-error {
@@ -70,7 +73,7 @@
 }
 
 .cell-error.cell-active {
-  border-left: 4px solid #4f8bff !important;
+  border-left: 4px solid var(--accent-primary) !important;
 }
 
 /* ---- Gutter ---- */
@@ -1256,8 +1259,8 @@
   text-transform: uppercase;
   letter-spacing: 0.5px;
   cursor: pointer;
-  border-bottom: 1px solid rgba(79, 139, 255, 0.3);
-  border-left: 3px solid rgba(79, 139, 255, 0.5);
+  border-bottom: 1px solid var(--accent-primary-muted);
+  border-left: 3px solid var(--accent-primary);
   background: var(--surface-1);
   transition: all var(--transition-fast);
 }

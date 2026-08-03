@@ -3,7 +3,7 @@ import Notebook from './components/Notebook'
 import Sidebar from './components/Sidebar'
 import AiChatPanel from './components/AiChatPanel'
 import { ConfirmModal, InputModal } from './components/Modal'
-import { IconZap, IconSun, IconMoon } from './components/Icons'
+import { IconZap, IconSun, IconMoon, IconFlame } from './components/Icons'
 import { PROXY_URL } from './config'
 import { fetchNotebooks, saveNotebook as apiSaveNotebook, createNotebook as apiCreateNotebook, deleteNotebook as apiDeleteNotebook, migrateFromLocalStorage, loadChatMessages, saveChatMessages } from './services/notebooks'
 import './App.css'
@@ -223,7 +223,11 @@ export default function App() {
   }, [theme])
 
   const toggleTheme = useCallback(() => {
-    setTheme(prev => prev === 'dark' ? 'light' : 'dark')
+    setTheme(prev => {
+      if (prev === 'dark') return 'light'
+      if (prev === 'light') return 'ember'
+      return 'dark'
+    })
   }, [])
 
   // Modal state
@@ -770,8 +774,8 @@ export default function App() {
         <main className="app-main">
           {tabs.length === 0 && (
             <div className="app-empty">
-              <button className="app-empty-theme-btn" onClick={toggleTheme} title={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}>
-                {theme === 'dark' ? <IconSun width={16} height={16} /> : <IconMoon width={16} height={16} />}
+              <button className="app-empty-theme-btn" onClick={toggleTheme} title={`Switch theme (${theme})`}>
+                {theme === 'dark' ? <IconSun width={16} height={16} /> : theme === 'light' ? <IconFlame width={16} height={16} /> : <IconMoon width={16} height={16} />}
               </button>
               <div className="app-empty-icon">
                 <svg width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">

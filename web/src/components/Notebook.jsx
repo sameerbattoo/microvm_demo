@@ -2,7 +2,7 @@ import { useState, useCallback, useRef, useEffect, useMemo } from 'react'
 import { createPortal } from 'react-dom'
 import Cell from './Cell'
 import ConnectionPanel from './ConnectionPanel'
-import { IconPlus, IconPlayAll, IconPlay, IconTrash, IconSave, IconFolderOpen, IconStop, IconFile, IconSearch, IconChevronUp, IconChevronDown, IconX, IconZap, IconSun, IconMoon, IconCode, IconNotebook, IconEraser, IconDatabase } from './Icons'
+import { IconPlus, IconPlayAll, IconPlay, IconTrash, IconSave, IconFolderOpen, IconStop, IconFile, IconSearch, IconChevronUp, IconChevronDown, IconX, IconZap, IconSun, IconMoon, IconFlame, IconCode, IconNotebook, IconEraser, IconDatabase } from './Icons'
 import { PROXY_URL } from '../config'
 import './Notebook.css'
 
@@ -1030,8 +1030,8 @@ export default function Notebook({ tab, instances = {}, onUpdateTab, onMarkVmRun
             )
           })()}
 
-          <button className="toolbar-theme-btn" onClick={onToggleTheme} title={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}>
-            {theme === 'dark' ? <IconSun width={14} height={14} /> : <IconMoon width={14} height={14} />}
+          <button className="toolbar-theme-btn" onClick={onToggleTheme} title={`Switch theme (${theme})`}>
+            {theme === 'dark' ? <IconSun width={14} height={14} /> : theme === 'light' ? <IconFlame width={14} height={14} /> : <IconMoon width={14} height={14} />}
           </button>
           </div>
         </div>

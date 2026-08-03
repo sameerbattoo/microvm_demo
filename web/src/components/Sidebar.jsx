@@ -84,9 +84,13 @@ export default function Sidebar({
   const [dsLoading, setDsLoading] = useState(false)
   const [dsFetched, setDsFetched] = useState(false)
 
-  // VM badge state (for activity bar badge count)
-  const [vmBadgeInstances, setVmBadgeInstances] = useState({})
+  // VM badge state — use instances prop directly (synced with parent polling)
+  // Only use local poll as fallback when instances prop is empty
+  const [vmBadgeFallback, setVmBadgeFallback] = useState({})
   const [persistenceMode, setPersistenceMode] = useState('eternal')
+
+  // The canonical VM data: prefer the prop (updated by parent's faster poll) over local fallback
+  const vmBadgeInstances = Object.keys(instances).length > 0 ? instances : vmBadgeFallback
 
   // Persist active panel
   useEffect(() => {
@@ -231,27 +235,29 @@ export default function Sidebar({
     }
   }
 
-  // --- VM badge polling (for activity bar badge when MicroVMs panel is NOT active) ---
+  // --- VM badge fallback polling (only when instances prop is not provided) ---
   const fetchVmBadge = useCallback(async () => {
     try {
       const resp = await fetch(`${PROXY_URL}/instances`)
       if (resp.ok) {
         const data = await resp.json()
-        setVmBadgeInstances(data.instances || {})
+        setVmBadgeFallback(data.instances || {})
         if (data.persistence_mode) setPersistenceMode(data.persistence_mode)
       } else {
-        setVmBadgeInstances({})
+        setVmBadgeFallback({})
       }
     } catch {
-      setVmBadgeInstances({})
+      setVmBadgeFallback({})
     }
   }, [])
 
   useEffect(() => {
+    // Only run the fallback poll if parent isn't providing instances
+    if (Object.keys(instances).length > 0) return
     const interval = setInterval(fetchVmBadge, 15000)
     fetchVmBadge() // initial fetch
     return () => clearInterval(interval)
-  }, [fetchVmBadge])
+  }, [fetchVmBadge, instances])
 
   const formatDuration = (secs) => {
     if (!secs || secs < 60) return `${secs || 0}s`
@@ -301,7 +307,7 @@ export default function Sidebar({
           })()}`}
           onClick={() => togglePanel('microvms')}
           title="MicroVMs"
-          style={activePanel === 'microvms' ? { color: '#5cc2d4', borderColor: '#5cc2d4' } : {}}
+          style={activePanel === 'microvms' ? { color: 'var(--accent-primary)', borderColor: 'var(--accent-primary)' } : {}}
         >
           <IconServer width={18} height={18} />
           {Object.values(vmBadgeInstances).filter(i => i.state === 'RUNNING').length > 0 && (
@@ -314,7 +320,7 @@ export default function Sidebar({
           className={`activity-bar-item activity-bar-item-bottom ${activePanel === 'about' ? 'activity-bar-item-active' : ''}`}
           onClick={() => togglePanel('about')}
           title="About"
-          style={activePanel === 'about' ? { color: '#89b4fa', borderColor: '#89b4fa' } : {}}
+          style={activePanel === 'about' ? { color: 'var(--accent-primary)', borderColor: 'var(--accent-primary)' } : {}}
         >
           <svg width={18} height={18} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
         </button>
@@ -397,6 +403,7 @@ export default function Sidebar({
               activeTab={activeTab}
               attachedIds={attachedIds}
               vmMetrics={vmMetrics}
+              instances={instances}
               onAttachInstance={onAttachInstance}
               onTerminateAndSave={onTerminateAndSave}
               onSuspendInstance={onSuspendInstance}

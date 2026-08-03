@@ -7,25 +7,23 @@ export default function MicroVMsPanel({
   activeTab,
   attachedIds,
   vmMetrics,
+  instances: parentInstances,
   onAttachInstance,
   onTerminateAndSave,
   onSuspendInstance,
   formatDuration,
   onClose,
 }) {
-  const [vmInstances, setVmInstances] = useState({})
+  const [localInstances, setLocalInstances] = useState({})
   const [vmLoading, setVmLoading] = useState(false)
   const [vmFetched, setVmFetched] = useState(false)
   const [persistenceMode, setPersistenceMode] = useState('eternal')
   const [expandedVmId, setExpandedVmId] = useState(null)
   const [vmActionInProgress, setVmActionInProgress] = useState(new Set())
 
-  // Periodic refresh to keep VM state current
-  const [, setTick] = useState(0)
-  useEffect(() => {
-    const interval = setInterval(() => setTick(t => t + 1), 30000)
-    return () => clearInterval(interval)
-  }, [])
+  // Use parent instances (from App.jsx fast poll) when available, fallback to local
+  const vmInstances = (parentInstances && Object.keys(parentInstances).length > 0)
+    ? parentInstances : localInstances
 
   const fetchVmInstances = useCallback(async (showLoading = true) => {
     if (showLoading) setVmLoading(true)
@@ -33,28 +31,26 @@ export default function MicroVMsPanel({
       const resp = await fetch(`${PROXY_URL}/instances`)
       if (resp.ok) {
         const data = await resp.json()
-        setVmInstances(data.instances || {})
+        setLocalInstances(data.instances || {})
         if (data.persistence_mode) setPersistenceMode(data.persistence_mode)
       } else {
-        setVmInstances({})
+        setLocalInstances({})
       }
     } catch {
-      setVmInstances({})
+      setLocalInstances({})
     }
     setVmLoading(false)
     setVmFetched(true)
   }, [])
 
-  // Initial fetch
+  // Initial fetch (only if parent isn't providing instances)
   useEffect(() => {
-    if (!vmFetched) fetchVmInstances()
-  }, [vmFetched, fetchVmInstances])
-
-  // Auto-refresh every 10s
-  useEffect(() => {
-    const interval = setInterval(() => fetchVmInstances(false), 10000)
-    return () => clearInterval(interval)
-  }, [fetchVmInstances])
+    if (!vmFetched && (!parentInstances || Object.keys(parentInstances).length === 0)) {
+      fetchVmInstances()
+    } else if (!vmFetched) {
+      setVmFetched(true)
+    }
+  }, [vmFetched, fetchVmInstances, parentInstances])
 
   // Auto-expand the VM connected to the active notebook
   useEffect(() => {

@@ -63,7 +63,7 @@
 }
 
 .activity-bar-item-bottom:hover {
-  color: #5cc2d4;
+  color: var(--accent-primary);
 }
 
 .activity-bar-badge {
@@ -369,7 +369,7 @@
 .sidebar-icon-notebooks { color: #6390f0; }
 .sidebar-icon-datasources { color: #7ec89f; }
 .sidebar-icon-samples { color: #e2b86b; }
-.sidebar-icon-microvms { color: #5cc2d4; }
+.sidebar-icon-microvms { color: var(--accent-primary); }
 .sidebar-icon-s3 { color: #e89b4f; }
 .sidebar-icon-dynamodb { color: #b48ef0; }
 .sidebar-icon-athena { color: #4fa8e8; }
@@ -1146,7 +1146,7 @@
 }
 
 .vm-metric-cpu {
-  background: linear-gradient(90deg, #89b4fa, #b4befe);
+  background: linear-gradient(90deg, var(--accent-primary), var(--accent-purple));
 }
 
 .vm-metric-mem {
@@ -1240,7 +1240,7 @@
 }
 
 .vm-mode-eternal {
-  background: rgba(79, 139, 255, 0.15);
+  background: var(--accent-primary-subtle);
   color: var(--accent-primary);
 }
 
@@ -1896,11 +1896,11 @@
 }
 
 .ds-insert-python {
-  background: rgba(79, 139, 255, 0.15);
-  color: #4f8bff;
+  background: var(--accent-primary-subtle);
+  color: var(--accent-primary);
 }
 .ds-insert-python:hover {
-  background: rgba(79, 139, 255, 0.3);
+  background: var(--accent-primary-muted);
 }
 
 .ds-insert-sql {

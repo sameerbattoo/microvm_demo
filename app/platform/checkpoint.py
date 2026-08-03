@@ -85,10 +85,11 @@ class CheckpointManager:
     need to be passed to every method call.
     """
 
-    def __init__(self, executor, session_state: dict):
+    def __init__(self, executor, session_state: dict, *, skip_display_objects: bool = True):
         self._executor = executor
         self._session_state = session_state
         self._bucket: str | None = None
+        self._skip_display_objects = skip_display_objects
         self._user_installed_packages: list[str] = []  # Packages installed via /install endpoint
         self.last_save_timings: dict = {}
         self.last_restore_timings: dict = {}
@@ -147,6 +148,7 @@ class CheckpointManager:
 
         # Separate modules from data
         modules_skipped = []
+        display_skipped = []
         namespace_to_save = {}
         for key, value in self._executor._namespace.items():
             if key.startswith("__") and key.endswith("__"):
@@ -154,10 +156,15 @@ class CheckpointManager:
             if isinstance(value, _types.ModuleType):
                 modules_skipped.append(key)
                 continue
+            if self._skip_display_objects and _is_excluded_from_checkpoint(value):
+                display_skipped.append(f"{key}({type(value).__name__})")
+                continue
             namespace_to_save[key] = value
 
         if modules_skipped:
             logger.info(f"   Skipped modules: {modules_skipped}")
+        if display_skipped:
+            logger.info(f"   Skipped display objects: {display_skipped}")
         logger.info(f"   To serialize: {len(namespace_to_save)} vars — {list(namespace_to_save.keys())[:20]}")
 
         try:
