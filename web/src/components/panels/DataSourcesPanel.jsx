@@ -151,6 +151,7 @@ export default function DataSourcesPanel({
   onClose,
 }) {
   const [sampleDataExpanded, setSampleDataExpanded] = useState(true)
+  const [sandboxExpanded, setSandboxExpanded] = useState(true)
   const [s3Expanded, setS3Expanded] = useState(true)
   const [dynamoExpanded, setDynamoExpanded] = useState(true)
   const [athenaExpanded, setAthenaExpanded] = useState(true)
@@ -185,10 +186,12 @@ export default function DataSourcesPanel({
       {activeTab && <div className="sidebar-scope-pill"><IconNotebook width={12} height={12} /> {activeTab.name}</div>}
       <div className="sidebar-panel-body">
         {/* Sandbox Files */}
-        <div className="sidebar-subheader sidebar-subheader-toggle">
+        <div className="sidebar-subheader sidebar-subheader-toggle" onClick={() => setSandboxExpanded(!sandboxExpanded)}>
           <IconUpload width={11} height={11} className="sidebar-icon-file-csv" /> Sandbox Files <span className="sidebar-subheader-hint">local to VM</span>
+          {uploadedFiles.length > 0 && <span className="sidebar-subheader-count">{uploadedFiles.length} files</span>}
+          <span className="sidebar-subheader-chevron">{sandboxExpanded ? '▾' : '▸'}</span>
         </div>
-        {uploadedFiles.length > 0 ? (
+        {sandboxExpanded && uploadedFiles.length > 0 ? (
           <>
             {uploadedFiles.map(file => (
               <div
@@ -225,9 +228,9 @@ export default function DataSourcesPanel({
               </div>
             ))}
           </>
-        ) : (
+        ) : sandboxExpanded ? (
           <div className="sidebar-empty-inline">No files in sandbox.</div>
-        )}
+        ) : null}
 
         {/* Sample Data */}
         <div className="sidebar-subheader sidebar-subheader-toggle" onClick={() => setSampleDataExpanded(!sampleDataExpanded)}>

@@ -6,6 +6,7 @@ Part of: app.notebook (application layer)
 Endpoints:
   POST /install            - Install a pip package
   GET  /variables          - List namespace variables
+  POST /introspect         - Get attributes/methods of a variable (for autocomplete)
   POST /reset              - Clear namespace
   POST /interrupt          - Interrupt running execution
   GET  /health             - Health check + session stats
@@ -56,6 +57,59 @@ async def list_variables(request: Request):
     executor = request.app.state.executor
     request.app.state.session_state["request_count"] += 1
     return {"variables": executor.get_variables(), "count": len(executor.get_variables())}
+
+
+@router.post("/introspect")
+async def introspect_variable(request: Request):
+    """
+    Get attributes/methods of a variable for autocomplete dot-completion.
+    Request body: { "variable": "df", "partial": "hea" }
+    Returns: { "completions": [{"name": "head", "type": "method", "detail": "(...)"}, ...] }
+    """
+    executor = request.app.state.executor
+    body = await request.json()
+    var_name = body.get("variable", "")
+    partial = body.get("partial", "").lower()
+
+    ns = executor._namespace
+    if var_name not in ns:
+        return {"completions": []}
+
+    obj = ns[var_name]
+    try:
+        attrs = dir(obj)
+    except Exception:
+        return {"completions": []}
+
+    completions = []
+    for attr in attrs:
+        # Skip dunder attributes unless user explicitly types __
+        if attr.startswith("__") and not partial.startswith("__"):
+            continue
+        # Filter by partial match
+        if partial and not attr.lower().startswith(partial):
+            continue
+
+        # Determine type (method vs property)
+        try:
+            val = getattr(obj, attr, None)
+            if callable(val):
+                comp_type = "method"
+                detail = "()"
+            else:
+                comp_type = "property"
+                detail = type(val).__name__ if val is not None else ""
+        except Exception:
+            comp_type = "property"
+            detail = ""
+
+        completions.append({"name": attr, "type": comp_type, "detail": detail})
+
+        # Cap at 50 to avoid overwhelming the UI
+        if len(completions) >= 50:
+            break
+
+    return {"completions": completions}
 
 
 @router.post("/reset")

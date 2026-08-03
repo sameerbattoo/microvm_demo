@@ -1,14 +1,13 @@
 import { useState, useRef, useEffect, useMemo } from 'react'
-import Prism from 'prismjs'
-import 'prismjs/components/prism-python'
-import 'prismjs/components/prism-sql'
 import { marked } from 'marked'
 import { sanitizeHtml, sanitizeMarkdown } from '../services/sanitize'
 import MarkdownCell from './MarkdownCell'
+import CellEditor from './CellEditor'
 import { IconPlay, IconPlus, IconTrash, IconX, IconStop, IconChevronDown, IconChevronRight, IconGripVertical, IconEraser, IconCode, IconDatabase, IconZap } from './Icons'
 import { PROXY_URL } from '../config'
 import SortableTable from './SortableTable'
 import './Cell.css'
+import './CellEditor.css'
 
 // Derive a default variable name from SQL (based on the primary table being queried)
 function deriveSqlVarName(sql) {
@@ -70,8 +69,9 @@ export default function Cell({
   microvmId,
   sessionId,
   aiAvailable,
+  variables = {},
+  dataSources = null,
 }) {
-  const textareaRef = useRef(null)
   const [codeCollapsed, setCodeCollapsed] = useState(false)
   const [outputCollapsed, setOutputCollapsed] = useState(false)
   const [aiResult, setAiResult] = useState(
@@ -87,46 +87,65 @@ export default function Cell({
     }
   }, [cell.aiExplanation])
 
-  // Auto-resize textarea
-  useEffect(() => {
-    const el = textareaRef.current
-    if (el) {
-      el.style.height = 'auto'
-      el.style.height = `${el.scrollHeight}px`
-    }
-  }, [cell.code, codeCollapsed])
+  // Variable names for autocomplete
+  const variableNames = useMemo(() => Object.keys(variables || {}), [variables])
 
-  // Re-calculate height when container width changes (e.g., AI panel resize)
-  useEffect(() => {
-    const el = textareaRef.current
-    if (!el) return
-    const observer = new ResizeObserver(() => {
-      el.style.height = 'auto'
-      el.style.height = `${el.scrollHeight}px`
-    })
-    observer.observe(el.parentElement)
-    return () => observer.disconnect()
-  }, [])
+  // Datasource identifiers for autocomplete (table names, file paths, schemas)
+  const dataSourceNames = useMemo(() => {
+    if (!dataSources) return { items: [], schemas: {} }
+    const items = []
+    const schemas = {} // schema_name → [table_names]
 
-  const highlightedHtml = useMemo(() => {
-    if (!cell.code) return ''
-    const lang = cell.type === 'sql' ? 'sql' : 'python'
-    const grammar = cell.type === 'sql' ? Prism.languages.sql : Prism.languages.python
-    let html = Prism.highlight(cell.code, grammar, lang)
-    if (searchQuery && searchQuery.trim()) {
-      const escaped = searchQuery.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-      const regex = new RegExp(`(${escaped})`, 'gi')
-      let occurrenceIdx = 0
-      html = html.replace(regex, (match) => {
-        const cls = occurrenceIdx === searchActiveOccurrence
-          ? 'search-highlight search-highlight-active'
-          : 'search-highlight'
-        occurrenceIdx++
-        return `<mark class="${cls}">${match}</mark>`
+    // S3 files — suggest the read_csv('s3://...') pattern
+    if (dataSources.s3) {
+      dataSources.s3.forEach(f => {
+        const uri = f.uri || `s3://${f.bucket}/${f.key}`
+        items.push({ label: uri, type: 's3', detail: 'S3 file' })
       })
     }
-    return html
-  }, [cell.code, searchQuery, searchActiveOccurrence])
+
+    // Local sandbox files — suggest '/tmp/filename'
+    // (uploadedFiles come separately but we get them from the sidebar sync)
+
+    // DynamoDB tables — schema is "dynamodb", table names need quotes
+    if (dataSources.dynamodb) {
+      items.push({ label: 'dynamodb', type: 'schema', detail: 'DynamoDB schema' })
+      const dynTables = []
+      dataSources.dynamodb.forEach(t => {
+        const name = t.name || t.table_name || t
+        const label = typeof name === 'string' ? name : String(name)
+        dynTables.push(label)
+        items.push({ label: `dynamodb."${label}"`, type: 'dynamodb', detail: 'DynamoDB table' })
+      })
+      schemas['dynamodb'] = dynTables
+    }
+
+    // Athena tables — schema is the database name (from API response)
+    if (dataSources.athena && dataSources.athena.length > 0) {
+      const dbName = dataSources.athena[0]?.database
+      if (dbName) {
+        items.push({ label: dbName, type: 'schema', detail: 'Athena database' })
+        const athenaTables = []
+        dataSources.athena.forEach(t => {
+          const name = t.name || t.table_name || t
+          const label = typeof name === 'string' ? name : String(name)
+          athenaTables.push(label)
+          items.push({ label, type: 'athena', detail: 'Athena table' })
+          items.push({ label: `${dbName}.${label}`, type: 'athena', detail: 'Athena (qualified)' })
+        })
+        schemas[dbName] = athenaTables
+      } else {
+        // No database name — just add raw table names
+        dataSources.athena.forEach(t => {
+          const name = t.name || t.table_name || t
+          const label = typeof name === 'string' ? name : String(name)
+          items.push({ label, type: 'athena', detail: 'Athena table' })
+        })
+      }
+    }
+
+    return { items, schemas }
+  }, [dataSources])
 
   // Smart execute: detects NLP vs code and routes accordingly
   const smartExecute = () => {
@@ -151,25 +170,6 @@ export default function Cell({
       }
     }
     onExecute()
-  }
-
-  const handleKeyDown = (e) => {
-    // Shift+Enter to execute (or generate if content looks like NLP)
-    if (e.key === 'Enter' && e.shiftKey) {
-      e.preventDefault()
-      smartExecute()
-    }
-    // Tab to indent
-    if (e.key === 'Tab') {
-      e.preventDefault()
-      const start = e.target.selectionStart
-      const end = e.target.selectionEnd
-      const val = e.target.value
-      onCodeChange(val.substring(0, start) + '    ' + val.substring(end))
-      setTimeout(() => {
-        e.target.selectionStart = e.target.selectionEnd = start + 4
-      }, 0)
-    }
   }
 
   const handleAiExplain = async () => {
@@ -314,6 +314,7 @@ export default function Cell({
         isActive={isActive}
         isDragOver={isDragOver}
         hasSearchMatch={hasSearchMatch}
+        searchQuery={searchQuery}
         onFocus={onFocus}
         onCodeChange={onCodeChange}
         onAddBelow={onAddBelow}
@@ -397,23 +398,20 @@ export default function Cell({
                 />
               </div>
             )}
-            <div className="cell-editor-wrapper">
-              <pre
-                className="cell-editor-highlight"
-                aria-hidden="true"
-                dangerouslySetInnerHTML={{ __html: sanitizeHtml(highlightedHtml + '\n') }}
-              />
-              <textarea
-                ref={textareaRef}
-                className="cell-editor-textarea"
-                value={cell.code}
-                onChange={(e) => onCodeChange(e.target.value)}
-                onKeyDown={handleKeyDown}
-                placeholder="Type Python code or describe what you want in plain English... (Shift+Enter runs code or generates from NLP)"
-                spellCheck={false}
-                rows={1}
-              />
-            </div>
+            <CellEditor
+              code={cell.code}
+              language={cell.type === 'sql' ? 'sql' : 'python'}
+              placeholder={cell.type === 'sql'
+                ? 'Write SQL or describe what you want... (Shift+Enter runs or generates)'
+                : 'Type Python code or describe what you want in plain English... (Shift+Enter runs code or generates from NLP)'}
+              onCodeChange={onCodeChange}
+              onExecute={smartExecute}
+              onFocus={onFocus}
+              variables={variableNames}
+              dataSources={dataSourceNames}
+              sessionId={sessionId}
+              searchQuery={searchQuery}
+            />
             <div className="cell-actions">
               {cell.status === 'running' || generating ? (
                 <button

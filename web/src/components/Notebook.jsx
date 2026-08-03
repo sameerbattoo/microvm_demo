@@ -1128,6 +1128,8 @@ export default function Notebook({ tab, instances = {}, onUpdateTab, onMarkVmRun
             microvmId={tab.microvmId}
             sessionId={tab.sessionId}
             aiAvailable={aiAvailable}
+            variables={variables}
+            dataSources={tab._dataSources}
           />
         ))}
         <div className="add-cell-row">

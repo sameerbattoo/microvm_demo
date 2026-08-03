@@ -48,6 +48,11 @@ export default function MicroVMsPanel({
     if (!vmFetched && (!parentInstances || Object.keys(parentInstances).length === 0)) {
       fetchVmInstances()
     } else if (!vmFetched) {
+      // Parent provides instances, but we still need persistence_mode
+      fetch(`${PROXY_URL}/instances`)
+        .then(r => r.ok ? r.json() : null)
+        .then(data => { if (data?.persistence_mode) setPersistenceMode(data.persistence_mode) })
+        .catch(() => {})
       setVmFetched(true)
     }
   }, [vmFetched, fetchVmInstances, parentInstances])

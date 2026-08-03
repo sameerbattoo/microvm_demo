@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from 'react'
+import { useState, useRef, useEffect, useMemo } from 'react'
 import { marked } from 'marked'
 import { sanitizeMarkdown } from '../services/sanitize'
 import { IconCode, IconCheck, IconPlus, IconTrash, IconGripVertical, IconDatabase, IconPencil } from './Icons'
@@ -13,6 +13,7 @@ export default function MarkdownCell({
   isActive,
   isDragOver,
   hasSearchMatch,
+  searchQuery,
   onFocus,
   onCodeChange,
   onAddBelow,
@@ -78,7 +79,17 @@ export default function MarkdownCell({
           <div
             className="md-rendered"
             onDoubleClick={() => setMdEditing(true)}
-            dangerouslySetInnerHTML={{ __html: cell.code ? sanitizeMarkdown(marked.parse(cell.code)) : '<p class="md-placeholder">Double-click to edit markdown</p>' }}
+            dangerouslySetInnerHTML={{ __html: (() => {
+              let html = cell.code ? sanitizeMarkdown(marked.parse(cell.code)) : '<p class="md-placeholder">Double-click to edit markdown</p>'
+              if (searchQuery && searchQuery.trim() && cell.code) {
+                const escaped = searchQuery.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+                const regex = new RegExp(`(${escaped})`, 'gi')
+                html = html.replace(/>([^<]*)</g, (match, text) => {
+                  return '>' + text.replace(regex, '<mark class="search-highlight">$1</mark>') + '<'
+                })
+              }
+              return html
+            })() }}
           />
         )}
         <div className="cell-actions md-actions">

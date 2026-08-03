@@ -1,0 +1,47 @@
+/* CodeMirror 6 cell editor overrides */
+.cell-cm-editor {
+  flex: 1;
+  min-width: 0;
+  min-height: 40px;
+  overflow: hidden;
+}
+
+.cell-cm-editor .cm-editor {
+  height: auto;
+}
+
+.cell-cm-editor .cm-scroller {
+  overflow-x: hidden;
+  overflow-y: hidden;
+}
+
+/* Reserve space for the floating actions toolbar on first line */
+.cell-cm-editor .cm-content {
+  white-space: pre-wrap !important;
+  word-wrap: break-word !important;
+  overflow-wrap: break-word !important;
+  padding-right: 160px !important;
+}
+
+/* Hide default CM6 gutter (we have our own cell gutter) */
+.cell-cm-editor .cm-gutters {
+  display: none !important;
+}
+
+/* Fix focus outline — we use cell-level focus styles */
+.cell-cm-editor .cm-focused {
+  outline: none !important;
+}
+
+
+/* Search highlights inside CodeMirror */
+.cell-cm-editor .cm-search-highlight,
+.cell-cm-editor .cm-searchMatch {
+  background: rgba(255, 213, 79, 0.35) !important;
+  border-radius: 2px;
+}
+
+.cell-cm-editor .cm-searchMatch-selected {
+  background: rgba(255, 152, 0, 0.5) !important;
+  border-radius: 2px;
+}
