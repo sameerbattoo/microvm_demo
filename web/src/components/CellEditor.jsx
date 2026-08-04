@@ -132,7 +132,7 @@ const syntaxColors = HighlightStyle.define([
 // (created per-instance so they don't conflict)
 
 // ─── Search highlight — using CM6's native search extension ─────────────
-import { search, setSearchQuery as cmSetSearchQuery, SearchQuery } from '@codemirror/search'
+import { search, setSearchQuery as cmSetSearchQuery, SearchQuery, findNext, findPrevious } from '@codemirror/search'
 
 export default function CellEditor({
   code = '',
@@ -146,9 +146,12 @@ export default function CellEditor({
   dataSources = { items: [], schemas: {} },
   sessionId = null,
   searchQuery = '',
+  searchActiveOccurrence = -1,
 }) {
   const containerRef = useRef(null)
   const viewRef = useRef(null)
+  const mountedRef = useRef(true)
+  const isExternalUpdate = useRef(false)
   const compartmentsRef = useRef(null)
 
   // Lazily create compartments — only once, tied to the editor lifetime
@@ -240,7 +243,11 @@ export default function CellEditor({
               }
             }
           }
-        } catch { /* silently fail */ }
+        } catch (err) {
+          if (err.name !== 'AbortError') {
+            console.warn('[autocomplete] Introspect failed for', prefix, ':', err.message)
+          }
+        }
       }
 
       return null
@@ -401,25 +408,32 @@ export default function CellEditor({
     viewRef.current = view
 
     return () => {
+      mountedRef.current = false
       view.destroy()
       viewRef.current = null
     }
   }, []) // Only run once on mount
 
   // ─── Sync external code changes INTO the editor ───────────────────────
+  // Runs on every render — the `currentDoc !== code` guard prevents loops
   useEffect(() => {
+    if (!mountedRef.current) return
     const view = viewRef.current
     if (!view) return
     const currentDoc = view.state.doc.toString()
     if (currentDoc !== code) {
-      view.dispatch({
-        changes: { from: 0, to: currentDoc.length, insert: code },
-      })
+      // Direct state replacement — most reliable way to update CM6 externally
+      view.setState(
+        view.state.update({
+          changes: { from: 0, to: currentDoc.length, insert: code },
+        }).state
+      )
     }
-  }, [code])
+  })
 
   // ─── Switch language dynamically ─────────────────────────────────────
   useEffect(() => {
+    if (!mountedRef.current) return
     const view = viewRef.current
     if (!view) return
     view.dispatch({
@@ -429,6 +443,7 @@ export default function CellEditor({
 
   // ─── Update read-only state ───────────────────────────────────────────
   useEffect(() => {
+    if (!mountedRef.current) return
     const view = viewRef.current
     if (!view) return
     view.dispatch({
@@ -438,6 +453,7 @@ export default function CellEditor({
 
   // ─── Update autocomplete when variables change ────────────────────────
   useEffect(() => {
+    if (!mountedRef.current) return
     const view = viewRef.current
     if (!view) return
     view.dispatch({
@@ -454,16 +470,26 @@ export default function CellEditor({
   // ─── Update search highlighting ──────────────────────────────────────
   useEffect(() => {
     searchQueryRef.current = searchQuery
+    if (!mountedRef.current) return
     const view = viewRef.current
     if (!view) return
-    // Use CM6's native search to highlight matches (no panel shown)
+    // Set the search query (highlights all matches)
     const q = new SearchQuery({
       search: searchQuery || '',
       caseSensitive: false,
       literal: true,
     })
     view.dispatch({ effects: cmSetSearchQuery.of(q) })
-  }, [searchQuery])
+
+    // Advance to the active occurrence within this cell
+    if (searchQuery && searchActiveOccurrence >= 0) {
+      // Move cursor to start of document, then findNext N times
+      view.dispatch({ selection: { anchor: 0 } })
+      for (let i = 0; i <= searchActiveOccurrence; i++) {
+        findNext(view)
+      }
+    }
+  }, [searchQuery, searchActiveOccurrence])
 
   return (
     <div ref={containerRef} className="cell-cm-editor" />

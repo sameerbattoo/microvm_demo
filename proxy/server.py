@@ -32,7 +32,8 @@ import os
 import asyncio
 import logging
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.responses import Response
 from fastapi.middleware.cors import CORSMiddleware
 
 from proxy.storage import storage, _connection_string
@@ -127,3 +128,56 @@ async def health():
         "max_lifetime_seconds": int(os.environ.get("MAX_LIFETIME_SECONDS", "28800")),
         "rotation_lead_seconds": int(os.environ.get("ROTATION_LEAD_SECONDS", "60")),
     }
+
+
+# --- Package categories endpoint ---
+@app.get("/package-categories")
+async def package_categories(session_id: str = None):
+    """
+    Return package categorization data for the frontend.
+    - categories: static mapping of package → category
+    - import_aliases: recommended import statements
+    - category_order: display order for category groups
+    - user_installed: packages installed by the user in this session (with categories)
+    """
+    from proxy.platform.package_classifier import get_all_categories, get_all_import_aliases, get_category_order
+
+    vm_manager = app.state.vm_manager
+    user_packages = []
+    if session_id:
+        user_packages = vm_manager.get_user_installed_packages(session_id)
+
+    return {
+        "categories": get_all_categories(),
+        "import_aliases": get_all_import_aliases(),
+        "category_order": get_category_order(),
+        "user_installed": user_packages,
+    }
+
+
+@app.post("/track-install")
+async def track_install(request: Request):
+    """
+    Track a user-installed package for categorization.
+    Called by the frontend after a successful pip install.
+    Body: { "session_id": "...", "package": "seaborn" }
+    """
+    from proxy.platform.package_classifier import classify_and_cache, get_import_alias
+
+    body = await request.json()
+    session_id = body.get("session_id", "")
+    package = body.get("package", "")
+
+    if not package:
+        return Response(status_code=400, content='{"error": "package required"}', media_type="application/json")
+
+    # Classify the package (static first, then PyPI lookup)
+    category = await classify_and_cache(package)
+    import_alias = get_import_alias(package)
+
+    # Store in vm_manager (only if session provided)
+    if session_id:
+        vm_manager = app.state.vm_manager
+        vm_manager.record_user_install(session_id, package, category)
+
+    return {"package": package, "category": category, "import_alias": import_alias}

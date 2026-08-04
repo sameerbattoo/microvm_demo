@@ -584,13 +584,13 @@
 }
 
 .cell-ai-apply-btn {
-  background: var(--accent-success);
-  color: white;
+  background: var(--accent-primary);
+  color: var(--text-inverse);
   border: none;
   border-radius: var(--radius-sm);
-  padding: 4px 10px;
+  padding: 4px 12px;
   font-size: var(--font-size-xs);
-  font-weight: 600;
+  font-weight: 700;
   cursor: pointer;
   transition: opacity var(--transition-fast);
 }

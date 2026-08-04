@@ -177,5 +177,67 @@ Fix this Python code. Return ONLY the corrected code — no explanations, no mar
 - Preserve user's intent and variable names
 - Add missing imports at top if needed
 - Add type conversions if needed
+- PRESERVE the user's approach — fix the path/syntax, don't rewrite the logic or switch data sources
+- If a file path is wrong, correct it using the available data sources listed below
 - Comment if a variable should come from a prior cell
+</instructions>"""
+
+
+FIX_SQL_ERROR_PROMPT = """<task>
+Fix this SQL query. Return ONLY the corrected SQL — no explanations, no markdown fences, no Python code.
+This is a SQL cell that auto-routes to the appropriate engine based on the data source.
+</task>
+
+<broken_sql>
+{code}
+</broken_sql>
+
+<error_message>
+{error}
+</error_message>
+
+<sql_engines_and_syntax>
+The SQL cell auto-detects the data source and routes to the correct engine:
+
+1. LOCAL FILES → DuckDB (direct file query):
+   SELECT * FROM '/tmp/sales_data.csv'
+   SELECT * FROM '/tmp/data.parquet'
+   SELECT * FROM '/tmp/data.json'
+   Note: Path must be quoted, include extension
+
+2. S3 FILES → DuckDB (via httpfs, pre-loaded):
+   SELECT * FROM read_csv('s3://bucket-name/path/to/file.csv')
+   SELECT * FROM read_parquet('s3://bucket-name/path/to/file.parquet')
+   Note: Must use read_csv/read_parquet/read_json wrapper with full S3 URI including extension
+
+3. ATHENA TABLES → Athena (standard SQL, sent directly to Athena service):
+   SELECT * FROM database_name.table_name
+   Example: SELECT * FROM microvm_demo_db.customers WHERE age > 30
+   Note: Uses dot-notation (database.table), standard ANSI SQL syntax
+
+4. DYNAMODB TABLES → PartiQL (sent server-side to DynamoDB):
+   SELECT * FROM dynamodb."table-name"
+   SELECT * FROM dynamodb."table-name" WHERE pk = 'value'
+   Note: Table names with hyphens MUST be double-quoted, uses dynamodb. prefix
+
+5. DATAFRAMES (in-memory variables) → DuckDB:
+   SELECT * FROM variable_name
+   Example: SELECT * FROM sales WHERE revenue > 1000
+   Note: Variable must exist as a pandas DataFrame in the namespace
+
+MIXED QUERIES: When mixing sources (e.g. Athena + local), remote data is
+materialized first then joined via DuckDB.
+</sql_engines_and_syntax>
+
+<instructions>
+- Return ONLY the corrected SQL query
+- PRESERVE the user's data source intent — if they used read_csv('s3://...'), fix the S3 path; do NOT switch to a variable or different source
+- If a file path is missing an extension (.csv, .parquet), add it based on the available data sources
+- Identify which engine/source type the query is targeting from the syntax
+- Fix the SQL based on the correct syntax for that source type
+- Ensure file paths include correct extensions (.csv, .parquet, etc.)
+- Quote DynamoDB table names that contain hyphens
+- Use dot-notation (db.table) for Athena, not quoted strings
+- Do NOT wrap in Python — this runs directly as SQL
+- Do NOT suggest querying an in-memory variable when the user clearly intended to read from a file/S3/table
 </instructions>"""

@@ -185,8 +185,10 @@ def explain(code: str, output: str, context: dict) -> dict:
 
     response_text = response["output"]["message"]["content"][0]["text"].strip()
 
-    # Strip markdown code fences if present
-    if response_text.startswith("```"):
+    # Strip markdown code fences if present (e.g. ```json ... ``` or ``` ... ```)
+    if response_text.startswith("```json"):
+        response_text = response_text.split("```json", 1)[1].rsplit("```", 1)[0].strip()
+    elif response_text.startswith("```"):
         lines = response_text.split("\n")
         response_text = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:]).strip()
 
@@ -213,9 +215,46 @@ def fix_error(code: str, error: str, context: dict) -> str:
     One-shot: fix a cell's error and return corrected code.
     Uses a direct model call (no agent loop) for speed.
     """
-    from .prompts import FIX_ERROR_PROMPT
+    from .prompts import FIX_ERROR_PROMPT, FIX_SQL_ERROR_PROMPT
 
-    prompt = FIX_ERROR_PROMPT.format(code=code, error=error)
+    cell_type = context.get("cell_type", "code")
+    if cell_type == "markdown":
+        return code  # Markdown cells don't have execution errors to fix
+
+    # Build context section for the prompt
+    context_section = ""
+    variables = context.get("variables", [])
+    data_sources = context.get("data_sources")
+    cells = context.get("cells", [])
+
+    if variables:
+        context_section += f"\n<available_variables>\n{', '.join(variables[:30])}\n</available_variables>\n"
+
+    if data_sources:
+        ds_lines = []
+        if data_sources.get("s3"):
+            for f in data_sources["s3"][:5]:
+                uri = f.get("uri") or f.get("key", "")
+                ds_lines.append(f"  S3: {uri}")
+        if data_sources.get("dynamodb"):
+            for t in data_sources["dynamodb"][:5]:
+                ds_lines.append(f"  DynamoDB: {t.get('name', '')}")
+        if data_sources.get("athena"):
+            for t in data_sources["athena"][:5]:
+                db = t.get("database", "")
+                ds_lines.append(f"  Athena: {db}.{t.get('name', '')}")
+        if ds_lines:
+            context_section += f"\n<available_data_sources>\n" + "\n".join(ds_lines) + "\n</available_data_sources>\n"
+
+    if cells:
+        prev_code = "\n---\n".join(c.get("code", "")[:200] for c in cells[-5:])
+        context_section += f"\n<previous_cells>\n{prev_code}\n</previous_cells>\n"
+
+    if cell_type == "sql":
+        prompt = FIX_SQL_ERROR_PROMPT.format(code=code, error=error) + context_section
+    else:
+        prompt = FIX_ERROR_PROMPT.format(code=code, error=error) + context_section
+
     client = _get_direct_client()
 
     response = client.converse(
@@ -227,10 +266,17 @@ def fix_error(code: str, error: str, context: dict) -> str:
     response_text = response["output"]["message"]["content"][0]["text"].strip()
 
     # Clean markdown fences if present
-    if "```python" in response_text:
-        parts = response_text.split("```python")
-        if len(parts) > 1:
-            return parts[1].split("```")[0].strip()
+    if cell_type == "sql":
+        if "```sql" in response_text:
+            parts = response_text.split("```sql")
+            if len(parts) > 1:
+                return parts[1].split("```")[0].strip()
+    else:
+        if "```python" in response_text:
+            parts = response_text.split("```python")
+            if len(parts) > 1:
+                return parts[1].split("```")[0].strip()
+
     if response_text.startswith("```") and response_text.endswith("```"):
         lines = response_text.split("\n")
         return "\n".join(lines[1:-1]).strip()

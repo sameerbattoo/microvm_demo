@@ -205,8 +205,12 @@ async def ai_fix_error(request: Request):
     body = await request.json()
     code = body.get("code", "")
     error = body.get("error", "")
+    cell_type = body.get("cell_type", "code")
     microvm_id = body.get("microvm_id", "")
     microvm_endpoint = body.get("microvm_endpoint", "")
+    variables = body.get("variables", [])
+    data_sources = body.get("data_sources", None)
+    cells = body.get("cells", [])
 
     if not code or not error:
         return Response(status_code=400, content='{"error": "code and error required"}', media_type="application/json")
@@ -215,6 +219,10 @@ async def ai_fix_error(request: Request):
         "proxy_url": f"http://localhost:{os.environ.get('PROXY_PORT', '8081')}",
         "microvm_id": microvm_id,
         "microvm_endpoint": microvm_endpoint,
+        "cell_type": cell_type,
+        "variables": variables,
+        "data_sources": data_sources,
+        "cells": cells,
     }
 
     try:

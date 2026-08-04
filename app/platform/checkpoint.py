@@ -44,10 +44,13 @@ _EXCLUDED_TYPE_NAMES = frozenset({
     "FigureCanvasAgg",
     "FigureCanvasPdf",
     "FigureCanvasSVG",
-    # PIL/Pillow images (large bitmap data, usually transient)
+    # PIL/Pillow images (specific file-type classes)
     "PngImageFile",
     "JpegImageFile",
-    "Image",
+    "GifImageFile",
+    "BmpImageFile",
+    "TiffImageFile",
+    "WebPImageFile",
 })
 
 # Module prefixes — any object from these modules is excluded

@@ -4,7 +4,8 @@ import { sanitizeHtml, sanitizeMarkdown } from '../services/sanitize'
 import MarkdownCell from './MarkdownCell'
 import CellEditor from './CellEditor'
 import { IconPlay, IconPlus, IconTrash, IconX, IconStop, IconChevronDown, IconChevronRight, IconGripVertical, IconEraser, IconCode, IconDatabase, IconZap } from './Icons'
-import { PROXY_URL } from '../config'
+import { PROXY_URL, AI_TIMEOUT_MS } from '../config'
+import { fetchWithTimeout } from '../services/fetchWithTimeout'
 import SortableTable from './SortableTable'
 import './Cell.css'
 import './CellEditor.css'
@@ -177,10 +178,11 @@ export default function Cell({
     const controller = new AbortController()
     aiAbortRef.current = controller
     try {
-      const resp = await fetch(`${PROXY_URL}/ai/explain`, {
+      const resp = await fetchWithTimeout(`${PROXY_URL}/ai/explain`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         signal: controller.signal,
+        timeout: AI_TIMEOUT_MS,
         body: JSON.stringify({
           code: cell.code || '',
           output: (cell.output || '') + (cell.html ? ' [table output]' : ''),
@@ -213,15 +215,24 @@ export default function Cell({
     const controller = new AbortController()
     aiAbortRef.current = controller
     try {
-      const resp = await fetch(`${PROXY_URL}/ai/fix`, {
+      const resp = await fetchWithTimeout(`${PROXY_URL}/ai/fix`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         signal: controller.signal,
+        timeout: AI_TIMEOUT_MS,
         body: JSON.stringify({
           code: cell.code || '',
           error: cell.error || '',
+          cell_type: cell.type || 'code',
           microvm_id: microvmId || '',
           session_id: sessionId || '',
+          variables: Object.keys(variables || {}),
+          data_sources: dataSources || null,
+          cells: (notebookContext || []).slice(0, index).map(c => ({
+            type: c.type || 'code',
+            code: (c.code || '').slice(0, 300),
+            output: (c.output || '').slice(0, 100),
+          })),
         }),
       })
       if (resp.ok) {
@@ -242,9 +253,14 @@ export default function Cell({
     setAiResult(null)
   }
 
+  // Version counter — incremented on external code changes (Apply Fix, AI generate)
+  // Forces CellEditor to remount with fresh content
+  const [editorVersion, setEditorVersion] = useState(0)
+
   const handleApplyFix = () => {
     if (aiResult?.type === 'fix' && aiResult.content) {
       onCodeChange(aiResult.content)
+      setEditorVersion(v => v + 1)
       setAiResult(null)
     }
   }
@@ -258,11 +274,11 @@ export default function Cell({
         ? `Generate a SQL query for the following request. This is a SQL cell using DuckDB. Use proper DuckDB syntax: local files as '/tmp/file.csv', S3 as read_csv('s3://...'), Athena tables as database.table. Return ONLY the SQL wrapped in \`\`\`sql, no explanations:\n\n${cell.code}`
         : `Generate Python code for the following request. This is a PYTHON code cell — return ONLY Python code, never SQL. Do NOT use \`\`\`sql blocks. Return ONLY the code wrapped in \`\`\`python, no explanations:\n\n${cell.code}`
 
-      const resp = await fetch(`${PROXY_URL}/ai/chat/sync`, {
+      const resp = await fetchWithTimeout(`${PROXY_URL}/ai/chat/sync`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        timeout: AI_TIMEOUT_MS,
         body: JSON.stringify({
-          session_id: 'oneshot-generate',
           message: prompt,
           active_cell_index: index,
           cells: (notebookContext || []).slice(0, index).map(c => ({
@@ -277,26 +293,36 @@ export default function Cell({
       if (resp.ok) {
         const data = await resp.json()
         let code = data.response || ''
-        // Strip markdown fences based on cell type
+        // Extract code from markdown fences using regex (robust to whitespace/formatting)
         if (isSqlCell) {
-          if (code.includes('```sql')) {
-            code = code.split('```sql')[1]?.split('```')[0]?.trim() || code
+          const sqlMatch = code.match(/```sql\s*\n?([\s\S]*?)```/i)
+          if (sqlMatch?.[1]) {
+            code = sqlMatch[1].trim()
           } else if (code.startsWith('```') && code.endsWith('```')) {
             code = code.split('\n').slice(1, -1).join('\n').trim()
           }
         } else {
-          if (code.includes('```python')) {
-            code = code.split('```python')[1]?.split('```')[0]?.trim() || code
-          } else if (code.includes('```sql')) {
-            // AI returned SQL despite being told Python — extract it anyway
-            code = code.split('```sql')[1]?.split('```')[0]?.trim() || code
-          } else if (code.startsWith('```') && code.endsWith('```')) {
-            code = code.split('\n').slice(1, -1).join('\n').trim()
+          const pyMatch = code.match(/```python\s*\n?([\s\S]*?)```/i)
+          if (pyMatch?.[1]) {
+            code = pyMatch[1].trim()
+          } else {
+            // Fallback: AI may have returned SQL despite being told Python
+            const anyMatch = code.match(/```(?:sql|javascript)?\s*\n?([\s\S]*?)```/i)
+            if (anyMatch?.[1]) {
+              code = anyMatch[1].trim()
+            } else if (code.startsWith('```') && code.endsWith('```')) {
+              code = code.split('\n').slice(1, -1).join('\n').trim()
+            }
           }
         }
-        if (code) onCodeChange(code)
+        if (code) {
+          onCodeChange(code)
+          setEditorVersion(v => v + 1)
+        }
       }
-    } catch {}
+    } catch (err) {
+      console.warn('[generate] AI code generation failed:', err.message)
+    }
     setGenerating(false)
   }
 
@@ -399,6 +425,7 @@ export default function Cell({
               </div>
             )}
             <CellEditor
+              key={editorVersion}
               code={cell.code}
               language={cell.type === 'sql' ? 'sql' : 'python'}
               placeholder={cell.type === 'sql'
@@ -411,6 +438,7 @@ export default function Cell({
               dataSources={dataSourceNames}
               sessionId={sessionId}
               searchQuery={searchQuery}
+              searchActiveOccurrence={searchActiveOccurrence}
             />
             <div className="cell-actions">
               {cell.status === 'running' || generating ? (

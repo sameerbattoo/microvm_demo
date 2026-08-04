@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { IconX, IconNotebook, IconDatabase, IconCode, IconPackage, IconServer, IconBraces } from './Icons'
-import { PROXY_URL } from '../config'
+import { PROXY_URL, API_TIMEOUT_MS } from '../config'
+import { fetchWithTimeout } from '../services/fetchWithTimeout'
 import './Sidebar.css'
 
 // Panel components
@@ -49,6 +50,7 @@ export default function Sidebar({
   activeTab = null,
   onScrollToCell,
   onReorderCells,
+  onRunFromCell,
   onAttachInstance,
   onTerminateAndSave,
   onSuspendInstance,
@@ -140,7 +142,7 @@ export default function Sidebar({
   const fetchDataSources = useCallback(async () => {
     setDsLoading(true)
     try {
-      const resp = await fetch(`${PROXY_URL}/datasources`)
+      const resp = await fetchWithTimeout(`${PROXY_URL}/datasources`)
       if (resp.ok) {
         const data = await resp.json()
         setS3Files(data.s3 || [])
@@ -149,7 +151,11 @@ export default function Sidebar({
         setAthenaWorkgroup(data.athena_workgroup || 'microvm-demo')
         if (onSyncDataSources) onSyncDataSources(data)
       }
-    } catch {}
+    } catch (err) {
+      if (err.name === 'AbortError') {
+        console.warn('[datasources] Fetch timed out')
+      }
+    }
     setDsLoading(false)
     setDsFetched(true)
   }, [])
@@ -177,7 +183,7 @@ export default function Sidebar({
       if (activeTab.sessionId) {
         headers['X-Session-Id'] = activeTab.sessionId
       }
-      const resp = await fetch(`${activeTab.microvmEndpoint}/packages`, {
+      const resp = await fetchWithTimeout(`${activeTab.microvmEndpoint}/packages`, {
         method: 'GET',
         headers,
       })
@@ -218,7 +224,7 @@ export default function Sidebar({
       if (activeTab.sessionId) {
         headers['X-Session-Id'] = activeTab.sessionId
       }
-      const resp = await fetch(`${activeTab.microvmEndpoint}/install`, {
+      const resp = await fetchWithTimeout(`${activeTab.microvmEndpoint}/install`, {
         method: 'POST',
         headers,
         body: JSON.stringify({ package: pkgName }),
@@ -238,7 +244,7 @@ export default function Sidebar({
   // --- VM badge fallback polling (only when instances prop is not provided) ---
   const fetchVmBadge = useCallback(async () => {
     try {
-      const resp = await fetch(`${PROXY_URL}/instances`)
+      const resp = await fetchWithTimeout(`${PROXY_URL}/instances`)
       if (resp.ok) {
         const data = await resp.json()
         setVmBadgeFallback(data.instances || {})
@@ -348,6 +354,7 @@ export default function Sidebar({
               activeTab={activeTab}
               onScrollToCell={onScrollToCell}
               onReorderCells={onReorderCells}
+              onRunFromCell={onRunFromCell}
               onClose={() => setActivePanel(null)}
             />
           )}
@@ -393,6 +400,23 @@ export default function Sidebar({
               activeTab={activeTab}
               fetchPackages={() => { setPkgFetched(false); fetchPackages() }}
               onInstallPackage={handleInstallPackage}
+              onUninstallPackage={async (pkgName) => {
+                if (!activeTab?.microvmEndpoint) return { success: false, error: 'No VM connected' }
+                try {
+                  const headers = { 'Content-Type': 'application/json' }
+                  if (activeTab.sessionId) headers['X-Session-Id'] = activeTab.sessionId
+                  const resp = await fetchWithTimeout(`${activeTab.microvmEndpoint}/install`, {
+                    method: 'POST',
+                    headers,
+                    body: JSON.stringify({ package: pkgName, uninstall: true }),
+                  })
+                  const result = await resp.json()
+                  return result.success ? { success: true } : { success: false, error: result.error }
+                } catch (err) {
+                  return { success: false, error: err.message }
+                }
+              }}
+              onInsertCode={onInsertCode}
               onClose={() => setActivePanel(null)}
             />
           )}

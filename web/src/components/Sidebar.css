@@ -327,6 +327,76 @@
 .outline-status-error { color: var(--accent-danger); }
 .outline-status-stale { color: var(--accent-warning); font-size: 14px; }
 
+.outline-exec-time {
+  font-size: 9px;
+  color: var(--text-muted);
+  margin-left: 3px;
+  font-family: var(--font-mono);
+}
+
+.outline-error-badge {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--accent-danger);
+  background: var(--accent-danger-subtle);
+  padding: 1px 6px;
+  border-radius: var(--radius-full);
+  margin-left: 4px;
+}
+
+.outline-summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 12px;
+  font-size: 10px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.outline-section-group {
+  margin-bottom: 2px;
+}
+
+.outline-section-group > .outline-item:not(.outline-item-section) {
+  padding-left: 28px;
+}
+
+.outline-item-section {
+  font-weight: 600;
+  padding-left: 4px !important;
+}
+
+.outline-section-chevron {
+  font-size: 14px;
+  color: var(--text-muted);
+  margin-right: 2px;
+  width: 12px;
+  display: inline-block;
+}
+
+.outline-run-from {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 9px;
+  cursor: pointer;
+  padding: 0 4px;
+  border-radius: 3px;
+  opacity: 0;
+  transition: opacity var(--transition-fast), color var(--transition-fast);
+}
+
+.outline-item:hover .outline-run-from {
+  opacity: 1;
+}
+
+.outline-run-from:hover {
+  color: var(--accent-success);
+  background: var(--accent-success-subtle);
+}
+
 /* ===== Existing sidebar styles (items, files, etc.) ===== */
 .sidebar-section {
   border-bottom: none;
@@ -839,14 +909,20 @@
 .pkg-sidebar-item {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   padding: 4px var(--space-3);
   font-size: var(--font-size-sm);
   transition: background var(--transition-fast);
+  gap: 4px;
+  position: relative;
 }
 
 .pkg-sidebar-item:hover {
   background: var(--accent-primary-subtle);
+}
+
+.pkg-sidebar-item.pkg-user-installed {
+  border-left: 2px solid var(--accent-success);
+  padding-left: calc(var(--space-3) - 2px);
 }
 
 .pkg-sidebar-name {
@@ -854,13 +930,114 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  flex: 1;
+  min-width: 0;
+}
+
+.pkg-user-badge {
+  font-size: 9px;
+  font-weight: 600;
+  color: var(--accent-success);
+  background: var(--accent-success-subtle);
+  padding: 0 4px;
+  border-radius: var(--radius-full);
+  margin-left: 4px;
+  letter-spacing: 0.3px;
 }
 
 .pkg-sidebar-version {
-  font-size: var(--font-size-xs);
-  color: var(--text-muted);
+  font-size: 10px;
+  color: var(--text-secondary);
   font-family: var(--font-mono);
   flex-shrink: 0;
+  background: var(--surface-4);
+  padding: 2px 7px;
+  border-radius: var(--radius-full);
+  border: 1px solid var(--border-default);
+  letter-spacing: -0.2px;
+}
+
+.pkg-actions {
+  display: flex;
+  gap: 2px;
+  opacity: 0;
+  transition: opacity var(--transition-fast);
+  flex-shrink: 0;
+  margin-left: auto;
+}
+
+.pkg-sidebar-item:hover .pkg-actions {
+  opacity: 1;
+}
+
+.pkg-action-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 11px;
+  width: 18px;
+  height: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 3px;
+  transition: all var(--transition-fast);
+}
+
+.pkg-import-btn {
+  color: var(--accent-primary);
+}
+
+.pkg-import-btn:hover {
+  background: var(--accent-primary-subtle);
+}
+
+.pkg-uninstall-btn {
+  color: var(--accent-danger);
+}
+
+.pkg-uninstall-btn:hover {
+  background: var(--accent-danger-subtle);
+}
+
+.pkg-view-toggle {
+  font-size: 14px !important;
+  font-weight: bold;
+}
+
+.pkg-view-toggle.active {
+  color: var(--accent-primary);
+}
+
+.pkg-group {
+  margin-bottom: 4px;
+}
+
+.pkg-group-header {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  padding: 6px var(--space-3) 2px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border-top: 1px solid var(--border-subtle);
+  margin-top: 4px;
+}
+
+.pkg-group-header:first-child {
+  border-top: none;
+  margin-top: 0;
+}
+
+.pkg-group-count {
+  font-size: 9px;
+  color: var(--text-muted);
+  background: var(--surface-3);
+  padding: 0 5px;
+  border-radius: var(--radius-full);
 }
 
 

@@ -770,6 +770,9 @@ export default function App() {
             reordered.splice(toIdx, 0, moved)
             updateTab(activeTabId, { _cells: reordered })
           }}
+          onRunFromCell={(cellIdx) => {
+            window.dispatchEvent(new CustomEvent('notebook-run-from-cell', { detail: { cellIdx } }))
+          }}
         />
         <main className="app-main">
           {tabs.length === 0 && (

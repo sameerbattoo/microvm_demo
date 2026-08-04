@@ -43,7 +43,15 @@ TOKEN_CACHE_MAX_SIZE = 100
 
 
 class BoundedTokenCache:
-    """LRU-bounded token cache to prevent unbounded memory growth. Thread-safe."""
+    """
+    LRU-bounded token cache to prevent unbounded memory growth. Thread-safe.
+
+    Eviction policy: Least-Recently-Used (LRU).
+    - get() promotes the accessed item to most-recent (move_to_end).
+    - set() promotes updated items to most-recent.
+    - When capacity is exceeded, popitem(last=False) evicts from the front
+      (the item that hasn't been accessed/updated the longest).
+    """
 
     def __init__(self, max_size: int = TOKEN_CACHE_MAX_SIZE):
         self._cache: OrderedDict[str, dict] = OrderedDict()
@@ -102,6 +110,9 @@ class MicrovmManager:
         # Updated on launch, rotation swap, and terminate.
         self._session_registry: dict[str, dict] = {}  # session_id → {vm_id, endpoint}
 
+        # User-installed packages per session (for categorization display)
+        self._user_installed: dict[str, list[dict]] = {}  # session_id → [{package, category}]
+
     # ============================================================
     # SESSION REGISTRY
     # ============================================================
@@ -119,6 +130,23 @@ class MicrovmManager:
     def get_session_vm(self, session_id: str) -> dict | None:
         """Look up the current VM for a session. Returns {vm_id, endpoint} or None."""
         return self._session_registry.get(session_id)
+
+    # ============================================================
+    # USER-INSTALLED PACKAGE TRACKING
+    # ============================================================
+
+    def record_user_install(self, session_id: str, package: str, category: str):
+        """Record a user-installed package for a session."""
+        if session_id not in self._user_installed:
+            self._user_installed[session_id] = []
+        # Avoid duplicates
+        existing = [p["package"] for p in self._user_installed[session_id]]
+        if package.lower() not in [e.lower() for e in existing]:
+            self._user_installed[session_id].append({"package": package, "category": category})
+
+    def get_user_installed_packages(self, session_id: str) -> list[dict]:
+        """Get list of user-installed packages for a session."""
+        return self._user_installed.get(session_id, [])
 
     # ============================================================
     # AWS CLIENT
@@ -292,12 +320,40 @@ class MicrovmManager:
             task.cancel()
 
     def restore_timers_from_db(self):
-        """Restore pre-termination timers for VMs that are still alive (after proxy restart)."""
+        """Restore pre-termination timers and session registry for VMs that are still alive (after proxy restart)."""
         try:
             active_sessions = storage.vm_session_list_active()
+            client = self.get_lambda_client()
+
             for session in active_sessions:
+                microvm_id = session.get("microvm_id")
+                session_id = session.get("session_id")
+                endpoint = session.get("endpoint", "")
+
+                if not microvm_id or not session_id:
+                    continue
+
+                # Verify VM is still alive in AWS before re-registering
+                try:
+                    detail = client.get_microvm(microvmIdentifier=microvm_id)
+                    vm_state = detail.get("state", "UNKNOWN")
+                    if vm_state in ("TERMINATED", "TERMINATING", "FAILED"):
+                        logger.info(f"   Skipping dead VM {microvm_id} (state={vm_state}) — cleaning DB")
+                        storage.vm_session_mark_terminated(microvm_id)
+                        continue
+                    # Update endpoint from AWS if available (may have changed)
+                    if detail.get("endpoint"):
+                        endpoint = detail["endpoint"]
+                except Exception as e:
+                    logger.warning(f"   Cannot verify VM {microvm_id}: {e} — skipping")
+                    continue
+
+                # Restore session→VM mapping so /proxy/{path} works immediately
+                if endpoint:
+                    self.register_session(session_id, microvm_id, endpoint)
+                    logger.info(f"   Restored session {session_id} → {microvm_id} (state={vm_state})")
+
                 if session.get("checkpoint_enabled") and session.get("max_duration_sec") and session.get("launched_at"):
-                    microvm_id = session["microvm_id"]
                     launched_at = session["launched_at"]
                     max_dur = session["max_duration_sec"]
                     if isinstance(launched_at, str):
@@ -311,4 +367,4 @@ class MicrovmManager:
                         self.schedule_pre_terminate(microvm_id, int(remaining + buffer))
                         logger.info(f"⏰ Restored timer for {microvm_id}: {int(remaining)}s remaining")
         except Exception as e:
-            logger.warning(f"Failed to restore pre-termination timers: {e}")
+            logger.warning(f"Failed to restore sessions from DB: {e}")

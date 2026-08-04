@@ -204,6 +204,16 @@ class SandboxExecutor:
             if 'pandas' in module and type_name in ('DataFrame', 'Series'):
                 MAX_DISPLAY_ROWS = 50
                 total_rows = len(val)
+
+                # Flatten MultiIndex columns (from .agg() with tuples) for clean rendering
+                if type_name == 'DataFrame' and hasattr(val, 'columns'):
+                    if hasattr(val.columns, 'nlevels') and val.columns.nlevels > 1:
+                        val = val.copy()
+                        val.columns = ['_'.join(str(c) for c in col).strip('_') for col in val.columns]
+                    # Reset named index to avoid duplicate index-as-column in HTML
+                    if val.index.name or (hasattr(val.index, 'names') and any(n for n in val.index.names if n)):
+                        val = val.reset_index()
+
                 if hasattr(val, 'head') and total_rows > MAX_DISPLAY_ROWS:
                     display_val = val.head(MAX_DISPLAY_ROWS)
                     html = display_val.to_html(classes='df-table', max_rows=MAX_DISPLAY_ROWS, max_cols=20)

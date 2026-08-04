@@ -4,6 +4,7 @@ app.zip
 
 # Proxy data (SQLite database — auto-created at runtime)
 proxy/data/
+!proxy/data/package_categories.json
 
 # Python
 __pycache__/

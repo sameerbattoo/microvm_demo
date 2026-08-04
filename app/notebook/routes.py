@@ -31,24 +31,40 @@ router = APIRouter(tags=["sandbox"])
 
 @router.post("/install")
 async def install_package(request: Request):
-    """Install a Python package into this sandbox (persists across suspend/resume)."""
+    """Install or uninstall a Python package in this sandbox."""
     executor = request.app.state.executor
     session_state = request.app.state.session_state
     session_state["request_count"] += 1
 
     body = await request.json()
     package = body.get("package", "")
+    uninstall = body.get("uninstall", False)
     if not package.strip():
         return JSONResponse(status_code=400, content={"error": "No package specified. Send {\"package\": \"...\"}"})
 
-    logger.info(f"📦 Installing package: {package}")
-    result = executor.install_package(package)
+    if uninstall:
+        logger.info(f"📦 Uninstalling package: {package}")
+        import subprocess, sys
+        try:
+            result = subprocess.run(
+                [sys.executable, "-m", "pip", "uninstall", "-y", package],
+                capture_output=True, text=True, timeout=30
+            )
+            if result.returncode == 0:
+                return {"success": True, "output": result.stdout.strip()}
+            else:
+                return {"success": False, "error": result.stderr.strip() or "Uninstall failed"}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+    else:
+        logger.info(f"📦 Installing package: {package}")
+        result = executor.install_package(package)
 
-    # Track the installed package for checkpoint
-    if result.success:
-        request.app.state.checkpoint_manager.record_package_install(package)
+        # Track the installed package for checkpoint
+        if result.success:
+            request.app.state.checkpoint_manager.record_package_install(package)
 
-    return {"success": result.success, "output": result.output, "error": result.error}
+        return {"success": result.success, "output": result.output, "error": result.error}
 
 
 @router.get("/variables")

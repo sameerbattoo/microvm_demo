@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { IconRefresh, IconX } from '../Icons'
 import { PROXY_URL } from '../../config'
+import { fetchWithTimeout } from '../../services/fetchWithTimeout'
 
 export default function MicroVMsPanel({
   tabs,
@@ -28,7 +29,7 @@ export default function MicroVMsPanel({
   const fetchVmInstances = useCallback(async (showLoading = true) => {
     if (showLoading) setVmLoading(true)
     try {
-      const resp = await fetch(`${PROXY_URL}/instances`)
+      const resp = await fetchWithTimeout(`${PROXY_URL}/instances`)
       if (resp.ok) {
         const data = await resp.json()
         setLocalInstances(data.instances || {})
@@ -49,7 +50,7 @@ export default function MicroVMsPanel({
       fetchVmInstances()
     } else if (!vmFetched) {
       // Parent provides instances, but we still need persistence_mode
-      fetch(`${PROXY_URL}/instances`)
+      fetchWithTimeout(`${PROXY_URL}/instances`)
         .then(r => r.ok ? r.json() : null)
         .then(data => { if (data?.persistence_mode) setPersistenceMode(data.persistence_mode) })
         .catch(() => {})
@@ -68,9 +69,16 @@ export default function MicroVMsPanel({
     setVmActionInProgress(prev => new Set([...prev, id]))
     try {
       const sessionId = vmInstances[id]?.session_id
-      const resp = sessionId ? await fetch(`${PROXY_URL}/resume`, { method: 'POST', headers: { 'X-Session-Id': sessionId } }) : { ok: false }
-      if (resp.ok) await fetchVmInstances()
-    } catch {}
+      if (!sessionId) throw new Error('No session ID for this VM')
+      const resp = await fetchWithTimeout(`${PROXY_URL}/resume`, { method: 'POST', headers: { 'X-Session-Id': sessionId } })
+      if (!resp.ok) {
+        const err = await resp.json().catch(() => ({}))
+        console.error(`[VM] Resume failed for ${id}:`, err.error || resp.status)
+      }
+      await fetchVmInstances()
+    } catch (err) {
+      console.error(`[VM] Resume error for ${id}:`, err.message)
+    }
     setVmActionInProgress(prev => { const n = new Set(prev); n.delete(id); return n })
   }
 
@@ -78,9 +86,17 @@ export default function MicroVMsPanel({
     setVmActionInProgress(prev => new Set([...prev, id]))
     try {
       const sessionId = vmInstances[id]?.session_id
-      if (sessionId) await fetch(`${PROXY_URL}/terminate`, { method: 'POST', headers: { 'X-Session-Id': sessionId } })
+      if (sessionId) {
+        const resp = await fetchWithTimeout(`${PROXY_URL}/terminate`, { method: 'POST', headers: { 'X-Session-Id': sessionId } })
+        if (!resp.ok) {
+          const err = await resp.json().catch(() => ({}))
+          console.error(`[VM] Terminate failed for ${id}:`, err.error || resp.status)
+        }
+      }
       await fetchVmInstances()
-    } catch {}
+    } catch (err) {
+      console.error(`[VM] Terminate error for ${id}:`, err.message)
+    }
     setVmActionInProgress(prev => { const n = new Set(prev); n.delete(id); return n })
   }
 
