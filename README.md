@@ -4,7 +4,7 @@ A Python & SQL notebook running on **AWS Lambda MicroVMs** — each session gets
 
 > Proof-of-concept demonstrating Lambda MicroVMs as stateful code execution sandboxes. Extensible to other runtimes (R, Node.js, Julia) by swapping the executor and image.
 
-**Contents:** [Demo Videos](#demo-videos) · [Quick Start](#quick-start) · [Why MicroVMs?](#why-lambda-microvms-for-notebooks) · [Architecture](#architecture) · [Features](#features) · [Data Sources](#data-source-connectivity) · [Configuration](#configuration) · [Testing](#testing) · [Project Structure](#project-structure) · [Technical Details](#technical-details) · [Prerequisites](#prerequisites) · [Cost](#cost)
+**Contents:** [Demo Videos](#demo-videos) · [Quick Start](#quick-start) · [Why MicroVMs?](#why-lambda-microvms-for-notebooks) · [Architecture](#architecture) · [Features](#features) · [Data Sources](#data-source-connectivity) · [Configuration](#configuration) · [Network Egress Control](#network-egress-control-layer-7) · [Testing](#testing) · [Project Structure](#project-structure) · [Technical Details](#technical-details) · [Prerequisites](#prerequisites) · [Cost](#cost)
 
 ## Demo Videos
 
@@ -424,6 +424,173 @@ See [Why MicroVMs](#why-lambda-microvms-for-notebooks) for comparison vs EKS (~4
 - [AWS Lambda MicroVMs Docs](https://docs.aws.amazon.com/lambda/latest/dg/lambda-microvms-guide.html)
 - [Launch Blog Post](https://aws.amazon.com/blogs/aws/run-isolated-sandboxes-with-full-lifecycle-control-aws-lambda-introduces-microvms/)
 - [MicroVM Pricing](https://aws.amazon.com/lambda/pricing/)
+
+---
+
+## Network Egress Control (Layer 7)
+
+MicroVMs have full internet access by default via the `INTERNET_EGRESS` network connector. For production deployments where you need to control **which domains** user code can reach (e.g., block unauthorized data exfiltration, restrict to approved APIs only), you can implement Layer 7 egress filtering using **AWS Network Firewall**.
+
+### Architecture
+
+```
+┌─────────────┐     ┌──────────────────┐     ┌─────────────────────┐     ┌──────────┐
+│  MicroVM    │────▶│  VPC NAT Gateway │────▶│  AWS Network        │────▶│ Internet │
+│  (Lambda)   │     │  (private subnet)│     │  Firewall           │     │          │
+└─────────────┘     └──────────────────┘     │  (L7 domain rules)  │     └──────────┘
+                                             └─────────────────────┘
+```
+
+Instead of the default `INTERNET_EGRESS` connector, MicroVMs are launched into a **VPC private subnet** with a NAT Gateway. All outbound traffic passes through AWS Network Firewall, which inspects TLS SNI (Server Name Indication) to filter by domain.
+
+### Setup Steps
+
+#### 1. Create a VPC with Network Firewall
+
+```bash
+# Create VPC with public + private + firewall subnets
+aws ec2 create-vpc --cidr-block 10.0.0.0/16
+
+# Private subnet (MicroVMs egress here)
+aws ec2 create-subnet --vpc-id vpc-xxx --cidr-block 10.0.1.0/24
+
+# Firewall subnet (Network Firewall ENIs)
+aws ec2 create-subnet --vpc-id vpc-xxx --cidr-block 10.0.2.0/24
+
+# Public subnet (NAT Gateway → Internet Gateway)
+aws ec2 create-subnet --vpc-id vpc-xxx --cidr-block 10.0.3.0/24
+```
+
+#### 2. Create Network Firewall Domain Allowlist
+
+```bash
+# Create a stateful rule group with domain filtering
+aws network-firewall create-rule-group \
+  --rule-group-name "microvm-egress-allowlist" \
+  --type STATEFUL \
+  --capacity 100 \
+  --rule-group '{
+    "RulesSource": {
+      "RulesSourceList": {
+        "Targets": [
+          ".amazonaws.com",
+          ".aws.amazon.com",
+          "pypi.org",
+          "files.pythonhosted.org",
+          "github.com",
+          "raw.githubusercontent.com",
+          "api.openai.com",
+          "bedrock-runtime.us-west-2.amazonaws.com"
+        ],
+        "TargetTypes": ["TLS_SNI", "HTTP_HOST"],
+        "GeneratedRulesType": "ALLOWLIST"
+      }
+    }
+  }'
+```
+
+This allows MicroVMs to reach:
+- **AWS services** (S3, DynamoDB, Athena, Bedrock) — required for data access
+- **PyPI** — for `pip install` of user packages
+- **GitHub** — for package downloads that reference GitHub
+- **Everything else is BLOCKED** — no data exfiltration to unauthorized endpoints
+
+#### 3. Create Firewall Policy
+
+```bash
+aws network-firewall create-firewall-policy \
+  --firewall-policy-name "microvm-egress-policy" \
+  --firewall-policy '{
+    "StatelessDefaultActions": ["aws:forward_to_sfe"],
+    "StatelessFragmentDefaultActions": ["aws:forward_to_sfe"],
+    "StatefulRuleGroupReferences": [
+      {
+        "ResourceArn": "arn:aws:network-firewall:us-west-2:ACCOUNT:stateful-rulegroup/microvm-egress-allowlist"
+      }
+    ]
+  }'
+```
+
+#### 4. Deploy the Firewall
+
+```bash
+aws network-firewall create-firewall \
+  --firewall-name "microvm-egress-firewall" \
+  --vpc-id vpc-xxx \
+  --subnet-mappings SubnetId=subnet-firewall \
+  --firewall-policy-arn "arn:aws:network-firewall:us-west-2:ACCOUNT:firewall-policy/microvm-egress-policy"
+```
+
+#### 5. Route MicroVM Traffic Through Firewall
+
+Update route tables so the private subnet (where MicroVMs run) sends `0.0.0.0/0` traffic to the Network Firewall endpoint, which then forwards allowed traffic to the NAT Gateway → Internet.
+
+```bash
+# Private subnet route table → Firewall endpoint
+aws ec2 create-route \
+  --route-table-id rtb-private \
+  --destination-cidr-block 0.0.0.0/0 \
+  --vpc-endpoint-id vpce-firewall-endpoint
+```
+
+#### 6. Configure MicroVM Network Connector
+
+Replace the `INTERNET_EGRESS` connector with a VPC connector pointing to the private subnet:
+
+```bash
+# In scripts/config.sh or environment:
+export MICROVM_EGRESS_CONNECTOR="arn:aws:lambda:us-west-2:ACCOUNT:network-connector:vpc-connector-private-subnet"
+```
+
+### Policy Examples
+
+**Minimal (data access only):**
+```
+ALLOW: .amazonaws.com (S3, DynamoDB, Athena, Bedrock)
+DENY: all others
+```
+
+**Standard (data + packages):**
+```
+ALLOW: .amazonaws.com, pypi.org, files.pythonhosted.org
+DENY: all others
+```
+
+**Permissive (data + packages + APIs):**
+```
+ALLOW: .amazonaws.com, pypi.org, files.pythonhosted.org, api.github.com, *.openai.com
+DENY: all others
+```
+
+### Monitoring & Audit
+
+Network Firewall logs all allowed/denied connections to CloudWatch Logs or S3:
+
+```bash
+aws network-firewall update-logging-configuration \
+  --firewall-arn arn:aws:network-firewall:... \
+  --logging-configuration '{
+    "LogDestinationConfigs": [{
+      "LogType": "ALERT",
+      "LogDestinationType": "CloudWatchLogs",
+      "LogDestination": {
+        "logGroup": "/aws/network-firewall/microvm-egress"
+      }
+    }]
+  }'
+```
+
+This gives you an audit trail of every domain a MicroVM tried to reach — useful for compliance and detecting unauthorized access patterns.
+
+### Cost Considerations
+
+| Component | Cost |
+|-----------|------|
+| Network Firewall | ~$0.395/hr per AZ (~$285/mo) |
+| Traffic processing | $0.065/GB |
+| NAT Gateway | $0.045/hr + $0.045/GB |
+
+For development/demo, use the default `INTERNET_EGRESS` connector (no VPC needed). For production with compliance requirements, the Network Firewall adds ~$300/mo fixed cost plus per-GB processing.
 
 ---
 
