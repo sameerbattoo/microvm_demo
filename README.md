@@ -429,9 +429,13 @@ See [Why MicroVMs](#why-lambda-microvms-for-notebooks) for comparison vs EKS (~4
 
 ## Network Egress Control (Layer 7)
 
-MicroVMs have full internet access by default via the `INTERNET_EGRESS` network connector. For production deployments where you need to control **which domains** user code can reach (e.g., block unauthorized data exfiltration, restrict to approved APIs only), you can implement Layer 7 egress filtering using **AWS Network Firewall**.
+MicroVMs have full internet access by default via the `INTERNET_EGRESS` network connector. For production deployments where you need to control **which domains** user code can reach (e.g., block unauthorized data exfiltration, restrict to approved APIs only), you can implement Layer 7 egress filtering.
 
-### Architecture
+### Option A: AWS Network Firewall
+
+Route MicroVM traffic through a VPC with AWS Network Firewall for infrastructure-enforced domain filtering.
+
+#### Architecture
 
 ```
 ┌─────────────┐     ┌──────────────────┐     ┌─────────────────────┐     ┌──────────┐
@@ -443,9 +447,9 @@ MicroVMs have full internet access by default via the `INTERNET_EGRESS` network 
 
 Instead of the default `INTERNET_EGRESS` connector, MicroVMs are launched into a **VPC private subnet** with a NAT Gateway. All outbound traffic passes through AWS Network Firewall, which inspects TLS SNI (Server Name Indication) to filter by domain.
 
-### Setup Steps
+#### Setup Steps
 
-#### 1. Create a VPC with Network Firewall
+##### 1. Create a VPC with Network Firewall
 
 ```bash
 # Create VPC with public + private + firewall subnets
@@ -461,7 +465,7 @@ aws ec2 create-subnet --vpc-id vpc-xxx --cidr-block 10.0.2.0/24
 aws ec2 create-subnet --vpc-id vpc-xxx --cidr-block 10.0.3.0/24
 ```
 
-#### 2. Create Network Firewall Domain Allowlist
+##### 2. Create Network Firewall Domain Allowlist
 
 ```bash
 # Create a stateful rule group with domain filtering
@@ -495,7 +499,7 @@ This allows MicroVMs to reach:
 - **GitHub** — for package downloads that reference GitHub
 - **Everything else is BLOCKED** — no data exfiltration to unauthorized endpoints
 
-#### 3. Create Firewall Policy
+##### 3. Create Firewall Policy
 
 ```bash
 aws network-firewall create-firewall-policy \
@@ -511,7 +515,7 @@ aws network-firewall create-firewall-policy \
   }'
 ```
 
-#### 4. Deploy the Firewall
+##### 4. Deploy the Firewall
 
 ```bash
 aws network-firewall create-firewall \
@@ -521,7 +525,7 @@ aws network-firewall create-firewall \
   --firewall-policy-arn "arn:aws:network-firewall:us-west-2:ACCOUNT:firewall-policy/microvm-egress-policy"
 ```
 
-#### 5. Route MicroVM Traffic Through Firewall
+##### 5. Route MicroVM Traffic Through Firewall
 
 Update route tables so the private subnet (where MicroVMs run) sends `0.0.0.0/0` traffic to the Network Firewall endpoint, which then forwards allowed traffic to the NAT Gateway → Internet.
 
@@ -533,7 +537,7 @@ aws ec2 create-route \
   --vpc-endpoint-id vpce-firewall-endpoint
 ```
 
-#### 6. Configure MicroVM Network Connector
+##### 6. Configure MicroVM Network Connector
 
 Replace the `INTERNET_EGRESS` connector with a VPC connector pointing to the private subnet:
 
@@ -542,7 +546,7 @@ Replace the `INTERNET_EGRESS` connector with a VPC connector pointing to the pri
 export MICROVM_EGRESS_CONNECTOR="arn:aws:lambda:us-west-2:ACCOUNT:network-connector:vpc-connector-private-subnet"
 ```
 
-### Policy Examples
+#### Policy Examples
 
 **Minimal (data access only):**
 ```
@@ -562,7 +566,7 @@ ALLOW: .amazonaws.com, pypi.org, files.pythonhosted.org, api.github.com, *.opena
 DENY: all others
 ```
 
-### Monitoring & Audit
+#### Monitoring & Audit
 
 Network Firewall logs all allowed/denied connections to CloudWatch Logs or S3:
 
@@ -582,7 +586,7 @@ aws network-firewall update-logging-configuration \
 
 This gives you an audit trail of every domain a MicroVM tried to reach — useful for compliance and detecting unauthorized access patterns.
 
-### Cost Considerations
+#### Cost Considerations
 
 | Component | Cost |
 |-----------|------|
@@ -591,6 +595,113 @@ This gives you an audit trail of every domain a MicroVM tried to reach — usefu
 | NAT Gateway | $0.045/hr + $0.045/GB |
 
 For development/demo, use the default `INTERNET_EGRESS` connector (no VPC needed). For production with compliance requirements, the Network Firewall adds ~$300/mo fixed cost plus per-GB processing.
+
+### Option B: In-VM Transparent Egress Proxy
+
+An alternative to AWS Network Firewall — bake a lightweight policy-driven proxy inside the MicroVM image. Similar to how **Cilium** enforces L7 policies in Kubernetes pods via eBPF, but implemented as an application-level proxy since MicroVMs don't expose the host kernel.
+
+#### Architecture
+
+```
+┌─────────────────────────────────────────────────────────┐
+│  MicroVM                                                │
+│                                                         │
+│  ┌──────────┐     ┌──────────────────-─┐     ┌────────┐ │
+│  │ User Code│────▶│ Egress Proxy       │────▶│Network │─┼──▶ Internet
+│  │ (Python) │     │ (localhost:8888)   │     │        │ │
+│  └──────────┘     │ • Domain allowlist │     └────────┘ │
+│                   │ • Path rules       │                │
+│  HTTP_PROXY=      │ • Rate limiting    │                │
+│  localhost:8888   │ • Audit logging    │                │
+│                   └────────┬──────-────┘                │
+│                            │                            │
+│                   ┌────────▼────────┐                   │
+│                   │ Policy (from S3)│                   │
+│                   └─────────────────┘                   │
+└─────────────────────────────────────────────────────────┘
+```
+
+#### How it works
+
+1. A small proxy binary (~5MB) is baked into the Docker image
+2. At VM boot, the proxy starts and fetches policy from S3: `s3://bucket/policies/egress-policy.yaml`
+3. `HTTP_PROXY` / `HTTPS_PROXY` env vars route all Python HTTP traffic through it
+4. Every outbound request is checked against the policy — allowed requests pass, denied requests return 403
+
+#### Policy Format (centrally managed via S3)
+
+```yaml
+# s3://artifacts-bucket/policies/egress-policy.yaml
+version: 1
+default: deny
+
+rules:
+  - action: allow
+    domains: ["*.amazonaws.com", "*.aws.amazon.com"]
+    description: "AWS API access (S3, DynamoDB, Athena, Bedrock)"
+
+  - action: allow
+    domains: ["pypi.org", "files.pythonhosted.org"]
+    description: "Python package installation"
+
+  - action: allow
+    domains: ["api.github.com"]
+    paths: ["/repos/*"]
+    description: "GitHub API (read-only)"
+
+  - action: deny
+    domains: ["*"]
+    log: true
+    description: "Default deny — block all other egress"
+```
+
+Update the YAML in S3 → all new MicroVMs pick up the policy on launch. For running VMs, the proxy can poll S3 periodically for hot-reload.
+
+#### Implementation
+
+**Dockerfile:**
+```dockerfile
+COPY egress-proxy /usr/local/bin/egress-proxy
+ENV HTTP_PROXY=http://localhost:8888
+ENV HTTPS_PROXY=http://localhost:8888
+ENV NO_PROXY=localhost,127.0.0.1,169.254.169.254
+ENV EGRESS_POLICY_S3="s3://BUCKET/policies/egress-policy.yaml"
+```
+
+**Boot sequence (app/server.py):**
+```python
+subprocess.Popen(["/usr/local/bin/egress-proxy", "--policy-s3", os.environ["EGRESS_POLICY_S3"]])
+```
+
+#### Security Hardening
+
+To prevent user code from bypassing the proxy:
+- **iptables rules**: Force all port 80/443 traffic through the proxy (requires `CAP_NET_ADMIN`)
+- **Read-only env vars**: Set `HTTP_PROXY` in the image (cannot be unset at runtime)
+- **Binary integrity**: Verify proxy binary hash at boot
+
+### Comparison: Network Firewall vs In-VM Proxy
+
+| Feature | AWS Network Firewall | In-VM Transparent Proxy |
+|---------|---------------------|------------------------|
+| **Monthly cost** | ~$300 fixed + per-GB | $0 (runs inside VM) |
+| **Domain filtering** | ✅ (TLS SNI inspection) | ✅ (CONNECT tunnel) |
+| **Path-level rules** | ❌ | ✅ (`/api/v1/*` patterns) |
+| **Header inspection** | ❌ | ✅ (inspect/inject headers) |
+| **Rate limiting** | ❌ | ✅ (per-domain limits) |
+| **Request body inspection** | ❌ | ✅ (block large uploads) |
+| **VPC required** | ✅ (subnets + NAT + routing) | ❌ (works with default INTERNET_EGRESS) |
+| **Setup complexity** | High | Low (binary + env var) |
+| **Enforcement level** | Network (cannot bypass) | Application (env-var based) |
+| **Bypass risk** | None (infra-enforced) | Low (mitigated with iptables) |
+| **Central policy** | AWS Console / API | S3 YAML file |
+| **Audit logging** | CloudWatch (async) | Inline stdout (real-time) |
+| **Hot policy reload** | Immediate (rule update) | Poll-based (60s) |
+
+**Recommendation:**
+- **Compliance/regulated workloads** → AWS Network Firewall (cannot be bypassed)
+- **Cost-sensitive / flexible policies** → In-VM Proxy (zero infra cost, path-level rules)
+- **Defense in depth** → Both (Network Firewall as hard boundary + proxy for fine-grained L7 rules)
 
 ---
 
