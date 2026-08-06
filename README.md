@@ -659,18 +659,80 @@ Update the YAML in S3 → all new MicroVMs pick up the policy on launch. For run
 
 #### Implementation
 
-**Dockerfile:**
+Multiple open-source proxies can serve this role — no custom binary needed:
+
+| Proxy | Size | L7 Depth | Best For |
+|-------|------|----------|----------|
+| **Squid** | ~20MB | Domain-level | Simple allowlists, proven in production |
+| **mitmproxy** | ~50MB | Full L7 (path, headers, body) | Dynamic policies, Python scripting |
+| **Tinyproxy** | ~100KB | Domain-level | Minimal footprint |
+| **Envoy** | ~30MB | Full L7 + rate limiting | Istio-like policies without K8s |
+
+**Example with Squid (simplest):**
+
 ```dockerfile
-COPY egress-proxy /usr/local/bin/egress-proxy
+# Dockerfile addition
+RUN apt-get update && apt-get install -y squid && rm -rf /var/lib/apt/lists/*
+COPY squid.conf /etc/squid/squid.conf
+ENV HTTP_PROXY=http://localhost:3128
+ENV HTTPS_PROXY=http://localhost:3128
+ENV NO_PROXY=localhost,127.0.0.1,169.254.169.254
+```
+
+```conf
+# squid.conf — domain allowlist
+acl allowed_domains dstdomain .amazonaws.com .aws.amazon.com
+acl allowed_domains dstdomain pypi.org files.pythonhosted.org
+acl allowed_domains dstdomain api.github.com raw.githubusercontent.com
+
+http_access allow allowed_domains
+http_access deny all
+
+http_port 3128
+```
+
+**Example with mitmproxy (full L7 with path rules):**
+
+```dockerfile
+RUN pip install mitmproxy
+COPY egress_policy.py /opt/egress_policy.py
 ENV HTTP_PROXY=http://localhost:8888
 ENV HTTPS_PROXY=http://localhost:8888
 ENV NO_PROXY=localhost,127.0.0.1,169.254.169.254
-ENV EGRESS_POLICY_S3="s3://BUCKET/policies/egress-policy.yaml"
+```
+
+```python
+# egress_policy.py — mitmproxy addon with S3-loaded policy
+import json, boto3, mitmproxy.http
+
+POLICY = None
+
+def load_policy():
+    global POLICY
+    s3 = boto3.client('s3')
+    obj = s3.get_object(Bucket='artifacts-bucket', Key='policies/egress-policy.json')
+    POLICY = json.loads(obj['Body'].read())
+
+def request(flow: mitmproxy.http.HTTPFlow):
+    if not POLICY:
+        load_policy()
+    domain = flow.request.host
+    path = flow.request.path
+    
+    for rule in POLICY.get('rules', []):
+        if any(domain.endswith(d.lstrip('*')) for d in rule['domains']):
+            if rule['action'] == 'allow':
+                return  # Allow
+    
+    # Default deny
+    flow.response = mitmproxy.http.Response.make(403, b"Blocked by egress policy")
 ```
 
 **Boot sequence (app/server.py):**
 ```python
-subprocess.Popen(["/usr/local/bin/egress-proxy", "--policy-s3", os.environ["EGRESS_POLICY_S3"]])
+# Start proxy before accepting requests
+import subprocess
+subprocess.Popen(["squid", "-N"])  # or: ["mitmdump", "-s", "/opt/egress_policy.py", "-p", "8888"]
 ```
 
 #### Security Hardening
