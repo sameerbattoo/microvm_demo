@@ -92,6 +92,14 @@ export default function Notebook({ tab, instances = {}, onUpdateTab, onMarkVmRun
   })
   const [showConnection, setShowConnection] = useState(tab.status !== 'connected')
   const [isExecuting, setIsExecuting] = useState(false)
+
+  // Poll metrics every 5s while cells are executing (for burst cost tracking + live resource display)
+  useEffect(() => {
+    if (!isExecuting || !onRefreshMetrics) return
+    const interval = setInterval(() => onRefreshMetrics(), 5000)
+    onRefreshMetrics() // Immediate first poll
+    return () => clearInterval(interval)
+  }, [isExecuting, onRefreshMetrics])
   const [isAnnotating, setIsAnnotating] = useState(false)
   const [showExportMenu, setShowExportMenu] = useState(false)
   const [saveMenuPos, setSaveMenuPos] = useState(null)

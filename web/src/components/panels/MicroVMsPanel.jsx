@@ -22,6 +22,13 @@ export default function MicroVMsPanel({
   const [expandedVmId, setExpandedVmId] = useState(null)
   const [vmActionInProgress, setVmActionInProgress] = useState(new Set())
 
+  // Tick every 5s to update idle progress bar on Suspend button
+  const [, setTick] = useState(0)
+  useEffect(() => {
+    const interval = setInterval(() => setTick(t => t + 1), 5000)
+    return () => clearInterval(interval)
+  }, [])
+
   // Use parent instances (from App.jsx fast poll) when available, fallback to local
   const vmInstances = (parentInstances && Object.keys(parentInstances).length > 0)
     ? parentInstances : localInstances
@@ -236,7 +243,7 @@ export default function MicroVMsPanel({
                         </div>
                       )}
                       {inst.idle_timeout_sec && (
-                        <div className="vm-detail-row">
+                        <div className="vm-detail-row vm-idle-row">
                           <span className="vm-detail-label">Idle suspend</span>
                           <span className="vm-detail-value">{formatDuration(inst.idle_timeout_sec)}</span>
                         </div>
@@ -267,7 +274,14 @@ export default function MicroVMsPanel({
                             <div className="vm-metric-fill vm-metric-cpu" style={{ width: `${Math.min(vmMetrics[id].cpu?.percent || 0, 100)}%` }} />
                           </div>
                           <span className="vm-metric-label">CPU</span>
-                          <span className="vm-metric-value">{(vmMetrics[id].cpu?.percent || 0).toFixed(0)}%</span>
+                          <span className="vm-metric-value">
+                            {(vmMetrics[id].cpu?.percent || 0).toFixed(0)}%
+                            {(vmMetrics[id].cpu?.percent || 0) > 30 && (
+                              <span className="vm-burst-badge vm-burst-cpu" title="Using burst vCPU — multiple cores active beyond allocated baseline">
+                                🔥
+                              </span>
+                            )}
+                          </span>
                         </div>
                         <div className="vm-metric-gauge">
                           <div className="vm-metric-bar">
@@ -346,16 +360,16 @@ export default function MicroVMsPanel({
                       {inst.cost.burst_cost_usd > 0 && (
                         <div className="vm-cost-item vm-cost-burst">
                           <div className="vm-detail-row">
-                            <span className="vm-detail-label"><strong>🔥 Burst</strong> <span className="vm-cost-hint">(above baseline)</span></span>
-                            <span className="vm-detail-value">{(inst.cost.burst_mb_seconds / 1024).toFixed(1)} GB·s</span>
-                          </div>
-                          <div className="vm-detail-row vm-detail-row-sub">
-                            <span className="vm-detail-label">Rate</span>
-                            <span className="vm-detail-value">vCPU + memory rate (same as running)</span>
-                          </div>
-                          <div className="vm-detail-row vm-detail-row-sub">
-                            <span className="vm-detail-label">Subtotal</span>
+                            <span className="vm-detail-label"><strong>🔥 Burst</strong> <span className="vm-cost-hint">(above {memGb} GB baseline)</span></span>
                             <span className="vm-detail-value">${inst.cost.burst_cost_usd.toFixed(6)}</span>
+                          </div>
+                          <div className="vm-detail-row vm-detail-row-sub">
+                            <span className="vm-detail-label">Memory overage</span>
+                            <span className="vm-detail-value">{(inst.cost.burst_gb_seconds || inst.cost.burst_mb_seconds / 1024).toFixed(3)} GB·s × $0.0000037</span>
+                          </div>
+                          <div className="vm-detail-row vm-detail-row-sub">
+                            <span className="vm-detail-label">vCPU overage</span>
+                            <span className="vm-detail-value">{(inst.cost.burst_vcpu_seconds || (inst.cost.burst_mb_seconds / 1024 / 2)).toFixed(3)} vCPU·s × $0.0000277</span>
                           </div>
                         </div>
                       )}
@@ -370,9 +384,22 @@ export default function MicroVMsPanel({
                   <div className="vm-detail-actions">
                     {state === 'RUNNING' && attachedIds.includes(id) && (
                       <>
-                        <button className="vm-action-btn vm-btn-suspend" onClick={() => { onSuspendInstance && onSuspendInstance(id) }} disabled={isActioning}>
-                          {isActioning ? <><span className="vm-btn-spinner" /> Suspending...</> : 'Suspend'}
-                        </button>
+                        {(() => {
+                          const idlePct = (inst.idle_timeout_sec && inst.last_active && state === 'RUNNING')
+                            ? Math.min(100, Math.max(0, ((Date.now() / 1000) - inst.last_active) / inst.idle_timeout_sec * 100))
+                            : 0
+                          return (
+                            <button
+                              className={`vm-action-btn vm-btn-suspend ${idlePct > 80 ? 'vm-btn-suspend-warn' : ''}`}
+                              onClick={() => { onSuspendInstance && onSuspendInstance(id) }}
+                              disabled={isActioning}
+                              style={idlePct > 0 ? { background: `linear-gradient(90deg, var(--accent-warning-subtle) ${idlePct}%, transparent ${idlePct}%)` } : {}}
+                              title={idlePct > 0 ? `Idle: ${Math.round(idlePct)}% — auto-suspends in ${Math.max(0, Math.round(inst.idle_timeout_sec - ((Date.now() / 1000) - inst.last_active)))}s` : 'Suspend now'}
+                            >
+                              {isActioning ? <><span className="vm-btn-spinner" /> Suspending...</> : 'Suspend'}
+                            </button>
+                          )
+                        })()}
                         <button className="vm-action-btn vm-btn-terminate" onClick={() => { onTerminateAndSave && onTerminateAndSave(id) }} disabled={isActioning}>
                           {isActioning ? <><span className="vm-btn-spinner" /> Terminating...</> : (attachedTab?.checkpointEnabled ? 'Terminate & Save' : 'Terminate')}
                         </button>

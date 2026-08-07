@@ -442,6 +442,7 @@ async def list_instances(request: Request):
                 "memory_mib": memory_mib,
                 "session_id": local_info.get("session_id") or (db_session or {}).get("session_id") if not local_info.get("_rotation_pending") else None,
                 "idle_timeout_sec": local_info.get("idle_timeout_sec") or (db_session or {}).get("idle_timeout_sec"),
+                "last_active": local_info.get("last_active"),
                 "max_duration_sec": local_info.get("max_duration_sec") or (db_session or {}).get("max_duration_sec"),
                 "cost": vm_manager.cost_tracker.get_cost(microvm_id),
                 "session_cost": vm_manager.cost_tracker.get_session_cost(
@@ -473,6 +474,7 @@ async def list_instances(request: Request):
                         "memory_mib": memory_mib,
                         "session_id": local_info.get("session_id"),
                         "idle_timeout_sec": local_info.get("idle_timeout_sec"),
+                        "last_active": local_info.get("last_active"),
                         "max_duration_sec": local_info.get("max_duration_sec"),
                         "cost": vm_manager.cost_tracker.get_cost(microvm_id),
                     }

@@ -1,0 +1,55 @@
+{
+  "name": "Memory & CPU Burst Demo",
+  "description": "Demonstrates MicroVM burst capabilities — how workloads can temporarily exceed allocated memory and leverage burst vCPU for intensive computations. Monitor the cost breakdown and resource panel in real-time.",
+  "tag": "Performance",
+  "cells": [
+    {
+      "type": "markdown",
+      "code": "# Memory & CPU Burst Demo\n\nLambda MicroVMs can **burst beyond their allocated resources**. Each VM has access to up to 4x its allocated memory and additional vCPU cores.\n\n- **Allocated**: Your selected tier (memory + vCPU)\n- **Burst ceiling**: Up to 4x allocated memory and additional vCPU cores\n\nWatch the **Resources** panel in the sidebar and the **Cost Breakdown** as cells execute."
+    },
+    {
+      "type": "code",
+      "code": "import psutil\nimport os\nimport numpy as np\nimport pandas as pd\nfrom time import perf_counter\nimport concurrent.futures\n\n# Detect allocated vs available (burst) resources\ntotal_mem_gb = psutil.virtual_memory().total / 1024**3\nallocated_mem_gb = total_mem_gb / 4  # burst gives 4x\nallocated_vcpu = max(1, int(allocated_mem_gb / 2))  # 2 GB : 1 vCPU\n\nprint(f\"System Configuration\")\nprint(f\"{'='*50}\")\nprint(f\"  CPU cores (burst):    {psutil.cpu_count()}\")\nprint(f\"  Allocated vCPU:       {allocated_vcpu}\")\nprint(f\"  Allocated memory:     {allocated_mem_gb:.0f} GB\")\nprint(f\"  Burst ceiling:        {total_mem_gb:.0f} GB / {psutil.cpu_count()} vCPU\")\nprint(f\"  Current mem usage:    {psutil.virtual_memory().used / 1024**3:.2f} GB\")"
+    },
+    {
+      "type": "markdown",
+      "code": "## Test 1: CPU Burst\n\nRun sustained multi-threaded computation. Watch the **CPU** gauge in Resources spike to near 100% during execution.\n\nNumPy matrix operations release the GIL, enabling true multi-core parallelism via BLAS."
+    },
+    {
+      "type": "code",
+      "code": "def sustained_cpu_work(n):\n    \"\"\"CPU-heavy work: repeated large matrix multiply (~2s per call).\"\"\"\n    arr = np.random.rand(3000, 3000)\n    for _ in range(3):\n        arr = arr @ arr.T\n    return arr[0, 0]\n\n# Sequential baseline (uses 1 core)\nprint(\"Sequential CPU test (1 core at a time)...\")\nt0 = perf_counter()\nfor i in range(4):\n    sustained_cpu_work(i)\nsingle_time = perf_counter() - t0\nprint(f\"  Time: {single_time:.1f}s\")\nprint()\n\n# Concurrent burst (uses all available cores)\nprint(f\"Concurrent CPU test (burst - all {psutil.cpu_count()} cores)...\")\nprint(\"  >> Watch the CPU gauge in Resources panel spike! <<\")\nt0 = perf_counter()\nwith concurrent.futures.ThreadPoolExecutor(max_workers=psutil.cpu_count()) as executor:\n    futures = [executor.submit(sustained_cpu_work, i) for i in range(psutil.cpu_count())]\n    results = [f.result() for f in concurrent.futures.as_completed(futures)]\nmulti_time = perf_counter() - t0\nprint(f\"  Time: {multi_time:.1f}s\")\nprint(f\"  Speedup: {single_time/multi_time:.1f}x\")\nprint(f\"  Cores used: {psutil.cpu_count()} (burst vCPU)\")\nprint()\nprint(f\"Result: {single_time:.1f}s sequential vs {multi_time:.1f}s concurrent = {single_time/multi_time:.1f}x faster\")"
+    },
+    {
+      "type": "markdown",
+      "code": "## Test 2: Memory Burst\n\nCreate DataFrames that exceed the allocated memory tier. Watch the **MEM** gauge climb above baseline.\n\nThe VM transparently accesses burst memory — no OOM, no config changes needed."
+    },
+    {
+      "type": "code",
+      "code": "baseline_mem = psutil.virtual_memory().used / 1024**3\nprint(f\"Baseline memory: {baseline_mem:.2f} GB\")\nprint(f\"Allocated: {allocated_mem_gb:.0f} GB | Burst ceiling: {total_mem_gb:.0f} GB\")\nprint()\n\n# Precise row calculation: 10 float64 columns = 80 bytes/row\nrows_per_gb = int(1024**3 / 80)\n\n# Step 1: DataFrame within allocation\ntarget1 = allocated_mem_gb * 0.4\nprint(f\"Step 1: Creating {target1:.1f} GB DataFrame (within allocation)...\")\ndf_small = pd.DataFrame(np.random.rand(int(rows_per_gb * target1), 10), columns=[f'c{i}' for i in range(10)])\nsize1 = df_small.memory_usage(deep=True).sum() / 1024**3\nused = psutil.virtual_memory().used / 1024**3\nprint(f\"  Size: {size1:.2f} GB | System memory: {used:.2f} / {allocated_mem_gb:.0f} GB\")\nprint(f\"  Status: {'WITHIN BASELINE' if used < allocated_mem_gb else 'BURST'}\")\nprint()\n\n# Step 2: DataFrame that triggers burst\ntarget2 = allocated_mem_gb * 1.2\nprint(f\"Step 2: Creating {target2:.1f} GB DataFrame (triggers burst)...\")\nt0 = perf_counter()\ndf_large = pd.DataFrame(np.random.rand(int(rows_per_gb * target2), 10), columns=[f'f{i}' for i in range(10)])\nsize2 = df_large.memory_usage(deep=True).sum() / 1024**3\nused = psutil.virtual_memory().used / 1024**3\noverage = max(0, used - allocated_mem_gb)\nprint(f\"  Size: {size2:.2f} GB | Time: {perf_counter()-t0:.1f}s\")\nprint(f\"  System memory: {used:.2f} / {allocated_mem_gb:.0f} GB\")\nprint(f\"  Overage: {overage:.2f} GB above baseline\")\nif overage > 0:\n    print(f\"  BURST ACTIVE - check Cost Breakdown in sidebar\")\nelse:\n    print(f\"  Still within allocation (OS + data = {used:.2f} GB)\")"
+    },
+    {
+      "type": "markdown",
+      "code": "## Test 3: Combined Memory + CPU\n\nPerform complex aggregations on the large burst DataFrame — exercises both memory bandwidth and multi-core compute simultaneously."
+    },
+    {
+      "type": "code",
+      "code": "rows = len(df_large)\nprint(f\"GroupBy aggregation on {rows:,} rows...\")\nt0 = perf_counter()\n\ndf_large['category'] = (df_large['f0'] * 100).astype(int) % 50\nresult = df_large.groupby('category').agg(\n    mean_f1=('f1', 'mean'),\n    std_f2=('f2', 'std'),\n    sum_f3=('f3', 'sum'),\n    max_f4=('f4', 'max'),\n    count=('f0', 'count'),\n).round(4)\n\nprint(f\"  Completed in {perf_counter()-t0:.2f}s\")\nprint(f\"  {result.shape[0]} groups, memory: {psutil.virtual_memory().used / 1024**3:.2f} GB\")\nprint()\nresult.head(10)"
+    },
+    {
+      "type": "markdown",
+      "code": "## Test 4: Matrix Operations (Sustained CPU Burst)\n\nLarge matrix multiply uses BLAS multi-threading. This keeps CPU at 100% for several seconds."
+    },
+    {
+      "type": "code",
+      "code": "# Scale matrix to tier (larger tier = larger matrices)\nsize1 = min(4000, int(1500 * (allocated_mem_gb ** 0.5)))\nsize2 = min(5500, int(2000 * (allocated_mem_gb ** 0.5)))\n\nprint(f\"Matrix multiply: {size1}x{size1} ...\")\nA = np.random.rand(size1, size1)\nB = np.random.rand(size1, size1)\nt0 = perf_counter()\nC = A @ B\nprint(f\"  {perf_counter()-t0:.2f}s\")\nprint()\n\nprint(f\"Larger matrix: {size2}x{size2} (burst CPU)...\")\nprint(\"  >> Watch CPU gauge spike <<\")\nA2 = np.random.rand(size2, size2)\nB2 = np.random.rand(size2, size2)\nt0 = perf_counter()\nC2 = A2 @ B2\nprint(f\"  {perf_counter()-t0:.2f}s\")\nprint(f\"  Matrix memory: {(A2.nbytes + B2.nbytes + C2.nbytes) / 1024**3:.2f} GB\")\nprint(f\"  Total memory: {psutil.virtual_memory().used / 1024**3:.2f} GB\")"
+    },
+    {
+      "type": "markdown",
+      "code": "## Cleanup & Summary"
+    },
+    {
+      "type": "code",
+      "code": "# Free memory\ndel df_small, df_large, A, B, C, A2, B2, C2, result\nimport gc\ngc.collect()\n\nprint(\"=\" * 50)\nprint(\"  BURST DEMO COMPLETE\")\nprint(\"=\" * 50)\nprint(f\"  Tier: {allocated_mem_gb:.0f} GB / {allocated_vcpu} vCPU\")\nprint(f\"  Burst: {total_mem_gb:.0f} GB / {psutil.cpu_count()} vCPU\")\nprint(f\"  Memory after cleanup: {psutil.virtual_memory().used / 1024**3:.2f} GB\")\nprint()\nprint(\"  Key takeaways:\")\nprint(\"  - CPU burst: multi-core speedup with no config change\")\nprint(\"  - Memory burst: allocate beyond tier, pay only for overage\")\nprint(\"  - Cost sidebar shows exact burst charges in real-time\")\nprint(\"=\" * 50)"
+    }
+  ]
+}

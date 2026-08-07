@@ -1481,11 +1481,26 @@
 .vm-btn-suspend {
   background: rgba(249, 226, 175, 0.15);
   color: var(--accent-warning, #f9e2af);
+  position: relative;
+  overflow: hidden;
+  transition: all var(--transition-normal);
+}
+
+.vm-btn-suspend-warn {
+  color: var(--accent-warning);
+  border-color: var(--accent-warning);
+  animation: pulse-subtle 1.5s ease-in-out infinite;
+}
+
+@keyframes pulse-subtle {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.7; }
 }
 
 .vm-btn-suspend:hover:not(:disabled) {
-  background: var(--accent-warning, #f9e2af);
-  color: var(--bg-primary);
+  background: var(--accent-warning-subtle);
+  color: var(--accent-warning);
+  border-color: var(--accent-warning);
 }
 
 

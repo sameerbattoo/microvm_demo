@@ -7,6 +7,7 @@ const SAMPLES = [
   { id: 'statistical_analysis', name: 'Statistical Analysis', icon: '🔬', file: '/samples/statistical_analysis.notebook.json' },
   { id: 'public_apis', name: 'Public API Data Analysis', icon: '🌐', file: '/samples/public_apis.notebook.json' },
   { id: 'aws_data_sources', name: 'AWS Data Sources', icon: '☁️', file: '/samples/aws_data_sources.notebook.json' },
+  { id: 'burst_demo', name: 'Memory & CPU Burst Demo', icon: '⚡', file: '/samples/burst_demo.notebook.json' },
 ]
 
 export default function SamplesPanel({ onLoadSample, onClose }) {

@@ -142,6 +142,8 @@ class MicroVMCostRecord:
             "total_cost_usd": round(total_cost, 6),
             "memory_gb": self.memory_gb,
             "burst_mb_seconds": round(self.burst_mb_seconds, 1),
+            "burst_gb_seconds": round(burst_gb_seconds, 2),
+            "burst_vcpu_seconds": round(burst_vcpu_seconds, 2),
         }
 
 

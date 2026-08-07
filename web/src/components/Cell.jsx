@@ -471,7 +471,7 @@ export default function Cell({
               <button className="cell-action-btn cell-delete-btn" onClick={(e) => { e.stopPropagation(); onDelete() }} title="Delete cell">
                 <IconTrash width={14} height={14} />
               </button>
-              {isConnected && aiAvailable && cell.code?.trim() && (() => {
+              {aiAvailable && cell.code?.trim() && (() => {
                 if (cell.error) {
                   return (
                     <button
@@ -482,7 +482,8 @@ export default function Cell({
                     >🔧</button>
                   )
                 }
-                // Show explain button only when content looks like actual code/SQL
+                // Show explain button only when connected and content looks like actual code/SQL
+                if (!isConnected) return null
                 const code = cell.code.trim()
                 const looksLikeCode = /^(import |from |def |class |for |while |if |#|[a-zA-Z_]\w*\s*[=([]|print\(|plt\.|pd\.|np\.)/.test(code) || code.includes('=') || code.includes('(')
                 const looksLikeSql = /^(SELECT|INSERT|UPDATE|DELETE|CREATE|DROP|ALTER|WITH|SHOW|DESCRIBE|EXPLAIN)\b/i.test(code) || code.trimStart().startsWith('--')
