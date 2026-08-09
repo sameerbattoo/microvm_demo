@@ -12,3 +12,6 @@ boto3>=1.43.51
 
 # AI Agent framework (Strands Agents SDK — powers the notebook AI assistant)
 strands-agents>=1.48.0
+
+# WebSocket relay for terminal access
+websockets>=13.0

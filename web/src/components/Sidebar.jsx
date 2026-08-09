@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { IconX, IconNotebook, IconDatabase, IconCode, IconPackage, IconServer, IconBraces } from './Icons'
+import { IconX, IconNotebook, IconDatabase, IconCode, IconPackage, IconServer, IconBraces, IconTerminal } from './Icons'
 import { PROXY_URL, API_TIMEOUT_MS } from '../config'
 import { fetchWithTimeout } from '../services/fetchWithTimeout'
 import './Sidebar.css'
@@ -57,8 +57,11 @@ export default function Sidebar({
   onUpdateTabTag,
   onSyncPackages,
   onSyncDataSources,
+  onRefreshFiles,
   instances = {},
   vmMetrics = {},
+  showTerminal = false,
+  onToggleTerminal,
 }) {
   // Activity bar state — which panel is active (null = collapsed)
   const [activePanel, setActivePanel] = useState(() => {
@@ -141,6 +144,8 @@ export default function Sidebar({
   // --- Data Sources fetching ---
   const fetchDataSources = useCallback(async () => {
     setDsLoading(true)
+    // Also refresh local VM files
+    if (onRefreshFiles) onRefreshFiles()
     try {
       const resp = await fetchWithTimeout(`${PROXY_URL}/datasources`)
       if (resp.ok) {
@@ -158,7 +163,7 @@ export default function Sidebar({
     }
     setDsLoading(false)
     setDsFetched(true)
-  }, [])
+  }, [onRefreshFiles])
 
   // Lazy-load data sources when panel is active
   useEffect(() => {
@@ -278,6 +283,7 @@ export default function Sidebar({
     { id: 'data', icon: <IconDatabase width={18} height={18} />, title: 'Data Sources', color: '#7ec89f' },
     { id: 'variables', icon: <IconBraces width={18} height={18} />, title: 'Variables', color: '#f9e2af' },
     { id: 'packages', icon: <IconPackage width={18} height={18} />, title: 'Packages', color: '#f38ba8' },
+    { id: 'terminal', icon: <IconTerminal width={18} height={18} />, title: 'Terminal', color: '#5cc2d4' },
     { id: 'samples', icon: <IconSamples width={18} height={18} />, title: 'Sample Notebooks', color: '#e2b86b' },
   ]
 
@@ -288,10 +294,24 @@ export default function Sidebar({
         {activityItems.map(item => (
           <button
             key={item.id}
-            className={`activity-bar-item ${activePanel === item.id ? 'activity-bar-item-active' : ''}`}
-            onClick={() => togglePanel(item.id)}
+            className={`activity-bar-item ${
+              item.id === 'terminal'
+                ? (showTerminal ? 'activity-bar-item-active' : '')
+                : (activePanel === item.id ? 'activity-bar-item-active' : '')
+            }`}
+            onClick={() => {
+              if (item.id === 'terminal') {
+                onToggleTerminal?.()
+              } else {
+                togglePanel(item.id)
+              }
+            }}
             title={item.title}
-            style={activePanel === item.id ? { color: item.color, borderColor: item.color } : {}}
+            style={
+              (item.id === 'terminal' ? showTerminal : activePanel === item.id)
+                ? { color: item.color, borderColor: item.color }
+                : {}
+            }
           >
             {item.icon}
           </button>

@@ -12,6 +12,7 @@ export default function ConnectionPanel({ tab, onConnect, onUpdateTab, onDismiss
   const [loadingInstances, setLoadingInstances] = useState(false)
   const [launchMemory, setLaunchMemory] = useState(String(tab.microvmMemory || '2048'))
   const [launchIdleTimeout, setLaunchIdleTimeout] = useState(String(tab.idleTimeoutSeconds || '60'))
+  const [launchMaxDuration, setLaunchMaxDuration] = useState(String(tab.maxDurationSeconds || maxLifetime || '28800'))
   const [imageTiers, setImageTiers] = useState([])
 
   // Auto-detect which mode we're in
@@ -98,6 +99,7 @@ export default function ConnectionPanel({ tab, onConnect, onUpdateTab, onDismiss
           name: tab.name,
           memoryMiB: parseInt(launchMemory),
           idleTimeoutSeconds: parseInt(launchIdleTimeout),
+          maxDurationSeconds: parseInt(launchMaxDuration),
           checkpointEnabled: true,
           sessionId: tab.sessionId,
           restoreFromSession: tab.sessionId,
@@ -140,6 +142,7 @@ export default function ConnectionPanel({ tab, onConnect, onUpdateTab, onDismiss
           name: tab.name,
           memoryMiB: parseInt(launchMemory),
           idleTimeoutSeconds: parseInt(launchIdleTimeout),
+          maxDurationSeconds: parseInt(launchMaxDuration),
           checkpointEnabled: true,
           sessionId: crypto.randomUUID(),
         }),
@@ -152,6 +155,7 @@ export default function ConnectionPanel({ tab, onConnect, onUpdateTab, onDismiss
           microvmEndpoint: `${PROXY_URL}/proxy`,
           microvmMemory: parseInt(launchMemory),
           idleTimeoutSeconds: parseInt(launchIdleTimeout),
+          maxDurationSeconds: parseInt(launchMaxDuration),
           sessionId: result.sessionId,
           checkpointEnabled: true,
           status: 'connected',
@@ -363,6 +367,16 @@ export default function ConnectionPanel({ tab, onConnect, onUpdateTab, onDismiss
                     <option value="1800">30 minutes</option>
                     <option value="3600">1 hour</option>
                     <option value="7200">2 hours</option>
+                  </select>
+                </div>
+                <div className="launch-spec-item launch-spec-editable">
+                  <span className="launch-spec-label">Max duration</span>
+                  <select className="launch-spec-select" value={launchMaxDuration} onChange={(e) => setLaunchMaxDuration(e.target.value)}>
+                    <option value="1800">30 minutes</option>
+                    <option value="3600">1 hour</option>
+                    <option value="7200">2 hours</option>
+                    <option value="14400">4 hours</option>
+                    <option value="28800">8 hours</option>
                   </select>
                 </div>
               </div>

@@ -26,7 +26,7 @@ from fastapi import APIRouter, Request, Response
 from proxy.storage import storage
 from proxy.platform.microvm_manager import (
     AWS_REGION, IMAGE_ARN, EXEC_ROLE_ARN,
-    INGRESS_CONNECTOR, EGRESS_CONNECTOR,
+    INGRESS_CONNECTOR, SHELL_INGRESS_CONNECTOR, EGRESS_CONNECTOR,
 )
 
 logger = logging.getLogger(__name__)
@@ -166,8 +166,9 @@ async def launch_microvm(request: Request):
     if memory_mib not in valid_memories:
         memory_mib = min(valid_memories, key=lambda x: abs(x - memory_mib))
     idle_timeout_sec = body.get("idleTimeoutSeconds", 1800)
-    # Max lifetime is controlled by config (not frontend) — enables transparent rotation
-    max_duration_sec = int(os.environ.get("MAX_LIFETIME_SECONDS", "28800"))
+    # Max duration: use frontend value if provided, otherwise fall back to config
+    config_max = int(os.environ.get("MAX_LIFETIME_SECONDS", "28800"))
+    max_duration_sec = min(int(body.get("maxDurationSeconds", config_max)), 28800)  # Cap at AWS max (8h)
     # Checkpoint is always enabled — rotation logic depends on it
     checkpoint_enabled = True
     restore_from = body.get("restoreFromSession")
@@ -188,7 +189,7 @@ async def launch_microvm(request: Request):
         client = vm_manager.get_lambda_client()
         params = {
             "imageIdentifier": image_arn,
-            "ingressNetworkConnectors": [INGRESS_CONNECTOR],
+            "ingressNetworkConnectors": [INGRESS_CONNECTOR, SHELL_INGRESS_CONNECTOR],
             "egressNetworkConnectors": [EGRESS_CONNECTOR],
             "idlePolicy": {
                 "autoResumeEnabled": True,

@@ -2,6 +2,7 @@ import { useState, useCallback, useEffect, useRef } from 'react'
 import Notebook from './components/Notebook'
 import Sidebar from './components/Sidebar'
 import AiChatPanel from './components/AiChatPanel'
+import TerminalPanel from './components/panels/TerminalPanel'
 import { ConfirmModal, InputModal } from './components/Modal'
 import { IconZap, IconSun, IconMoon, IconFlame } from './components/Icons'
 import { PROXY_URL } from './config'
@@ -233,6 +234,7 @@ export default function App() {
   // Modal state
   const [modal, setModal] = useState(null)
   const [showAiChat, setShowAiChat] = useState(true)
+  const [showTerminal, setShowTerminal] = useState(false)
   const [aiAvailable, setAiAvailable] = useState(false)
   const [newNotebookName, setNewNotebookName] = useState('')
   const [newNotebookDesc, setNewNotebookDesc] = useState('')
@@ -750,6 +752,7 @@ export default function App() {
           onUpdateTabTag={(tabId, tag) => updateTab(tabId, { tag })}
           onSyncPackages={(pkgList) => { if (activeTabId) updateTab(activeTabId, { _packages: pkgList }) }}
           onSyncDataSources={(ds) => { if (activeTabId) updateTab(activeTabId, { _dataSources: ds }) }}
+          onRefreshFiles={fetchFiles}
           instances={instances}
           vmMetrics={vmMetrics}
           onScrollToCell={(idx) => {
@@ -773,6 +776,8 @@ export default function App() {
           onRunFromCell={(cellIdx) => {
             window.dispatchEvent(new CustomEvent('notebook-run-from-cell', { detail: { cellIdx } }))
           }}
+          showTerminal={showTerminal}
+          onToggleTerminal={() => setShowTerminal(v => !v)}
         />
         <main className="app-main">
           {tabs.length === 0 && (
@@ -873,6 +878,12 @@ export default function App() {
             />
             )
           })()}
+          {showTerminal && (
+            <TerminalPanel
+              activeTab={tabs.find(t => t.id === activeTabId) || null}
+              onClose={() => setShowTerminal(false)}
+            />
+          )}
         </main>
         {showAiChat && (
           <AiChatPanel

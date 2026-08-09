@@ -89,16 +89,19 @@ All callers interact with the proxy using only an `X-Session-Id` header. The pro
 │                    ├────────►│                                     │
 │  X-Session-Id: uuid│         │  • Session registry (sid → VM)      │
 │                    │         │  • Auth token injection (JWE)       │
-│                    │         │  • VM rotation (eternal mode)       │
+│                    │  WS     │  • VM rotation (eternal mode)       │
+│  Terminal (xterm)  ├────────►│  • Terminal relay (WS → SHELL_INGRESS)│
 │                    │         │  • Checkpoint orchestration         │
 │                    │         │  • AI agent (Strands/Bedrock)       │
 └────────────────────┘         └──────────────┬──────────────────────┘
-                                              │ HTTPS + auth
+                                              │ HTTPS + auth (HTTP_INGRESS)
+                                              │ WSS + subprotocols (SHELL_INGRESS)
                                               ▼
                                ┌────────────────────────-──┐
                                │  Lambda MicroVM           │
                                │  (Firecracker, ARM64)     │
                                │  FastAPI + SandboxExecutor│
+                               │  Platform Shell (bash PTY)│
                                └─────────────────────-─────┘
 ```
 
@@ -161,12 +164,23 @@ Native SQL cells with intelligent auto-routing — write standard SQL, engine ch
 ### MicroVM Management
 - 4 memory tiers: 1 GB (0.5 vCPU) through 8 GB (4 vCPU), burst to 4×
 - Configurable idle suspend (1 min – 2 hr), auto-resume on traffic (~1s)
+- Configurable max duration (30 min – 8 hr) — controls absolute VM lifetime
 - Real-time cost tracking (running + suspended + burst)
 - Connection status pill: 🟢 Running, 🟠 Suspended, 🔴 Terminated
 - Instance panel: specs, lifecycle, resources, cost breakdown per VM
 
 ### Sidebar (VS Code-style)
 Notebooks, Outline, Data Sources, Variables, Packages, Samples, MicroVMs — resizable, collapsible.
+
+### Interactive Terminal
+- **Full shell access** — bash terminal inside the MicroVM via AWS SHELL_INGRESS connector
+- **Platform-managed PTY** — no custom shell server needed, uses Lambda's built-in shell endpoint
+- **Resizable bottom panel** — drag to resize, appears below the notebook
+- **Idle auto-disconnect** — WebSocket closes after 30s of no input, allowing VM to suspend
+- **Auto-reconnect on type** — typing in a disconnected terminal reconnects transparently (resumes VM if suspended)
+- **Session-aware** — switches to the correct VM when you switch notebook tabs
+- **Pre-installed tools** — `python3`, `pip`, `git`, `tar`, `gzip` available out of the box
+- **Package access** — all packages from `requirements.txt` on PATH (pandas, numpy, boto3, etc.)
 
 ---
 
@@ -316,11 +330,13 @@ app/                          # Runs INSIDE the MicroVM
     └── routes.py             # /install, /variables, /health, /metrics, /upload
 
 proxy/                        # Runs on your machine (hides all VM internals)
-├── server.py                 # FastAPI entrypoint, swap callback, health
+├── server.py                 # FastAPI entrypoint, WebSocket terminal relay, health
 ├── platform/
-│   ├── microvm_manager.py    # Session registry, tokens, timers, AWS client
+│   ├── microvm_manager.py    # Session registry, tokens (HTTP + shell), timers, AWS client
 │   ├── session_rotator.py    # Transparent VM rotation (eternal mode)
 │   ├── cost_tracker.py       # Burst + baseline cost tracking
+│   ├── package_classifier.py # PyPI-based package category detection
+│   ├── datasources/          # Schema discovery (S3, DynamoDB, Athena, local files)
 │   └── routes/
 │       └── microvm.py        # /launch, /terminate, /proxy/{path}, /instances
 ├── notebook/
@@ -329,7 +345,11 @@ proxy/                        # Runs on your machine (hides all VM internals)
 └── storage/                  # SQLite backend (notebooks, sessions, metrics)
 
 web/src/                      # React UI (Vite)
-├── components/               # Cell, Notebook, Sidebar, ConnectionPanel, AiChatPanel
+├── components/
+│   ├── panels/
+│   │   └── TerminalPanel.jsx # xterm.js terminal (WebSocket → proxy → VM shell)
+│   ├── Cell.jsx, Notebook.jsx, Sidebar.jsx, ConnectionPanel.jsx, AiChatPanel.jsx
+│   └── Icons.jsx, Modal.jsx, TabBar.jsx
 └── services/microvm.js       # API client (all calls use X-Session-Id)
 
 tests/                        # E2E tests (common + eternal + checkpoint)

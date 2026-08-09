@@ -90,15 +90,21 @@ export default function Notebook({ tab, instances = {}, onUpdateTab, onMarkVmRun
     }
     return [createCell()]
   })
-  const [showConnection, setShowConnection] = useState(tab.status !== 'connected')
+  const [showConnection, setShowConnection] = useState(tab.status !== 'connected' && !tab.microvmId)
   const [isExecuting, setIsExecuting] = useState(false)
 
-  // Poll metrics every 5s while cells are executing (for burst cost tracking + live resource display)
+  // Fetch metrics once when execution starts and once when it ends (for burst cost tracking).
+  // DO NOT poll continuously — it keeps the VM from suspending.
+  const prevExecutingRef = useRef(false)
   useEffect(() => {
-    if (!isExecuting || !onRefreshMetrics) return
-    const interval = setInterval(() => onRefreshMetrics(), 5000)
-    onRefreshMetrics() // Immediate first poll
-    return () => clearInterval(interval)
+    if (isExecuting && !prevExecutingRef.current && onRefreshMetrics) {
+      onRefreshMetrics() // Fetch on execution start
+    }
+    if (!isExecuting && prevExecutingRef.current && onRefreshMetrics) {
+      // Fetch once after execution ends (delayed to capture final burst state)
+      setTimeout(() => onRefreshMetrics(), 1000)
+    }
+    prevExecutingRef.current = isExecuting
   }, [isExecuting, onRefreshMetrics])
   const [isAnnotating, setIsAnnotating] = useState(false)
   const [showExportMenu, setShowExportMenu] = useState(false)
@@ -108,7 +114,9 @@ export default function Notebook({ tab, instances = {}, onUpdateTab, onMarkVmRun
   // Sync connection panel visibility when tab status changes
   useEffect(() => {
     if (tab.status === 'connected') {
-      setShowConnection(false)
+      // Auto-dismiss connection panel shortly after connecting
+      const timer = setTimeout(() => setShowConnection(false), 800)
+      return () => clearTimeout(timer)
     }
   }, [tab.status])
 

@@ -5,11 +5,18 @@ Part of: proxy.platform (Smart MicroVM Service layer)
 
 This class manages:
 - AWS Lambda MicroVMs client
-- Auth token cache (bounded LRU)
-- Active MicroVM tracking
+- Auth token cache (bounded LRU) — both HTTP and shell tokens
+- Shell auth tokens for WebSocket terminal access (SHELL_INGRESS connector)
+- Active MicroVM tracking (endpoint, session, memory tier)
 - Pre-termination wake timers (workaround for suspended VM terminate hook issue)
-- Cost tracking
+- Cost tracking (baseline + burst metering)
 - Artifacts bucket discovery
+- Session-to-VM mapping for request routing
+
+Network connectors:
+- HTTP_INGRESS: Standard HTTPS endpoint for API requests
+- SHELL_INGRESS: WebSocket-based interactive shell (platform-managed PTY)
+- INTERNET_EGRESS: Outbound internet access for pip install, git clone, etc.
 
 All route modules access this via app.state.vm_manager.
 """
@@ -35,7 +42,9 @@ IMAGE_ARN = os.environ.get("MICROVM_IMAGE_ARN", "")
 EXEC_ROLE_ARN = os.environ.get("MICROVM_EXEC_ROLE_ARN", "")
 POLL_INTERVAL_MS = int(os.environ.get("POLL_INTERVAL_MS", "10000"))
 INGRESS_CONNECTOR = os.environ.get("MICROVM_INGRESS_CONNECTOR",
-    f"arn:aws:lambda:{AWS_REGION}:aws:network-connector:aws-network-connector:ALL_INGRESS")
+    f"arn:aws:lambda:{AWS_REGION}:aws:network-connector:aws-network-connector:HTTP_INGRESS")
+SHELL_INGRESS_CONNECTOR = os.environ.get("MICROVM_SHELL_INGRESS_CONNECTOR",
+    f"arn:aws:lambda:{AWS_REGION}:aws:network-connector:aws-network-connector:SHELL_INGRESS")
 EGRESS_CONNECTOR = os.environ.get("MICROVM_EGRESS_CONNECTOR",
     f"arn:aws:lambda:{AWS_REGION}:aws:network-connector:aws-network-connector:INTERNET_EGRESS")
 
@@ -182,6 +191,31 @@ class MicrovmManager:
         })
         return token
 
+    def get_shell_auth_token(self, microvm_id: str) -> str:
+        """Get a shell auth token for WebSocket terminal access.
+        
+        Shell tokens use the SHELL_INGRESS connector and are passed
+        via WebSocket subprotocols (not HTTP headers).
+        """
+        cache_key = f"shell:{microvm_id}"
+        cached = self.token_cache.get(cache_key)
+        if cached and time.time() < cached["expires_at"]:
+            return cached["token"]
+
+        logger.info(f"Fetching shell auth token for {microvm_id}")
+        client = self.get_lambda_client()
+        response = client.create_microvm_shell_auth_token(
+            microvmIdentifier=microvm_id,
+            expirationInMinutes=30,
+        )
+
+        token = response["authToken"]["X-aws-proxy-auth"]
+        self.token_cache.set(cache_key, {
+            "token": token,
+            "expires_at": time.time() + (25 * 60),
+        })
+        return token
+
     # ============================================================
     # ARTIFACTS BUCKET
     # ============================================================
@@ -225,7 +259,7 @@ class MicrovmManager:
 
         params = {
             "imageIdentifier": image_arn,
-            "ingressNetworkConnectors": [INGRESS_CONNECTOR],
+            "ingressNetworkConnectors": [INGRESS_CONNECTOR, SHELL_INGRESS_CONNECTOR],
             "egressNetworkConnectors": [EGRESS_CONNECTOR],
             "idlePolicy": {
                 "autoResumeEnabled": True,

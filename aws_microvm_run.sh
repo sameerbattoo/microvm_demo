@@ -13,6 +13,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+rm -f "$ROOT_DIR/app.zip"
 source "$ROOT_DIR/scripts/config.sh"
 
 cleanup() {
@@ -203,6 +204,9 @@ echo ">> Starting token proxy on http://localhost:$PROXY_PORT"
   PRICE_MEMORY_PER_GB_SEC="$PRICE_MEMORY_PER_GB_SEC" \
   PRICE_SNAPSHOT_PER_GB_MONTH="$PRICE_SNAPSHOT_PER_GB_MONTH" \
   METRICS_RETENTION_HOURS="$METRICS_RETENTION_HOURS" \
+  SESSION_PERSISTENCE_MODE="$SESSION_PERSISTENCE_MODE" \
+  MAX_LIFETIME_SECONDS="$MAX_LIFETIME_SECONDS" \
+  ROTATION_LEAD_SECONDS="$ROTATION_LEAD_SECONDS" \
   $PYTHON -m uvicorn proxy.server:app --host 0.0.0.0 --port "$PROXY_PORT" --log-level warning) &
 PROXY_PID=$!
 sleep 1

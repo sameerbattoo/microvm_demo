@@ -25,6 +25,87 @@
   background: var(--surface-2);
 }
 
+/* Bottom terminal panel */
+.terminal-bottom-panel {
+  flex-shrink: 0;
+  min-height: 120px;
+  max-height: 70vh;
+  border-top: 1px solid var(--border-subtle);
+  display: flex;
+  flex-direction: column;
+  background: #0a0a0f;
+  position: relative;
+}
+
+.terminal-resize-handle {
+  position: absolute;
+  top: -3px;
+  left: 0;
+  right: 0;
+  height: 6px;
+  cursor: row-resize;
+  z-index: 10;
+}
+.terminal-resize-handle:hover {
+  background: var(--accent-primary);
+  opacity: 0.4;
+}
+
+.terminal-bottom-panel .terminal-panel-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 12px;
+  background: var(--surface-1);
+  border-bottom: 1px solid var(--border-subtle);
+  flex-shrink: 0;
+}
+
+.terminal-bottom-panel .terminal-panel-title {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-secondary);
+}
+
+.terminal-bottom-panel .terminal-status {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-left: auto;
+}
+.terminal-status-connected { background: #34eaad; }
+.terminal-status-connecting { background: #ffc14d; animation: pulse 1s infinite; }
+.terminal-status-disconnected { background: var(--text-muted); }
+.terminal-status-error { background: #ff5c5c; }
+
+.terminal-bottom-panel .terminal-panel-btn {
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: 3px;
+  display: flex;
+  align-items: center;
+}
+.terminal-bottom-panel .terminal-panel-btn:hover {
+  color: var(--text-primary);
+  background: var(--surface-3);
+}
+
+.terminal-bottom-panel .terminal-container {
+  flex: 1;
+  min-height: 0;
+  padding: 4px;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
 /* ---- Empty state ---- */
 .app-empty {
   flex: 1;
