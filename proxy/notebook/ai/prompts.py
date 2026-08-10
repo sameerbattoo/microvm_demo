@@ -241,3 +241,39 @@ materialized first then joined via DuckDB.
 - Do NOT wrap in Python — this runs directly as SQL
 - Do NOT suggest querying an in-memory variable when the user clearly intended to read from a file/S3/table
 </instructions>"""
+
+
+# =============================================================================
+# TERMINAL AI — Natural Language to Shell Command
+# =============================================================================
+
+TERMINAL_ENV_INFO = [
+    "OS: Amazon Linux 2023 (aarch64/ARM64)",
+    "Shell: bash",
+    "Working directory: /tmp (default for user data)",
+    "Available: python3, pip, git, tar, gzip, curl, find, ls, cat, head, tail, wc, grep",
+    "Python packages: pandas, numpy, matplotlib, plotly, boto3, duckdb, scipy, polars, requests",
+    "AWS: execution role with S3, DynamoDB, Athena access (us-west-2)",
+    "Venv: /app/venv (all packages pre-installed)",
+]
+
+TERMINAL_SUGGEST_PROMPT = """Convert the following natural language description into a single SHORT bash command.
+
+<environment>
+{env_info}
+Current directory: {cwd}
+</environment>
+
+<user_request>
+{description}
+</user_request>
+
+Rules:
+- Return ONLY a single short command — must fit on one terminal line (under 200 chars ideally)
+- STRONGLY prefer curl with a direct URL over writing Python code
+- For data downloads, use known public dataset URLs (kaggle datasets, GitHub raw files, government open data)
+- Chain with && if needed (e.g. curl -o file.csv URL && head file.csv)
+- Save files to /tmp/
+- NEVER use python3 -c for complex scripts — keep it to curl, wget, git clone
+- NO markdown, NO backticks, NO explanation — just the raw command
+"""

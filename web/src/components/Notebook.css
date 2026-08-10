@@ -312,6 +312,14 @@
 .toolbar-btn-run-all:disabled {
   opacity: 0.4;
   cursor: not-allowed;
+}
+
+.toolbar-progress {
+  font-size: 9px;
+  font-weight: 600;
+  color: var(--accent-success);
+  margin-left: 2px;
+}
   transform: none;
 }
 
@@ -531,6 +539,16 @@
   padding: var(--space-4);
   padding-bottom: 100px;
   min-width: 0;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/* Allow text selection inside CodeMirror editors and output areas */
+.cells-container .cm-editor,
+.cells-container .cell-output,
+.cells-container .cell-markdown-rendered {
+  -webkit-user-select: text;
+  user-select: text;
 }
 
 .add-cell-row {

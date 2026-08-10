@@ -284,6 +284,69 @@ def fix_error(code: str, error: str, context: dict) -> str:
     return response_text
 
 
+def suggest_shell_command(description: str, context: dict) -> str:
+    """
+    One-shot: convert natural language to a shell command.
+    Uses a direct model call for speed (no agent loop).
+    """
+    from .prompts import TERMINAL_SUGGEST_PROMPT, TERMINAL_ENV_INFO
+
+    cwd = context.get("cwd", "/tmp")
+    packages = context.get("packages", [])
+    files = context.get("files", [])
+    terminal_history = context.get("terminal_history", "")
+
+    # Build environment info with dynamic context
+    env_info = list(TERMINAL_ENV_INFO)
+    if files:
+        env_info.append(f"Files in /tmp: {', '.join(files[:15])}")
+    if packages:
+        extra_pkgs = [p for p in packages[:10] if p not in ("pandas", "numpy", "matplotlib")]
+        if extra_pkgs:
+            env_info.append(f"User-installed packages: {', '.join(extra_pkgs)}")
+
+    prompt = TERMINAL_SUGGEST_PROMPT.format(
+        env_info=chr(10).join(env_info),
+        cwd=cwd,
+        description=description,
+    )
+
+    # Add terminal history if available (helps with contextual commands)
+    if terminal_history.strip():
+        # Truncate to last 1500 chars to stay within token budget
+        history = terminal_history.strip()[-1500:]
+        prompt += f"\n<recent_terminal_output>\n{history}\n</recent_terminal_output>\n"
+
+    client = _get_direct_client()
+
+    response = client.converse(
+        modelId=AI_MODEL_ID,
+        messages=[{"role": "user", "content": [{"text": prompt}]}],
+        inferenceConfig={"maxTokens": 150, "temperature": 0.1},
+    )
+
+    command = response["output"]["message"]["content"][0]["text"].strip()
+
+    # Clean markdown fences if model wraps it
+    if command.startswith("```") and command.endswith("```"):
+        lines = command.split("\n")
+        command = "\n".join(lines[1:-1]).strip()
+    if command.startswith("```bash"):
+        command = command[7:]
+    if command.startswith("```"):
+        command = command[3:]
+    if command.endswith("```"):
+        command = command[:-3]
+
+    # Force single line — replace newlines with semicolons or &&
+    command = command.strip()
+    if "\n" in command:
+        lines = [l.strip() for l in command.split("\n") if l.strip()]
+        command = " && ".join(lines)
+
+    return command
+
+
 def new_thread(session_id: str) -> None:
     """Clear conversation history for a session (start fresh thread)."""
     clear_session(session_id)

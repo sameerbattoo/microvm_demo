@@ -1,11 +1,11 @@
 {
   "name": "Sales Data Analysis",
-  "description": "Generate sales data, explore trends, and visualize revenue by product and month.",
-  "savedAt": "2026-07-16T00:00:00.000Z",
+  "description": "Generate sales data, explore with SQL, and visualize with interactive Plotly charts.",
+  "savedAt": "2026-08-08T00:00:00.000Z",
   "cells": [
     {
       "type": "markdown",
-      "code": "# Sales Data Analysis\n\nGenerate sample sales data, explore trends by product and time, then visualize with charts.\n\n**What you'll learn:**\n- Creating DataFrames with `pandas`\n- Groupby aggregations\n- Matplotlib bar charts and line plots",
+      "code": "# Sales Data Analysis\n\nGenerate sample sales data, query it with SQL (DuckDB), and visualize with interactive Plotly charts.\n\n**Features demonstrated:**\n- Python cells: data generation with pandas\n- SQL cells: query DataFrames with DuckDB\n- Interactive charts: Plotly (zoom, pan, hover)\n- Matplotlib: static charts",
       "output": null,
       "error": null,
       "html": null,
@@ -13,7 +13,8 @@
       "executionNumber": null
     },
     {
-      "code": "import pandas as pd\nimport numpy as np\nimport matplotlib.pyplot as plt\n\n# Generate sample sales data\nnp.random.seed(42)\nmonths = pd.date_range('2025-01-01', periods=12, freq='MS')\nproducts = ['Laptop', 'Phone', 'Tablet', 'Headphones', 'Monitor']\n\nrows = []\nfor month in months:\n    for product in products:\n        qty = np.random.randint(50, 500)\n        price = {'Laptop': 999, 'Phone': 699, 'Tablet': 449, 'Headphones': 149, 'Monitor': 349}[product]\n        rows.append({'date': month, 'product': product, 'quantity': qty, 'unit_price': price, 'revenue': qty * price})\n\nsales = pd.DataFrame(rows)\nprint(f\"Generated {len(sales)} rows of sales data\")\nsales.head(10)",
+      "type": "code",
+      "code": "import pandas as pd\nimport numpy as np\nimport plotly.express as px\nimport plotly.graph_objects as go\nimport matplotlib.pyplot as plt\n\n# Generate sample sales data\nnp.random.seed(42)\nmonths = pd.date_range('2025-01-01', periods=12, freq='MS')\nproducts = ['Laptop', 'Phone', 'Tablet', 'Headphones', 'Monitor']\n\nrows = []\nfor month in months:\n    for product in products:\n        qty = np.random.randint(50, 500)\n        price = {'Laptop': 999, 'Phone': 699, 'Tablet': 449, 'Headphones': 149, 'Monitor': 349}[product]\n        rows.append({'date': month, 'product': product, 'quantity': qty, 'unit_price': price, 'revenue': qty * price})\n\nsales = pd.DataFrame(rows)\nprint(f\"Generated {len(sales)} rows of sales data\")\nsales.head(10)",
       "output": null,
       "error": null,
       "html": null,
@@ -21,7 +22,8 @@
       "executionNumber": null
     },
     {
-      "code": "# Summary statistics\nsales.describe()",
+      "type": "markdown",
+      "code": "## SQL Queries with DuckDB\n\nUse SQL cells to query pandas DataFrames directly. DuckDB auto-detects DataFrames in the namespace.",
       "output": null,
       "error": null,
       "html": null,
@@ -29,7 +31,38 @@
       "executionNumber": null
     },
     {
-      "code": "# Revenue by product\nrevenue_by_product = sales.groupby('product')['revenue'].sum().sort_values(ascending=False)\nrevenue_by_product",
+      "type": "sql",
+      "code": "-- Top products by total revenue\nSELECT \n    product,\n    SUM(quantity) as total_units,\n    SUM(revenue) as total_revenue,\n    ROUND(AVG(revenue), 0) as avg_monthly_revenue\nFROM sales\nGROUP BY product\nORDER BY total_revenue DESC",
+      "output": null,
+      "error": null,
+      "html": null,
+      "image": null,
+      "executionNumber": null,
+      "outputVariable": "top_products"
+    },
+    {
+      "type": "sql",
+      "code": "-- Monthly revenue trend with running total\nSELECT \n    strftime(date, '%Y-%m') as month,\n    SUM(revenue) as monthly_revenue,\n    SUM(SUM(revenue)) OVER (ORDER BY date) as cumulative_revenue\nFROM sales\nGROUP BY date\nORDER BY date",
+      "output": null,
+      "error": null,
+      "html": null,
+      "image": null,
+      "executionNumber": null,
+      "outputVariable": "monthly_trend"
+    },
+    {
+      "type": "sql",
+      "code": "-- Best selling month per product\nSELECT product, strftime(date, '%Y-%m') as best_month, revenue\nFROM (\n    SELECT *, ROW_NUMBER() OVER (PARTITION BY product ORDER BY revenue DESC) as rn\n    FROM sales\n)\nWHERE rn = 1\nORDER BY revenue DESC",
+      "output": null,
+      "error": null,
+      "html": null,
+      "image": null,
+      "executionNumber": null,
+      "outputVariable": "best_months"
+    },
+    {
+      "type": "markdown",
+      "code": "## Interactive Plotly Charts\n\nPlotly charts support zoom, pan, hover tooltips, and export to PNG. Try hovering over data points!",
       "output": null,
       "error": null,
       "html": null,
@@ -37,7 +70,8 @@
       "executionNumber": null
     },
     {
-      "code": "# Plot: Monthly revenue trend\nmonthly_revenue = sales.groupby('date')['revenue'].sum()\n\nplt.figure(figsize=(10, 5))\nplt.plot(monthly_revenue.index, monthly_revenue.values, marker='o', linewidth=2, color='#89b4fa')\nplt.fill_between(monthly_revenue.index, monthly_revenue.values, alpha=0.1, color='#89b4fa')\nplt.title('Monthly Revenue Trend', color='white', fontsize=14)\nplt.xlabel('Month', color='#a6adc8')\nplt.ylabel('Revenue ($)', color='#a6adc8')\nplt.xticks(rotation=45, color='#a6adc8')\nplt.yticks(color='#a6adc8')\nplt.grid(alpha=0.2)\nplt.tight_layout()\nplt.show()",
+      "type": "code",
+      "code": "# Interactive: Revenue by product over time (stacked area)\nmonthly_product = sales.groupby(['date', 'product'])['revenue'].sum().reset_index()\n\nfig = px.area(\n    monthly_product, \n    x='date', \n    y='revenue', \n    color='product',\n    title='Monthly Revenue by Product (Interactive)',\n    labels={'revenue': 'Revenue ($)', 'date': 'Month'},\n    color_discrete_sequence=px.colors.qualitative.Set2\n)\nfig.update_layout(hovermode='x unified')\nfig.show()",
       "output": null,
       "error": null,
       "html": null,
@@ -45,7 +79,26 @@
       "executionNumber": null
     },
     {
-      "code": "# Plot: Revenue by product (bar chart)\nplt.figure(figsize=(8, 5))\ncolors = ['#89b4fa', '#a6e3a1', '#f9e2af', '#f38ba8', '#cba6f7']\nplt.bar(revenue_by_product.index, revenue_by_product.values, color=colors)\nplt.title('Total Revenue by Product', color='white', fontsize=14)\nplt.xlabel('Product', color='#a6adc8')\nplt.ylabel('Revenue ($)', color='#a6adc8')\nplt.xticks(color='#a6adc8')\nplt.yticks(color='#a6adc8')\nplt.grid(axis='y', alpha=0.2)\nplt.tight_layout()\nplt.show()",
+      "type": "code",
+      "code": "# Interactive: Revenue distribution by product (box plot)\nfig = px.box(\n    sales, \n    x='product', \n    y='revenue', \n    color='product',\n    title='Revenue Distribution by Product',\n    points='all',\n    color_discrete_sequence=px.colors.qualitative.Pastel\n)\nfig.update_layout(showlegend=False)\nfig.show()",
+      "output": null,
+      "error": null,
+      "html": null,
+      "image": null,
+      "executionNumber": null
+    },
+    {
+      "type": "code",
+      "code": "# Interactive: Quantity vs Revenue scatter with size = unit price\nfig = px.scatter(\n    sales,\n    x='quantity',\n    y='revenue',\n    color='product',\n    size='unit_price',\n    hover_data=['date'],\n    title='Quantity vs Revenue (size = unit price)',\n    color_discrete_sequence=px.colors.qualitative.Bold\n)\nfig.show()",
+      "output": null,
+      "error": null,
+      "html": null,
+      "image": null,
+      "executionNumber": null
+    },
+    {
+      "type": "code",
+      "code": "# Static matplotlib: Monthly revenue trend\nmonthly_revenue = sales.groupby('date')['revenue'].sum()\n\nplt.figure(figsize=(10, 5))\nplt.plot(monthly_revenue.index, monthly_revenue.values, marker='o', linewidth=2, color='#89b4fa')\nplt.fill_between(monthly_revenue.index, monthly_revenue.values, alpha=0.1, color='#89b4fa')\nplt.title('Monthly Revenue Trend (matplotlib)', fontsize=14)\nplt.xlabel('Month')\nplt.ylabel('Revenue ($)')\nplt.xticks(rotation=45)\nplt.grid(alpha=0.2)\nplt.tight_layout()\nplt.show()",
       "output": null,
       "error": null,
       "html": null,

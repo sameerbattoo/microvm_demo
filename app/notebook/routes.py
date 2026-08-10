@@ -292,12 +292,13 @@ async def upload_file(request: Request):
 
 @router.get("/files")
 async def list_files():
-    """List uploaded files in /tmp/."""
+    """List data files in /tmp/ (recursive, includes subdirectories)."""
     extensions = ['*.csv', '*.xlsx', '*.xls', '*.parquet', '*.json', '*.txt']
     files = []
     for ext in extensions:
-        for filepath in glob.glob(f'/tmp/{ext}'):
-            filename = os.path.basename(filepath)
+        for filepath in glob.glob(f'/tmp/**/{ext}', recursive=True):
+            # Show path relative to /tmp/ (preserves folder structure)
+            rel_path = os.path.relpath(filepath, '/tmp')
             size = os.path.getsize(filepath)
             if size < 1024:
                 size_str = f"{size} B"
@@ -305,7 +306,7 @@ async def list_files():
                 size_str = f"{size / 1024:.1f} KB"
             else:
                 size_str = f"{size / (1024 * 1024):.1f} MB"
-            files.append({"name": filename, "path": filepath, "size": size_str, "size_bytes": size})
+            files.append({"name": rel_path, "path": filepath, "size": size_str, "size_bytes": size})
     files.sort(key=lambda f: f["name"])
     return {"files": files}
 

@@ -185,6 +185,12 @@ class SandboxExecutor:
                 return ""
             last_line = lines[-1]
 
+            # Detect fig.show() pattern — evaluate the figure object instead of show() which returns None
+            import re as _re
+            show_match = _re.match(r'^(\w+)\.show\(\)$', last_line)
+            if show_match:
+                last_line = show_match.group(1)
+
             # Skip assignments, imports, print statements, function calls that don't return
             if '=' in last_line and not last_line.startswith('=') and '==' not in last_line:
                 return ""

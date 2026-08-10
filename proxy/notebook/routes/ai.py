@@ -31,6 +31,7 @@ from proxy.notebook.ai.notebook_agent import (
     chat_stream as agent_chat_stream,
     explain as agent_explain,
     fix_error as agent_fix_error,
+    suggest_shell_command as agent_suggest_shell,
     new_thread as agent_new_thread,
 )
 from proxy.platform.microvm_manager import AWS_REGION
@@ -297,3 +298,44 @@ async def ai_save_messages(session_id: str, request: Request):
     notebook_id = body.get("notebook_id", "")
     storage.ai_session_save(session_id, notebook_id, messages)
     return {"status": "saved"}
+
+
+@router.post("/terminal/suggest")
+async def terminal_suggest_command(request: Request):
+    """
+    NL-to-Shell: convert natural language to a bash command.
+    
+    The user describes what they want in plain English and the AI
+    returns a ready-to-execute shell command for the MicroVM terminal.
+    """
+    body = await request.json()
+    description = body.get("description", "")
+    cwd = body.get("cwd", "/tmp")
+    files = body.get("files", [])
+    packages = body.get("packages", [])
+    terminal_history = body.get("terminal_history", "")
+
+    if not description.strip():
+        return Response(
+            status_code=400,
+            content='{"error": "description required"}',
+            media_type="application/json",
+        )
+
+    context = {
+        "cwd": cwd,
+        "files": files,
+        "packages": packages,
+        "terminal_history": terminal_history,
+    }
+
+    try:
+        command = await asyncio.to_thread(agent_suggest_shell, description, context)
+        return {"command": command}
+    except Exception as e:
+        logger.error(f"Terminal suggest error: {e}")
+        return Response(
+            status_code=500,
+            content=f'{{"error": "Suggest failed: {str(e)}"}}',
+            media_type="application/json",
+        )

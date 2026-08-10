@@ -27,16 +27,18 @@ let nextCellId = (() => {
 // Derive default output variable name from SQL query
 function _deriveSqlVarName(sql) {
   if (!sql || !sql.trim()) return 'result'
+  // Extract table/source name from FROM clause (for external sources only)
   const fromMatch = sql.match(/\bFROM\s+dynamodb\."?([a-zA-Z_][\w\-]*)"?/i)
     || sql.match(/\bFROM\s+'\/tmp\/([^']+)'/i)
     || sql.match(/\bFROM\s+read_(?:csv|json|parquet)\('[^']*\/([^'/]+)'\)/i)
     || sql.match(/\bFROM\s+[a-zA-Z_]\w*\.([a-zA-Z_]\w*)/i)
-    || sql.match(/\bFROM\s+([a-zA-Z_]\w*)/i)
   if (fromMatch) {
     const raw = fromMatch[1] || 'result'
     const cleaned = raw.replace(/\.\w+$/, '').replace(/[^a-zA-Z0-9_]/g, '_').replace(/^_+|_+$/g, '')
     if (cleaned && /^[a-zA-Z_]/.test(cleaned)) return cleaned
   }
+  // For queries on in-memory DataFrames (FROM df_name), use generic 'result'
+  // to avoid overwriting the source DataFrame
   return 'result'
 }
 
@@ -92,6 +94,7 @@ export default function Notebook({ tab, instances = {}, onUpdateTab, onMarkVmRun
   })
   const [showConnection, setShowConnection] = useState(tab.status !== 'connected' && !tab.microvmId)
   const [isExecuting, setIsExecuting] = useState(false)
+  const [runProgress, setRunProgress] = useState(null) // { current: N, total: M } during Run All
 
   // Fetch metrics once when execution starts and once when it ends (for burst cost tracking).
   // DO NOT poll continuously — it keeps the VM from suspending.
@@ -115,7 +118,20 @@ export default function Notebook({ tab, instances = {}, onUpdateTab, onMarkVmRun
   useEffect(() => {
     if (tab.status === 'connected') {
       // Auto-dismiss connection panel shortly after connecting
-      const timer = setTimeout(() => setShowConnection(false), 800)
+      const timer = setTimeout(() => {
+        setShowConnection(false)
+        // Clear any accidental text selection caused by overlay removal
+        window.getSelection()?.removeAllRanges()
+        // Auto-focus first code cell
+        const firstCodeCell = cells.find(c => c.type !== 'markdown')
+        if (firstCodeCell) {
+          setActiveCellId(firstCodeCell.id)
+          setTimeout(() => {
+            const el = document.querySelector(`[data-cell-id="${firstCodeCell.id}"] .cm-editor .cm-content`)
+            if (el) el.focus()
+          }, 100)
+        }
+      }, 800)
       return () => clearTimeout(timer)
     }
   }, [tab.status])
@@ -485,12 +501,14 @@ export default function Notebook({ tab, instances = {}, onUpdateTab, onMarkVmRun
 
   const executeAllCells = useCallback(async () => {
     if (!tab.microvmId) return
+    const runnableCells = cells.filter(c => c.code.trim() && c.type !== 'markdown')
+    const total = runnableCells.length
 
-    for (const cell of cells) {
-      if (cell.code.trim()) {
-        await executeCell(cell.id)
-      }
+    for (let i = 0; i < runnableCells.length; i++) {
+      setRunProgress({ current: i + 1, total })
+      await executeCell(runnableCells[i].id)
     }
+    setRunProgress(null)
   }, [cells, tab.microvmEndpoint, tab.status, executeCell])
 
   // Listen for "Run from cell" events from the outline panel
@@ -729,6 +747,13 @@ export default function Notebook({ tab, instances = {}, onUpdateTab, onMarkVmRun
     URL.revokeObjectURL(url)
   }, [tab.name, tab.microvmId, cells])
 
+  // Listen for Cmd+S save shortcut
+  useEffect(() => {
+    const handler = () => saveNotebook()
+    window.addEventListener('notebook-save', handler)
+    return () => window.removeEventListener('notebook-save', handler)
+  }, [saveNotebook])
+
   const exportNotebookHTML = useCallback(() => {
     const nbName = tab.name || 'Notebook'
     let html = `<html><head><meta charset="UTF-8"><title>${nbName}</title><style>body{font-family:system-ui;padding:20px;max-width:1000px;margin:0 auto;background:#1a1a2e;color:#e0e0e0}h1{color:#89b4fa}h2{color:#cdd6f4;font-size:16px;margin-top:24px}.desc{color:#888;margin-bottom:24px}.cell{margin:16px 0;border:1px solid #333;border-radius:8px;overflow:hidden}.cell-header{background:#2a2a4a;padding:8px 12px;font-size:11px;color:#888;display:flex;justify-content:space-between}details{margin:0}summary{padding:8px 12px;cursor:pointer;font-weight:600;font-size:12px;color:#a6adc8;background:#1e2a3a}pre{margin:0;padding:12px;background:#0d1117;overflow-x:auto;font-size:13px;color:#e0e0e0}table{border-collapse:collapse;width:100%;margin:8px 0}th,td{border:1px solid #444;padding:6px 10px;text-align:left;font-size:12px}th{background:#2a2a4a}.output{padding:12px;background:#11111b}.ai-note{padding:8px 12px;background:#1e2a3a;border-top:1px solid #333;font-size:12px;color:#a6adc8;font-style:italic}img{max-width:100%}.error{color:#f38ba8}footer{text-align:center;padding:24px;color:#555;font-size:11px;border-top:1px solid #333;margin-top:32px}</style></head><body>`
@@ -963,6 +988,7 @@ export default function Notebook({ tab, instances = {}, onUpdateTab, onMarkVmRun
               title="Execute all cells sequentially"
             >
               <IconPlayAll width={14} height={14} />
+              {runProgress && <span className="toolbar-progress">{runProgress.current}/{runProgress.total}</span>}
             </button>
             <button className="toolbar-btn" onClick={() => addCellAtEnd('code')} title="Add code cell">
               <IconCode width={14} height={14} />

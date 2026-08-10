@@ -1,10 +1,11 @@
 {
   "name": "Time Series Forecasting",
-  "description": "Generate time series data, decompose trends and seasonality, and build a simple forecast.",
-  "savedAt": "2026-07-14T00:00:00.000Z",
+  "description": "Generate time series data, query with SQL, and build interactive forecasts with Plotly.",
+  "savedAt": "2026-08-08T00:00:00.000Z",
   "cells": [
     {
-      "code": "import numpy as np\nimport pandas as pd\nimport matplotlib.pyplot as plt\n\n# Generate synthetic daily metrics (e.g., website traffic)\nnp.random.seed(77)\ndays = 365 * 2  # 2 years of daily data\ndates = pd.date_range('2024-01-01', periods=days, freq='D')\n\n# Components: trend + seasonality + noise\ntrend = np.linspace(1000, 2500, days)\nweekly_seasonal = 200 * np.sin(2 * np.pi * np.arange(days) / 7)\nyearly_seasonal = 400 * np.sin(2 * np.pi * np.arange(days) / 365)\nnoise = np.random.normal(0, 100, days)\n\ntraffic = trend + weekly_seasonal + yearly_seasonal + noise\ntraffic = np.maximum(traffic, 0)  # No negative traffic\n\nts = pd.DataFrame({'date': dates, 'visitors': traffic.astype(int)})\nts = ts.set_index('date')\n\nprint(f\"Time series: {len(ts)} days, from {ts.index[0].date()} to {ts.index[-1].date()}\")\nts.describe()",
+      "type": "markdown",
+      "code": "# Time Series Forecasting\n\nGenerate synthetic website traffic data, analyze with SQL, and visualize with interactive Plotly charts.\n\n**Features demonstrated:**\n- Time series generation and decomposition\n- SQL cells for aggregation queries (DuckDB)\n- Interactive Plotly charts with range slider\n- Forecast with confidence intervals",
       "output": null,
       "error": null,
       "html": null,
@@ -12,7 +13,8 @@
       "executionNumber": null
     },
     {
-      "code": "# Plot the full time series\nplt.figure(figsize=(12, 4))\nplt.plot(ts.index, ts['visitors'], linewidth=0.5, color='#89b4fa', alpha=0.7)\nplt.title('Daily Website Visitors (2 years)', color='white', fontsize=14)\nplt.xlabel('Date', color='#a6adc8')\nplt.ylabel('Visitors', color='#a6adc8')\nplt.tick_params(colors='#a6adc8')\nplt.grid(alpha=0.15)\nplt.tight_layout()\nplt.show()",
+      "type": "code",
+      "code": "import numpy as np\nimport pandas as pd\nimport plotly.express as px\nimport plotly.graph_objects as go\nimport matplotlib.pyplot as plt\n\n# Generate synthetic daily metrics (website traffic)\nnp.random.seed(77)\ndays = 365 * 2  # 2 years of daily data\ndates = pd.date_range('2024-01-01', periods=days, freq='D')\n\n# Components: trend + seasonality + noise\ntrend = np.linspace(1000, 2500, days)\nweekly_seasonal = 200 * np.sin(2 * np.pi * np.arange(days) / 7)\nyearly_seasonal = 400 * np.sin(2 * np.pi * np.arange(days) / 365)\nnoise = np.random.normal(0, 100, days)\n\ntraffic = trend + weekly_seasonal + yearly_seasonal + noise\ntraffic = np.maximum(traffic, 0)\n\nts = pd.DataFrame({'date': dates, 'visitors': traffic.astype(int)})\nts['day_of_week'] = ts['date'].dt.day_name()\nts['month'] = ts['date'].dt.month\nts['year'] = ts['date'].dt.year\n\nprint(f\"Time series: {len(ts)} days, from {ts['date'].iloc[0].date()} to {ts['date'].iloc[-1].date()}\")\nts.head()",
       "output": null,
       "error": null,
       "html": null,
@@ -20,7 +22,8 @@
       "executionNumber": null
     },
     {
-      "code": "# Rolling averages to see trend\nts['ma_7'] = ts['visitors'].rolling(7).mean()\nts['ma_30'] = ts['visitors'].rolling(30).mean()\n\nplt.figure(figsize=(12, 4))\nplt.plot(ts.index, ts['visitors'], alpha=0.3, color='#585b70', linewidth=0.5, label='Daily')\nplt.plot(ts.index, ts['ma_7'], color='#89b4fa', linewidth=1.5, label='7-day MA')\nplt.plot(ts.index, ts['ma_30'], color='#f9e2af', linewidth=2, label='30-day MA')\nplt.title('Trend Analysis with Moving Averages', color='white', fontsize=14)\nplt.legend()\nplt.tick_params(colors='#a6adc8')\nplt.grid(alpha=0.15)\nplt.tight_layout()\nplt.show()",
+      "type": "code",
+      "code": "# Interactive: Full time series with range slider\nfig = px.line(\n    ts, x='date', y='visitors',\n    title='Daily Website Visitors (2 Years) \u2014 Use slider to zoom',\n    labels={'visitors': 'Daily Visitors', 'date': ''},\n)\nfig.update_traces(line_color='#89b4fa', line_width=0.8)\nfig.update_xaxes(rangeslider_visible=True)\nfig.update_layout(height=400)\nfig.show()",
       "output": null,
       "error": null,
       "html": null,
@@ -28,7 +31,8 @@
       "executionNumber": null
     },
     {
-      "code": "# Monthly summary with year-over-year comparison\nts_monthly = ts['visitors'].resample('MS').agg(['mean', 'sum', 'std']).round(0)\nts_monthly.columns = ['avg_daily', 'total', 'std_dev']\nts_monthly['month'] = ts_monthly.index.month\nts_monthly['year'] = ts_monthly.index.year\nts_monthly",
+      "type": "markdown",
+      "code": "## SQL Analysis\n\nQuery the time series DataFrame with SQL for quick aggregations.",
       "output": null,
       "error": null,
       "html": null,
@@ -36,7 +40,56 @@
       "executionNumber": null
     },
     {
-      "code": "# Simple forecast: last 30-day average projected forward\nlast_30 = ts['visitors'].tail(30).mean()\ngrowth_rate = (ts['ma_30'].iloc[-1] - ts['ma_30'].iloc[-90]) / 90  # daily growth\n\nforecast_days = 90\nforecast_dates = pd.date_range(ts.index[-1] + pd.Timedelta(days=1), periods=forecast_days)\nforecast_values = [last_30 + growth_rate * i + 200 * np.sin(2 * np.pi * i / 7) for i in range(forecast_days)]\n\nplt.figure(figsize=(12, 4))\nplt.plot(ts.index[-90:], ts['visitors'].tail(90), color='#89b4fa', linewidth=1, label='Actual')\nplt.plot(forecast_dates, forecast_values, color='#a6e3a1', linewidth=2, linestyle='--', label='Forecast (90d)')\nplt.axvline(ts.index[-1], color='#f9e2af', linestyle=':', alpha=0.7, label='Forecast start')\nplt.fill_between(forecast_dates, \n                 [v - 150 for v in forecast_values],\n                 [v + 150 for v in forecast_values],\n                 alpha=0.1, color='#a6e3a1')\nplt.title('90-Day Traffic Forecast', color='white', fontsize=14)\nplt.legend()\nplt.tick_params(colors='#a6adc8')\nplt.grid(alpha=0.15)\nplt.tight_layout()\nplt.show()",
+      "type": "sql",
+      "code": "-- Monthly traffic summary\nSELECT \n    year,\n    month,\n    ROUND(AVG(visitors), 0) as avg_daily,\n    SUM(visitors) as total_visitors,\n    MIN(visitors) as min_day,\n    MAX(visitors) as max_day\nFROM ts\nGROUP BY year, month\nORDER BY year, month",
+      "output": null,
+      "error": null,
+      "html": null,
+      "image": null,
+      "executionNumber": null,
+      "outputVariable": "ts_monthly"
+    },
+    {
+      "type": "sql",
+      "code": "-- Day of week patterns (which days get most traffic?)\nSELECT \n    day_of_week,\n    ROUND(AVG(visitors), 0) as avg_visitors,\n    COUNT(*) as days_counted\nFROM ts\nGROUP BY day_of_week\nORDER BY avg_visitors DESC",
+      "output": null,
+      "error": null,
+      "html": null,
+      "image": null,
+      "executionNumber": null,
+      "outputVariable": "ts_dow"
+    },
+    {
+      "type": "sql",
+      "code": "-- Year over year growth\nSELECT \n    year,\n    ROUND(AVG(visitors), 0) as avg_daily_visitors,\n    SUM(visitors) as total_visitors\nFROM ts\nGROUP BY year\nORDER BY year",
+      "output": null,
+      "error": null,
+      "html": null,
+      "image": null,
+      "executionNumber": null,
+      "outputVariable": "ts_yoy"
+    },
+    {
+      "type": "code",
+      "code": "# Interactive: Day of week heatmap\nts_dow = ts.copy()\nts_dow['week'] = ts_dow['date'].dt.isocalendar().week.astype(int)\nts_dow['dow'] = ts_dow['date'].dt.dayofweek\n\npivot = ts_dow.pivot_table(values='visitors', index='dow', columns='week', aggfunc='mean')\n\nfig = px.imshow(\n    pivot.values,\n    labels=dict(x='Week of Year', y='Day of Week', color='Avg Visitors'),\n    y=['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'],\n    title='Traffic Heatmap: Day of Week vs Week of Year',\n    color_continuous_scale='Viridis',\n    aspect='auto'\n)\nfig.update_layout(height=300)\nfig.show()",
+      "output": null,
+      "error": null,
+      "html": null,
+      "image": null,
+      "executionNumber": null
+    },
+    {
+      "type": "markdown",
+      "code": "## Forecast\n\nSimple trend projection with confidence intervals.",
+      "output": null,
+      "error": null,
+      "html": null,
+      "image": null,
+      "executionNumber": null
+    },
+    {
+      "type": "code",
+      "code": "# Forecast: project trend forward 90 days\nma_30 = ts.set_index('date')['visitors'].rolling(30).mean()\nlast_30_avg = ts['visitors'].tail(30).mean()\ngrowth_rate = (ma_30.iloc[-1] - ma_30.iloc[-90]) / 90\n\nforecast_days = 90\nforecast_dates = pd.date_range(ts['date'].iloc[-1] + pd.Timedelta(days=1), periods=forecast_days)\nforecast_values = [last_30_avg + growth_rate * i + 200 * np.sin(2 * np.pi * i / 7) for i in range(forecast_days)]\nupper = [v + 200 for v in forecast_values]\nlower = [v - 200 for v in forecast_values]\n\n# Build interactive chart\nfig = go.Figure()\nfig.add_trace(go.Scatter(x=ts['date'].tail(90), y=ts['visitors'].tail(90), name='Actual', line=dict(color='#89b4fa')))\nfig.add_trace(go.Scatter(x=forecast_dates, y=forecast_values, name='Forecast', line=dict(color='#a6e3a1', dash='dash')))\nfig.add_trace(go.Scatter(x=forecast_dates, y=upper, fill=None, mode='lines', line=dict(width=0), showlegend=False))\nfig.add_trace(go.Scatter(x=forecast_dates, y=lower, fill='tonexty', mode='lines', line=dict(width=0), name='95% CI', fillcolor='rgba(166,227,161,0.15)'))\nfig.add_vline(x=ts['date'].iloc[-1], line_dash='dot', line_color='#f9e2af', annotation_text='Forecast start')\nfig.update_layout(title='90-Day Traffic Forecast with Confidence Interval', height=400)\nfig.show()",
       "output": null,
       "error": null,
       "html": null,

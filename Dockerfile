@@ -45,7 +45,7 @@ FROM public.ecr.aws/lambda/microvms:al2023-minimal
 #   git          — Clone repos from the terminal
 #   tar, gzip    — Extract archives (wget'd datasets, etc.)
 #   bash         — Required by SHELL_INGRESS for interactive terminal access
-RUN dnf install -y python3.11 python3.11-pip git tar gzip bash && dnf clean all
+RUN dnf install -y python3.11 python3.11-pip git tar gzip bash findutils && dnf clean all
 
 # Symlink python3 globally so any shell (including platform shell) can find it
 RUN ln -sf /usr/bin/python3.11 /usr/bin/python3 && \
@@ -57,7 +57,9 @@ ENV PATH="/app/venv/bin:$PATH"
 
 # Make the venv PATH available in terminal sessions (SHELL_INGRESS spawns bash)
 # Without this, `python3` in the terminal finds the bare system Python (no packages)
-RUN echo 'export PATH="/app/venv/bin:$PATH"' >> /root/.bashrc
+# Also set a useful prompt showing the current directory
+RUN echo 'export PATH="/app/venv/bin:$PATH"' >> /root/.bashrc && \
+    echo 'export PS1="\[\e[36m\]\w\[\e[0m\] \$ "' >> /root/.bashrc
 
 # Install sandbox server + pre-baked data science packages
 # These are captured in the Firecracker snapshot — zero cold-start import latency

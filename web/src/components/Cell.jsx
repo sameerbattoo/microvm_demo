@@ -383,10 +383,12 @@ export default function Cell({
         <span className="cell-number">
           {cell.executionNumber ? `[${cell.executionNumber}]` : `[${index + 1}]`}
         </span>
-        <span className={`cell-type-badge ${cell.type === 'sql' ? 'cell-type-sql' : 'cell-type-code'}`} title={cell.type === 'sql' ? 'SQL cell' : 'Python cell'}>
+        <span className={`cell-type-badge ${cell.type === 'sql' ? 'cell-type-sql' : cell.type === 'markdown' ? 'cell-type-md' : 'cell-type-code'}`} title={cell.type === 'sql' ? 'SQL cell' : cell.type === 'markdown' ? 'Markdown cell' : 'Python cell'}>
           {cell.type === 'sql'
-            ? <IconDatabase width={10} height={10} />
-            : <IconCode width={10} height={10} />
+            ? <><IconDatabase width={10} height={10} /><span className="cell-type-label">SQL</span></>
+            : cell.type === 'markdown'
+              ? <span className="cell-type-label">M</span>
+              : <><IconCode width={10} height={10} /><span className="cell-type-label">Py</span></>
           }
         </span>
         {cell.status === 'running' && <ElapsedTimer />}
@@ -564,6 +566,11 @@ export default function Cell({
                         <IconEraser width={11} height={11} /> Clear
                       </button>
                     )}
+                    {cell.output && (
+                      <button className="cell-output-action-btn" onClick={() => navigator.clipboard.writeText(cell.output)} title="Copy output">
+                        <svg width={11} height={11} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg> Copy
+                      </button>
+                    )}
                   </div>
                 </div>
                 {cell.image && (
@@ -571,7 +578,9 @@ export default function Cell({
                     <img src={cell.image} alt="Plot output" />
                   </div>
                 )}
-                {cell.output && <pre className="output-text">{cell.output}</pre>}
+                {cell.output && (
+                  <pre className="output-text">{cell.output}</pre>
+                )}
                 {cell.html && (
                   cell.html.includes('data-plotly="true"') ? (
                     <div className="output-plotly">

@@ -176,11 +176,14 @@
 }
 
 .sidebar-panel-count {
-  font-size: var(--font-size-xs);
-  color: var(--text-muted);
-  background: var(--surface-3);
-  padding: 1px 6px;
-  border-radius: 8px;
+  font-size: 10px;
+  color: var(--text-secondary);
+  font-weight: 600;
+  background: var(--surface-4);
+  padding: 2px 7px;
+  border-radius: var(--radius-full, 8px);
+  border: 1px solid var(--border-default);
+  letter-spacing: 0.2px;
 }
 
 .sidebar-panel-action {

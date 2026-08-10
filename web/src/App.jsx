@@ -242,6 +242,25 @@ export default function App() {
   // Track previous instances to detect termination transitions
   const prevInstancesRef = useRef({})
 
+  // Global keyboard shortcuts
+  useEffect(() => {
+    const handler = (e) => {
+      // Ctrl+` or Cmd+` — toggle terminal
+      if (e.key === '`' && (e.ctrlKey || e.metaKey)) {
+        e.preventDefault()
+        setShowTerminal(v => !v)
+      }
+      // Cmd+S / Ctrl+S — save notebook (prevent browser save dialog)
+      if (e.key === 's' && (e.metaKey || e.ctrlKey)) {
+        e.preventDefault()
+        // Trigger save via custom event (Notebook component listens)
+        window.dispatchEvent(new CustomEvent('notebook-save'))
+      }
+    }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [])
+
   // Fetch instances periodically — this is THE SINGLE SOURCE OF TRUTH for VM state.
   // No copies (_vmState) are stored on tabs. Components derive state from `instances[tab.microvmId]`.
   const fetchInstances = useCallback(async () => {
@@ -345,7 +364,7 @@ export default function App() {
         const files = (data.files || []).map(f => ({
           name: f.name,
           size: f.size,
-          variable: f.name.replace(/\.[^.]+$/, '').replace(/[-\s.]/g, '_'),
+          variable: f.name.split('/').pop().replace(/\.[^.]+$/, '').replace(/[-\s.]/g, '_'),
           status: 'ready',
         }))
         // Store files on the tab object so each VM has its own file list
@@ -687,6 +706,7 @@ export default function App() {
         html: c.html || null,
         image: c.image || null,
         aiExplanation: c.aiExplanation || null,
+        outputVariable: c.outputVariable || null,
       }))
       setTabs(prev => [...prev, { ...tab }])
       setActiveTabId(tab.id)
@@ -695,6 +715,50 @@ export default function App() {
       alert(`Failed to load sample: ${err.message}`)
     }
   }, [])
+
+  const [showGitImport, setShowGitImport] = useState(false)
+  const [gitImportUrl, setGitImportUrl] = useState('')
+  const [gitImportLoading, setGitImportLoading] = useState(false)
+
+  const importFromGitUrl = useCallback(async () => {
+    if (!gitImportUrl.trim()) return
+    setGitImportLoading(true)
+    try {
+      const resp = await fetch(`${PROXY_URL}/import-from-url`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: gitImportUrl.trim() }),
+      })
+      if (!resp.ok) {
+        const err = await resp.json().catch(() => ({}))
+        alert(err.error || `Import failed: ${resp.status}`)
+        setGitImportLoading(false)
+        return
+      }
+      const notebook = await resp.json()
+      const tab = createTab(notebook.name || 'Imported', notebook.description || '', 'Imported')
+      tab._loadedCells = notebook.cells
+      tab._cells = notebook.cells.map((c, i) => ({
+        id: Date.now() + Math.random() + i,
+        type: c.type || 'code',
+        code: c.code || '',
+        output: null,
+        error: null,
+        html: null,
+        image: null,
+        outputVariable: c.outputVariable || null,
+      }))
+      tab.sourceUrl = notebook.source_url
+      setTabs(prev => [...prev, { ...tab }])
+      setActiveTabId(tab.id)
+      setShowGitImport(false)
+      setGitImportUrl('')
+      setShowAiChat(true)
+    } catch (err) {
+      alert(`Import error: ${err.message}`)
+    }
+    setGitImportLoading(false)
+  }, [gitImportUrl])
 
   // Listen for "Open Notebook" events from Notebook toolbar (creates a new tab)
   useEffect(() => {
@@ -711,6 +775,7 @@ export default function App() {
         html: c.html || null,
         image: c.image || null,
         aiExplanation: c.aiExplanation || null,
+        outputVariable: c.outputVariable || null,
       }))
       setTabs(prev => [...prev, { ...tab }])
       setActiveTabId(tab.id)
@@ -837,7 +902,27 @@ export default function App() {
                 <button className="app-empty-btn" onClick={() => loadSample('/samples/aws_data_sources.notebook.json', 'AWS Data Sources')}>
                   Open Sample: AWS Data Sources
                 </button>
+                <button className="app-empty-btn" onClick={() => setShowGitImport(v => !v)}>
+                  Import from Git URL
+                </button>
               </div>
+              {showGitImport && (
+                <div className="app-empty-git-import">
+                  <input
+                    className="app-empty-git-input"
+                    type="text"
+                    placeholder="Paste GitHub URL (e.g. https://github.com/user/repo/blob/main/notebook.ipynb)"
+                    value={gitImportUrl}
+                    onChange={e => setGitImportUrl(e.target.value)}
+                    onKeyDown={e => { if (e.key === 'Enter') importFromGitUrl(); if (e.key === 'Escape') setShowGitImport(false) }}
+                    autoFocus
+                    disabled={gitImportLoading}
+                  />
+                  <button className="app-empty-git-btn" onClick={importFromGitUrl} disabled={gitImportLoading || !gitImportUrl.trim()}>
+                    {gitImportLoading ? 'Importing...' : 'Import'}
+                  </button>
+                </div>
+              )}
               <div className="app-empty-hints">
                 <div className="app-empty-hint">
                   <span className="app-empty-hint-icon">1</span>
@@ -882,6 +967,7 @@ export default function App() {
             <TerminalPanel
               activeTab={tabs.find(t => t.id === activeTabId) || null}
               onClose={() => setShowTerminal(false)}
+              theme={theme}
             />
           )}
         </main>

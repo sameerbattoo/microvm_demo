@@ -1,10 +1,11 @@
 {
   "name": "Data Cleaning & Transform",
-  "description": "Load messy data, handle missing values, transform columns, and produce a clean dataset.",
-  "savedAt": "2026-07-14T00:00:00.000Z",
+  "description": "Load messy data, clean with Python, validate with SQL, and visualize with Plotly.",
+  "savedAt": "2026-08-08T00:00:00.000Z",
   "cells": [
     {
-      "code": "import pandas as pd\nimport numpy as np\n\n# Generate messy sample data (simulating a real-world CSV import)\nnp.random.seed(99)\nn = 200\n\ndf = pd.DataFrame({\n    'customer_id': range(1, n+1),\n    'name': [f'Customer {i}' if np.random.random() > 0.05 else None for i in range(1, n+1)],\n    'email': [f'user{i}@example.com' if np.random.random() > 0.1 else 'INVALID' for i in range(1, n+1)],\n    'age': [np.random.randint(18, 80) if np.random.random() > 0.08 else None for _ in range(n)],\n    'signup_date': pd.date_range('2023-01-01', periods=n, freq='2D').astype(str),\n    'revenue': [round(np.random.exponential(150), 2) if np.random.random() > 0.12 else None for _ in range(n)],\n    'country': np.random.choice(['US', 'UK', 'DE', 'FR', 'JP', 'AU', None], n),\n})\n\nprint(f\"Raw dataset: {df.shape[0]} rows, {df.shape[1]} columns\")\nprint(f\"\\nMissing values:\")\nprint(df.isnull().sum())\ndf.head()",
+      "type": "markdown",
+      "code": "# Data Cleaning & Transform\n\nGenerate messy data, clean it step-by-step, validate with SQL queries, and visualize the results.\n\n**Features demonstrated:**\n- Python cells: data cleaning with pandas\n- SQL cells: validation queries on cleaned data\n- Plotly: interactive visualization of results",
       "output": null,
       "error": null,
       "html": null,
@@ -12,7 +13,8 @@
       "executionNumber": null
     },
     {
-      "code": "# Step 1: Handle missing values\ndf_clean = df.copy()\n\n# Fill missing names\ndf_clean['name'] = df_clean['name'].fillna('Unknown')\n\n# Fill missing ages with median\ndf_clean['age'] = df_clean['age'].fillna(df_clean['age'].median())\n\n# Fill missing revenue with 0 (no purchase)\ndf_clean['revenue'] = df_clean['revenue'].fillna(0)\n\n# Fill missing country\ndf_clean['country'] = df_clean['country'].fillna('Unknown')\n\nprint(\"After filling missing values:\")\nprint(df_clean.isnull().sum())",
+      "type": "code",
+      "code": "import pandas as pd\nimport numpy as np\nimport plotly.express as px\n\n# Generate messy sample data (simulating a real-world CSV import)\nnp.random.seed(99)\nn = 200\n\ndf = pd.DataFrame({\n    'customer_id': range(1, n+1),\n    'name': [f'Customer {i}' if np.random.random() > 0.05 else None for i in range(1, n+1)],\n    'email': [f'user{i}@example.com' if np.random.random() > 0.1 else 'INVALID' for i in range(1, n+1)],\n    'age': [np.random.randint(18, 80) if np.random.random() > 0.08 else None for _ in range(n)],\n    'signup_date': pd.date_range('2023-01-01', periods=n, freq='2D').astype(str),\n    'revenue': [round(np.random.exponential(150), 2) if np.random.random() > 0.12 else None for _ in range(n)],\n    'country': np.random.choice(['US', 'UK', 'DE', 'FR', 'JP', 'AU', None], n),\n})\n\nprint(f\"Raw dataset: {df.shape[0]} rows, {df.shape[1]} columns\")\nprint(f\"\\nMissing values:\")\nprint(df.isnull().sum())\ndf.head()",
       "output": null,
       "error": null,
       "html": null,
@@ -20,7 +22,18 @@
       "executionNumber": null
     },
     {
-      "code": "# Step 2: Fix data types and invalid values\n\n# Fix invalid emails\ndf_clean['email_valid'] = df_clean['email'].str.contains('@') & (df_clean['email'] != 'INVALID')\ndf_clean.loc[df_clean['email'] == 'INVALID', 'email'] = None\n\n# Convert signup_date to datetime\ndf_clean['signup_date'] = pd.to_datetime(df_clean['signup_date'])\n\n# Add derived columns\ndf_clean['signup_year'] = df_clean['signup_date'].dt.year\ndf_clean['signup_month'] = df_clean['signup_date'].dt.month\ndf_clean['age_group'] = pd.cut(df_clean['age'], bins=[0, 25, 35, 50, 65, 100], labels=['18-25', '26-35', '36-50', '51-65', '65+'])\n\nprint(f\"Clean dataset: {df_clean.shape[0]} rows, {df_clean.shape[1]} columns\")\ndf_clean.dtypes",
+      "type": "sql",
+      "code": "-- Quick data quality check with SQL\nSELECT \n    COUNT(*) as total_rows,\n    COUNT(name) as has_name,\n    COUNT(age) as has_age,\n    COUNT(revenue) as has_revenue,\n    SUM(CASE WHEN email = 'INVALID' THEN 1 ELSE 0 END) as invalid_emails,\n    COUNT(DISTINCT country) as unique_countries\nFROM df",
+      "output": null,
+      "error": null,
+      "html": null,
+      "image": null,
+      "executionNumber": null,
+      "outputVariable": "quality_check"
+    },
+    {
+      "type": "code",
+      "code": "# Step 1: Handle missing values\ndf_clean = df.copy()\ndf_clean['name'] = df_clean['name'].fillna('Unknown')\ndf_clean['age'] = df_clean['age'].fillna(df_clean['age'].median())\ndf_clean['revenue'] = df_clean['revenue'].fillna(0)\ndf_clean['country'] = df_clean['country'].fillna('Unknown')\n\n# Step 2: Fix invalid values\ndf_clean.loc[df_clean['email'] == 'INVALID', 'email'] = None\ndf_clean['email_valid'] = df_clean['email'].notna()\ndf_clean['signup_date'] = pd.to_datetime(df_clean['signup_date'])\ndf_clean['age_group'] = pd.cut(df_clean['age'], bins=[0, 25, 35, 50, 65, 100], labels=['18-25', '26-35', '36-50', '51-65', '65+'])\n\nprint(f\"Clean dataset: {df_clean.shape[0]} rows, {df_clean.shape[1]} columns\")\nprint(f\"Missing values remaining: {df_clean.isnull().sum().sum()}\")\ndf_clean.head()",
       "output": null,
       "error": null,
       "html": null,
@@ -28,7 +41,28 @@
       "executionNumber": null
     },
     {
-      "code": "# Step 3: Aggregate and summarize\nsummary = df_clean.groupby('country').agg(\n    customers=('customer_id', 'count'),\n    avg_revenue=('revenue', 'mean'),\n    total_revenue=('revenue', 'sum'),\n    avg_age=('age', 'mean'),\n    valid_emails=('email_valid', 'sum')\n).round(2).sort_values('total_revenue', ascending=False)\n\nsummary",
+      "type": "sql",
+      "code": "-- Validate: summary by country after cleaning\nSELECT \n    country,\n    COUNT(*) as customers,\n    ROUND(AVG(revenue), 2) as avg_revenue,\n    ROUND(SUM(revenue), 2) as total_revenue,\n    ROUND(AVG(age), 1) as avg_age,\n    SUM(CASE WHEN email_valid THEN 1 ELSE 0 END) as valid_emails\nFROM df_clean\nGROUP BY country\nORDER BY total_revenue DESC",
+      "output": null,
+      "error": null,
+      "html": null,
+      "image": null,
+      "executionNumber": null,
+      "outputVariable": "country_summary"
+    },
+    {
+      "type": "sql",
+      "code": "-- Revenue distribution by age group\nSELECT \n    age_group,\n    COUNT(*) as count,\n    ROUND(AVG(revenue), 2) as avg_revenue,\n    ROUND(MAX(revenue), 2) as max_revenue\nFROM df_clean\nWHERE revenue > 0\nGROUP BY age_group\nORDER BY age_group",
+      "output": null,
+      "error": null,
+      "html": null,
+      "image": null,
+      "executionNumber": null,
+      "outputVariable": "age_revenue"
+    },
+    {
+      "type": "code",
+      "code": "# Interactive: Revenue by country (treemap)\nby_country = df_clean[df_clean['revenue'] > 0].groupby('country').agg(\n    total_revenue=('revenue', 'sum'),\n    customers=('customer_id', 'count')\n).reset_index()\n\nfig = px.treemap(\n    by_country, \n    path=['country'], \n    values='total_revenue',\n    color='total_revenue',\n    color_continuous_scale='Blues',\n    title='Revenue by Country (Treemap)',\n    hover_data=['customers']\n)\nfig.show()",
       "output": null,
       "error": null,
       "html": null,
@@ -36,7 +70,8 @@
       "executionNumber": null
     },
     {
-      "code": "# Step 4: Visualize the clean data\nimport matplotlib.pyplot as plt\n\nfig, axes = plt.subplots(1, 2, figsize=(12, 4))\n\n# Revenue distribution\naxes[0].hist(df_clean[df_clean['revenue'] > 0]['revenue'], bins=30, color='#89b4fa', alpha=0.8)\naxes[0].set_title('Revenue Distribution (non-zero)', color='white')\naxes[0].set_xlabel('Revenue ($)', color='#a6adc8')\naxes[0].tick_params(colors='#a6adc8')\n\n# Customers by country\ncountry_counts = df_clean['country'].value_counts()\naxes[1].barh(country_counts.index, country_counts.values, color='#a6e3a1')\naxes[1].set_title('Customers by Country', color='white')\naxes[1].set_xlabel('Count', color='#a6adc8')\naxes[1].tick_params(colors='#a6adc8')\n\nplt.tight_layout()\nplt.show()",
+      "type": "code",
+      "code": "# Interactive: Age vs Revenue scatter\nfig = px.scatter(\n    df_clean[df_clean['revenue'] > 0],\n    x='age', y='revenue',\n    color='country',\n    title='Age vs Revenue by Country',\n    opacity=0.6,\n    color_discrete_sequence=px.colors.qualitative.Set2\n)\nfig.update_layout(height=400)\nfig.show()",
       "output": null,
       "error": null,
       "html": null,
