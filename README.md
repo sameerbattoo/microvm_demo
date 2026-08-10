@@ -170,7 +170,23 @@ Native SQL cells with intelligent auto-routing — write standard SQL, engine ch
 - Instance panel: specs, lifecycle, resources, cost breakdown per VM
 
 ### Sidebar (VS Code-style)
-Notebooks, Outline, Data Sources, Variables, Packages, Samples, MicroVMs — resizable, collapsible.
+Notebooks, Outline, Data Sources, Snippets, Variables, Packages, Samples, MicroVMs — resizable, collapsible.
+
+### Snippets Library
+Pre-loaded helper functions available in every cell — no imports needed:
+- **Data Loading** — `read_s3_csv()`, `read_dynamodb()`, `read_athena()`, `read_url()`, `sample_data()`
+- **Data Export** — `to_s3_csv()`, `to_s3_parquet()`, `to_local()`
+- **Visualization** — `plot_line()`, `plot_bar()`, `plot_scatter()`, `plot_histogram()`, `plot_heatmap()`
+- **Utilities** — `profile()`, `whoami()`, `compare_df()`, `list_s3()`, `head_s3()`, `timer`
+
+Click any snippet in the sidebar panel to insert an example with comments into the current cell.
+
+### Secrets & Environment Variables
+Inject secrets and config into MicroVMs at launch time:
+- **AWS Secrets Manager** — Browse available secrets from your account, select which to inject. Values are fetched inside the VM (proxy never sees them).
+- **Direct env vars** — Key-value pairs injected via `runHookPayload`. Values masked in the UI.
+- **Access in code** — `import os; api_key = os.environ['MY_SECRET']`
+- **Security** — Secrets are fetched by the VM's execution role at boot. The proxy only lists secret names (not values). Same trust boundary as Lambda + Secrets Manager.
 
 ### Interactive Terminal
 - **Full shell access** — bash terminal inside the MicroVM via AWS SHELL_INGRESS connector

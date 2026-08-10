@@ -93,6 +93,32 @@ export default function VariablesPanel({ variables, activeTab, onInsertCode, onC
             )}
           </div>
         ))}
+
+        {/* Environment Variables section */}
+        {activeTab?._envVars && activeTab._envVars.length > 0 && (
+          <>
+            <div className="sidebar-subheader" style={{ marginTop: '12px' }}>
+              🔐 Environment Variables
+              <span className="sidebar-subheader-count">{activeTab._envVars.length}</span>
+            </div>
+            {activeTab._envVars.map((env, idx) => (
+              <div key={idx} className="var-item">
+                <div
+                  className="var-item-row"
+                  onClick={() => onInsertCode(`import os\n${env.key.toLowerCase()} = os.environ.get('${env.key}', '')`)}
+                  title="Click to insert os.environ.get() code"
+                >
+                  <span className="var-type-icon" style={{ color: '#f9e2af' }}>🔑</span>
+                  <span className="var-name">{env.key}</span>
+                  <span className="var-type" style={{ color: 'var(--text-muted)' }}>
+                    {env.source === 'sm' ? `SM` : 'direct'}
+                  </span>
+                  {env.secretName && <span className="var-shape">{env.secretName.split('/').pop()}</span>}
+                </div>
+              </div>
+            ))}
+          </>
+        )}
       </div>
     </div>
   )

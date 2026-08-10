@@ -2281,3 +2281,39 @@
 .terminal-status-connecting { color: var(--accent-warning); animation: pulse-subtle 1s infinite; }
 .terminal-status-disconnected { color: var(--text-muted); }
 .terminal-status-error { color: var(--accent-danger); }
+
+/* Snippets Panel */
+.snippets-list {
+  padding: 0 8px;
+}
+
+.snippet-item {
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  margin-bottom: 2px;
+  transition: background 0.1s;
+}
+.snippet-item:hover {
+  background: var(--surface-3);
+}
+
+.snippet-name {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  color: var(--text-primary);
+}
+.snippet-name code {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--accent-primary);
+}
+
+.snippet-desc {
+  font-size: 10px;
+  color: var(--text-muted);
+  margin-top: 1px;
+  padding-left: 16px;
+}

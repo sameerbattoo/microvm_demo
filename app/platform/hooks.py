@@ -15,6 +15,7 @@ at key points in the MicroVM lifecycle:
 """
 
 import json
+import os
 import logging
 from datetime import datetime, timezone
 
@@ -71,6 +72,7 @@ async def hook_run(request: Request):
 
     run_payload = body.get("runHookPayload", "")
     restore_from = None
+    payload = {}
     try:
         payload = json.loads(run_payload)
         session_state["session_id"] = payload.get("session_id", run_payload)
@@ -92,6 +94,53 @@ async def hook_run(request: Request):
     if restore_from:
         logger.info(f"   Restoring from session: {restore_from}")
         request.app.state.checkpoint_manager.restore(restore_from)
+
+    # Inject environment variables (direct values + secrets from Secrets Manager)
+    try:
+        env_vars = payload.get("env_vars", {})
+        secrets = payload.get("secrets", [])
+
+        # Direct env vars — inject immediately
+        for key, value in env_vars.items():
+            os.environ[key] = str(value)
+            logger.info(f"   ENV: {key} = ****")
+
+        # Secrets Manager — fetch values and inject
+        if secrets:
+            import boto3
+            sm = boto3.client("secretsmanager", region_name=os.environ.get("AWS_REGION", "us-west-2"))
+            # Group by ARN to avoid fetching the same secret multiple times
+            secret_cache = {}
+            for secret in secrets:
+                env_var_name = secret.get("envVar", "")
+                arn = secret.get("arn", "")
+                secret_key = secret.get("secretKey", "")
+                if env_var_name and arn:
+                    try:
+                        # Fetch and cache
+                        if arn not in secret_cache:
+                            resp = sm.get_secret_value(SecretId=arn)
+                            secret_cache[arn] = resp.get("SecretString", "")
+
+                        secret_value = secret_cache[arn]
+
+                        if secret_key:
+                            # Extract specific key from JSON secret
+                            try:
+                                data = json.loads(secret_value)
+                                os.environ[env_var_name] = str(data.get(secret_key, ""))
+                                logger.info(f"   SECRET: {env_var_name} ← {secret.get('name', arn)}[{secret_key}]")
+                            except (json.JSONDecodeError, TypeError):
+                                os.environ[env_var_name] = secret_value
+                                logger.info(f"   SECRET: {env_var_name} ← {secret.get('name', arn)} (plain)")
+                        else:
+                            # No key specified — inject entire value
+                            os.environ[env_var_name] = secret_value
+                            logger.info(f"   SECRET: {env_var_name} ← {secret.get('name', arn)}")
+                    except Exception as e:
+                        logger.warning(f"   Failed to fetch secret {arn}: {e}")
+    except Exception as e:
+        logger.warning(f"   Failed to inject env vars/secrets: {e}")
 
     return {"status": "running", "session_id": session_state["session_id"]}
 

@@ -51,6 +51,8 @@ class SandboxExecutor:
         self._exec_thread_id: int | None = None
         # Pre-import heavy packages to reduce first-cell execution time
         self._preload_packages()
+        # Inject helper functions into the namespace (available in every cell)
+        self._inject_helpers()
 
     def _preload_packages(self):
         """Pre-import heavy packages into the interpreter cache (not the namespace).
@@ -61,6 +63,19 @@ class SandboxExecutor:
                 importlib.import_module(pkg)
             except ImportError:
                 pass
+
+    def _inject_helpers(self):
+        """Inject helper functions into the namespace so they're available in every cell."""
+        try:
+            from app import helpers
+            # Add all public functions from helpers to the namespace
+            for name in dir(helpers):
+                if not name.startswith('_'):
+                    obj = getattr(helpers, name)
+                    if callable(obj):
+                        self._namespace[name] = obj
+        except ImportError:
+            pass  # Helpers not available (shouldn't happen in normal operation)
 
     def interrupt(self) -> bool:
         """
@@ -192,8 +207,14 @@ class SandboxExecutor:
                 last_line = show_match.group(1)
 
             # Skip assignments, imports, print statements, function calls that don't return
+            # Check for assignment: has '=' but NOT inside a function call (keyword args)
             if '=' in last_line and not last_line.startswith('=') and '==' not in last_line:
-                return ""
+                # Only skip if it's a real assignment (not keyword arg inside function call)
+                # A real assignment has '=' before any '(' on the line
+                eq_pos = last_line.index('=')
+                paren_pos = last_line.find('(')
+                if paren_pos == -1 or eq_pos < paren_pos:
+                    return ""
             if last_line.startswith(('import ', 'from ', 'print(', 'def ', 'class ', 'for ', 'if ', 'while ')):
                 return ""
 

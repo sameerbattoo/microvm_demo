@@ -14,6 +14,12 @@ export default function ConnectionPanel({ tab, onConnect, onUpdateTab, onDismiss
   const [launchIdleTimeout, setLaunchIdleTimeout] = useState(String(tab.idleTimeoutSeconds || '60'))
   const [launchMaxDuration, setLaunchMaxDuration] = useState(String(tab.maxDurationSeconds || maxLifetime || '28800'))
   const [imageTiers, setImageTiers] = useState([])
+  const [availableSecrets, setAvailableSecrets] = useState([])
+  const [selectedSecrets, setSelectedSecrets] = useState([]) // [{name, arn, envVar, secretKey?}]
+  const [directEnvVars, setDirectEnvVars] = useState([]) // [{key, value}]
+  const [launchTab, setLaunchTab] = useState('spec') // 'spec' | 'secrets'
+  const [expandedSecret, setExpandedSecret] = useState(null) // ARN of secret showing keys
+  const [secretKeys, setSecretKeys] = useState({}) // {arn: [key1, key2, ...]}
 
   // Auto-detect which mode we're in
   useEffect(() => {
@@ -41,12 +47,32 @@ export default function ConnectionPanel({ tab, onConnect, onUpdateTab, onDismiss
         const data = await resp.json()
         if (data.tiers && data.tiers.length > 0) {
           setImageTiers(data.tiers)
-          // If tab already has a memory setting, keep it; otherwise default to 2048
           if (!tab.microvmMemory) {
             const defaultTier = data.tiers.find(t => t.memory_mib === 2048) || data.tiers[0]
             setLaunchMemory(String(defaultTier.memory_mib))
           }
         }
+      }
+    } catch {}
+  }
+
+  const fetchSecrets = async () => {
+    try {
+      const resp = await fetch(`${PROXY_URL}/secrets`)
+      if (resp.ok) {
+        const data = await resp.json()
+        setAvailableSecrets(data.secrets || [])
+      }
+    } catch {}
+  }
+
+  const fetchSecretKeys = async (arn) => {
+    if (secretKeys[arn]) return // Already fetched
+    try {
+      const resp = await fetch(`${PROXY_URL}/secrets/keys?secret_id=${encodeURIComponent(arn)}`)
+      if (resp.ok) {
+        const data = await resp.json()
+        setSecretKeys(prev => ({ ...prev, [arn]: data.keys || [] }))
       }
     } catch {}
   }
@@ -145,6 +171,8 @@ export default function ConnectionPanel({ tab, onConnect, onUpdateTab, onDismiss
           maxDurationSeconds: parseInt(launchMaxDuration),
           checkpointEnabled: true,
           sessionId: crypto.randomUUID(),
+          secrets: selectedSecrets.filter(s => s.envVar).map(s => ({ name: s.name, arn: s.arn, envVar: s.envVar, secretKey: s.secretKey || '' })),
+          envVars: directEnvVars.filter(e => e.key && e.value).reduce((acc, e) => ({ ...acc, [e.key]: e.value }), {}),
         }),
       })
 
@@ -160,6 +188,10 @@ export default function ConnectionPanel({ tab, onConnect, onUpdateTab, onDismiss
           checkpointEnabled: true,
           status: 'connected',
           mode: 'microvm',
+          _envVars: [
+            ...selectedSecrets.filter(s => s.envVar).map(s => ({ key: s.envVar, source: 'sm', secretName: s.name })),
+            ...directEnvVars.filter(e => e.key && e.value).map(e => ({ key: e.key, source: 'direct' })),
+          ],
         })
         onDismiss()
       } else {
@@ -254,7 +286,7 @@ export default function ConnectionPanel({ tab, onConnect, onUpdateTab, onDismiss
           {tab.status === 'connected'
             ? 'Launch a different MicroVM or reconnect to another instance.'
             : persistenceMode === 'checkpoint'
-              ? `Each notebook connects to its own execution sandbox. VM expires after ${maxLifetime >= 3600 ? `${Math.floor(maxLifetime/3600)}h` : `${Math.floor(maxLifetime/60)}m`} — state is auto-saved to S3 before expiry.`
+              ? `Each notebook connects to its own execution sandbox. VM expires after ${parseInt(launchMaxDuration) >= 3600 ? `${Math.floor(parseInt(launchMaxDuration)/3600)}h` : `${Math.floor(parseInt(launchMaxDuration)/60)}m`} — state is auto-saved to S3 before expiry.`
               : 'Each notebook connects to its own execution sandbox for isolated, stateful Python.'}
         </div>
 
@@ -327,10 +359,16 @@ export default function ConnectionPanel({ tab, onConnect, onUpdateTab, onDismiss
             )}
 
             <div className="launch-config">
-              <div className="launch-config-title">Instance Specification</div>
+              <div className="launch-config-tabs">
+                <button className={`launch-tab ${launchTab === 'spec' ? 'launch-tab-active' : ''}`} onClick={() => setLaunchTab('spec')}>Instance Spec</button>
+                <button className={`launch-tab ${launchTab === 'secrets' ? 'launch-tab-active' : ''}`} onClick={() => { setLaunchTab('secrets'); if (availableSecrets.length === 0) fetchSecrets(); }}>Secrets & Env Vars {selectedSecrets.length + directEnvVars.length > 0 ? `(${selectedSecrets.length + directEnvVars.length})` : ''}</button>
+              </div>
+
+              {launchTab === 'spec' && (
+              <>
               <div className="launch-config-specs">
                 <div className="launch-spec-item launch-spec-editable">
-                  <span className="launch-spec-label">Baseline</span>
+                  <span className="launch-spec-label">Baseline Image Size</span>
                   <select className="launch-spec-select" value={launchMemory} onChange={(e) => setLaunchMemory(e.target.value)}>
                     {imageTiers.length > 0 ? (
                       imageTiers.map(tier => (
@@ -340,18 +378,18 @@ export default function ConnectionPanel({ tab, onConnect, onUpdateTab, onDismiss
                       ))
                     ) : (
                       <>
-                        <option value="512">0.5 GB · 0.25 vCPU</option>
-                        <option value="1024">1 GB · 0.5 vCPU</option>
-                        <option value="2048">2 GB · 1 vCPU</option>
-                        <option value="4096">4 GB · 2 vCPU</option>
-                        <option value="8192">8 GB · 4 vCPU</option>
+                        <option value="512">🧠 0.5 GB · ⚡ 0.25 vCPU</option>
+                        <option value="1024">🧠 1 GB · ⚡ 0.5 vCPU</option>
+                        <option value="2048">🧠 2 GB · ⚡ 1 vCPU</option>
+                        <option value="4096">🧠 4 GB · ⚡ 2 vCPU</option>
+                        <option value="8192">🧠 8 GB · ⚡ 4 vCPU</option>
                       </>
                     )}
                   </select>
                 </div>
                 <div className="launch-spec-item">
                   <span className="launch-spec-label">Peak (burst 4×)</span>
-                  <span className="launch-spec-value">{(parseInt(launchMemory) / 1024 * 4).toFixed(1)} GB · {Math.max(0.25, parseInt(launchMemory) / 2048) * 4} vCPU</span>
+                  <span className="launch-spec-value">🧠 {(parseInt(launchMemory) / 1024 * 4).toFixed(1)} GB · ⚡ {Math.max(0.25, parseInt(launchMemory) / 2048) * 4} vCPU</span>
                 </div>
                 <div className="launch-spec-item">
                   <span className="launch-spec-label">Architecture</span>
@@ -383,6 +421,117 @@ export default function ConnectionPanel({ tab, onConnect, onUpdateTab, onDismiss
               <div className="launch-config-note">
                 Auto-scales up to <strong>4× baseline</strong> during peak load. Burst resources billed only when active. Auto-resumes on traffic (~1s). Session persists indefinitely (VMs rotate automatically).
               </div>
+              </>
+              )}
+
+              {launchTab === 'secrets' && (
+              <div className="launch-secrets-body">
+                {/* Secrets Manager picker */}
+                <div className="launch-secrets-group">
+                  <label className="launch-secrets-label">From Secrets Manager:</label>
+                  <select
+                    className="launch-spec-select"
+                    value=""
+                    onChange={async (e) => {
+                      const arn = e.target.value
+                      if (!arn) return
+                      setExpandedSecret(arn)
+                      await fetchSecretKeys(arn)
+                    }}
+                  >
+                    <option value="">Select a secret...</option>
+                    {availableSecrets.map(s => (
+                      <option key={s.arn} value={s.arn}>{s.name}</option>
+                    ))}
+                  </select>
+
+                  {/* Show keys for selected secret */}
+                  {expandedSecret && secretKeys[expandedSecret] && secretKeys[expandedSecret].length > 0 && (
+                    <div className="launch-secret-keys-panel">
+                      <div className="launch-secret-keys-title">
+                        Keys in: <code>{availableSecrets.find(s => s.arn === expandedSecret)?.name?.split('/').pop()}</code>
+                      </div>
+                      <div className="launch-secret-keys">
+                        {secretKeys[expandedSecret].map(key => {
+                          const isKeySelected = selectedSecrets.some(s => s.arn === expandedSecret && s.secretKey === key)
+                          const envVar = selectedSecrets.find(s => s.arn === expandedSecret && s.secretKey === key)?.envVar || ''
+                          return (
+                            <div key={key} className="launch-secret-key-row">
+                              <label className="launch-secret-check">
+                                <input
+                                  type="checkbox"
+                                  checked={isKeySelected}
+                                  onChange={(e) => {
+                                    if (e.target.checked) {
+                                      const secret = availableSecrets.find(s => s.arn === expandedSecret)
+                                      setSelectedSecrets(prev => [...prev, { name: secret?.name || '', arn: expandedSecret, secretKey: key, envVar: key.toUpperCase() }])
+                                    } else {
+                                      setSelectedSecrets(prev => prev.filter(s => !(s.arn === expandedSecret && s.secretKey === key)))
+                                    }
+                                  }}
+                                />
+                                <code className="launch-secret-key-name">{key}</code>
+                              </label>
+                              {isKeySelected && (
+                                <>
+                                  <span className="launch-secret-arrow">→</span>
+                                  <input
+                                    className="launch-secret-envvar-inline"
+                                    type="text"
+                                    value={envVar}
+                                    onChange={(e) => setSelectedSecrets(prev => prev.map(s => (s.arn === expandedSecret && s.secretKey === key) ? { ...s, envVar: e.target.value } : s))}
+                                  />
+                                </>
+                              )}
+                            </div>
+                          )
+                        })}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Show all selected keys (across all secrets) */}
+                  {selectedSecrets.length > 0 && (
+                    <div className="launch-secret-selected-summary">
+                      <div className="launch-secrets-label">Selected ({selectedSecrets.length}):</div>
+                      {selectedSecrets.map((s, idx) => (
+                        <div key={idx} className="launch-secret-selected-row">
+                          <code>{s.secretKey}</code>
+                          <span className="launch-secret-arrow">→</span>
+                          <code className="launch-secret-envvar-display">{s.envVar}</code>
+                          <button className="launch-envvar-remove" onClick={() => setSelectedSecrets(prev => prev.filter((_, i) => i !== idx))}>✕</button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {/* Direct key-value env vars */}
+                <div className="launch-secrets-group">
+                  <label className="launch-secrets-label">Direct env vars:</label>
+                  {directEnvVars.map((env, idx) => (
+                    <div key={idx} className="launch-envvar-row">
+                      <input
+                        className="launch-envvar-key"
+                        type="text"
+                        placeholder="KEY"
+                        value={env.key}
+                        onChange={(e) => setDirectEnvVars(prev => prev.map((v, i) => i === idx ? { ...v, key: e.target.value } : v))}
+                      />
+                      <input
+                        className="launch-envvar-value"
+                        type="password"
+                        placeholder="value"
+                        value={env.value}
+                        onChange={(e) => setDirectEnvVars(prev => prev.map((v, i) => i === idx ? { ...v, value: e.target.value } : v))}
+                      />
+                      <button className="launch-envvar-remove" onClick={() => setDirectEnvVars(prev => prev.filter((_, i) => i !== idx))}>✕</button>
+                    </div>
+                  ))}
+                  <button className="launch-envvar-add" onClick={() => setDirectEnvVars(prev => [...prev, { key: '', value: '' }])}>+ Add variable</button>
+                </div>
+              </div>
+              )}
             </div>
 
             <div className="form-actions">

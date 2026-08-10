@@ -130,7 +130,7 @@ async def health():
         "cached_tokens": len(vm_manager.token_cache),
         "active_instances": len(vm_manager.active_microvms),
         "poll_interval_ms": POLL_INTERVAL_MS,
-        "persistence_mode": os.environ.get("SESSION_PERSISTENCE_MODE", "eternal"),
+        "persistence_mode": os.environ.get("SESSION_PERSISTENCE_MODE", "checkpoint"),
         "max_lifetime_seconds": int(os.environ.get("MAX_LIFETIME_SECONDS", "28800")),
         "rotation_lead_seconds": int(os.environ.get("ROTATION_LEAD_SECONDS", "60")),
     }

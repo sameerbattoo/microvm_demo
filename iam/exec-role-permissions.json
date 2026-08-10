@@ -31,7 +31,7 @@
         "s3:PutObject",
         "s3:DeleteObject"
       ],
-      "Resource": "arn:aws:s3:::microvm-sandbox-artifacts-*/sessions/*"
+      "Resource": "arn:aws:s3:::microvm-sandbox-artifacts-*/*"
     },
     {
       "Sid": "DynamoDBReadAccess",
@@ -79,18 +79,21 @@
       ]
     },
     {
-      "Sid": "S3AthenaResultsWrite",
-      "Effect": "Allow",
-      "Action": [
-        "s3:PutObject",
-        "s3:GetObject"
-      ],
-      "Resource": "arn:aws:s3:::microvm-sandbox-artifacts-*/athena-results/*"
-    },
-    {
       "Sid": "STSIdentity",
       "Effect": "Allow",
       "Action": "sts:GetCallerIdentity",
+      "Resource": "*"
+    },
+    {
+      "Sid": "SecretsManagerGetValue",
+      "Effect": "Allow",
+      "Action": "secretsmanager:GetSecretValue",
+      "Resource": "arn:aws:secretsmanager:*:*:secret:*"
+    },
+    {
+      "Sid": "SecretsManagerList",
+      "Effect": "Allow",
+      "Action": "secretsmanager:ListSecrets",
       "Resource": "*"
     }
   ]

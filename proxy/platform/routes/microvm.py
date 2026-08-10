@@ -173,6 +173,9 @@ async def launch_microvm(request: Request):
     checkpoint_enabled = True
     restore_from = body.get("restoreFromSession")
     session_id = body.get("sessionId", f"{notebook_name}-{int(time.time())}")
+    # Secrets & env vars (passed to /run hook for injection into os.environ)
+    secrets = body.get("secrets", [])  # [{name, arn, envVar}]
+    env_vars = body.get("envVars", {})  # {KEY: value}
 
     image_arn = f"{IMAGE_ARN}-{memory_mib}" if IMAGE_ARN else ""
     if not image_arn:
@@ -204,6 +207,8 @@ async def launch_microvm(request: Request):
                 "persistence_mode": persistence_mode,
                 "restore_from": restore_from,
                 "artifacts_bucket": vm_manager.get_artifacts_bucket(),
+                "secrets": secrets,
+                "env_vars": env_vars,
             }),
         }
         if EXEC_ROLE_ARN:

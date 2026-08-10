@@ -1,0 +1,167 @@
+{
+  "name": "Helper Functions Demo",
+  "description": "Showcase the pre-loaded helper functions: data loading, export, visualization, and utilities.",
+  "savedAt": "2026-08-08T00:00:00.000Z",
+  "cells": [
+    {
+      "type": "code",
+      "code": "# Show current AWS identity and environment\ninfo = whoami()",
+      "output": null,
+      "error": null,
+      "html": null,
+      "image": null
+    },
+    {
+      "type": "markdown",
+      "code": "## \ud83d\udce6 Data Loading\n\nLoad data from local files, S3, DynamoDB, or URLs \u2014 all in one line.",
+      "output": null,
+      "error": null,
+      "html": null,
+      "image": null
+    },
+    {
+      "type": "code",
+      "code": "# Load a built-in sample dataset\n# Available: 'sales', 'customers', 'web_traffic', 'ab_test'\ndf = sample_data('sales')\nprint(f\"Loaded {len(df)} rows\")\ndf.head()",
+      "output": null,
+      "error": null,
+      "html": null,
+      "image": null
+    },
+    {
+      "type": "code",
+      "code": "# Read CSV directly from S3 (uses the execution role \u2014 no credentials needed)\nbucket = info['bucket']\nsales = read_s3_csv(bucket, \"samples/sales_data.csv\")\nprint(f\"Loaded {len(sales)} rows from S3\")\nsales.head()",
+      "output": null,
+      "error": null,
+      "html": null,
+      "image": null
+    },
+    {
+      "type": "code",
+      "code": "# Read from DynamoDB (scans the table into a DataFrame)\ndynamo_df = read_dynamodb(\"microvm-demo-data\")\nprint(f\"DynamoDB: {len(dynamo_df)} items\")\ndynamo_df.head()",
+      "output": null,
+      "error": null,
+      "html": null,
+      "image": null
+    },
+    {
+      "type": "code",
+      "code": "# Fetch data from a public URL\niris = read_url(\"https://raw.githubusercontent.com/mwaskom/seaborn-data/master/iris.csv\")\nprint(f\"Iris dataset: {iris.shape}\")\niris.head()",
+      "output": null,
+      "error": null,
+      "html": null,
+      "image": null
+    },
+    {
+      "type": "markdown",
+      "code": "## \ud83d\udd27 Utilities\n\nProfile, compare, explore \u2014 all without boilerplate.",
+      "output": null,
+      "error": null,
+      "html": null,
+      "image": null
+    },
+    {
+      "type": "code",
+      "code": "# Profile a DataFrame: types, nulls, unique values\nprofile(sales)",
+      "output": null,
+      "error": null,
+      "html": null,
+      "image": null
+    },
+    {
+      "type": "code",
+      "code": "# List objects in an S3 bucket\nfiles = list_s3(info['bucket'], \"samples/\")\nfiles",
+      "output": null,
+      "error": null,
+      "html": null,
+      "image": null
+    },
+    {
+      "type": "code",
+      "code": "# Preview first 5 rows from S3 without downloading the full file\npreview = head_s3(info['bucket'], \"samples/sales_data.csv\", n=5)\npreview",
+      "output": null,
+      "error": null,
+      "html": null,
+      "image": null
+    },
+    {
+      "type": "code",
+      "code": "# Compare two DataFrames (useful for before/after cleaning)\n# First compute revenue column\nsales['revenue'] = sales['quantity'] * sales['unit_price'] * (1 - sales['discount'])\n\n# Create a \"cleaned\" version by dropping nulls and adding a column\nsales_clean = sales.dropna().copy()\nsales_clean['revenue_rank'] = sales_clean['revenue'].rank(ascending=False)\n\ncompare_df(sales, sales_clean, \"original\", \"cleaned\")",
+      "output": null,
+      "error": null,
+      "html": null,
+      "image": null
+    },
+    {
+      "type": "code",
+      "code": "# Time a computation with @timer\n@timer\ndef aggregate_sales():\n    # Compute revenue if not already present\n    if 'revenue' not in sales.columns:\n        sales['revenue'] = sales['quantity'] * sales['unit_price'] * (1 - sales['discount'])\n    return sales.groupby(['product', 'region']).agg(\n        total_revenue=('revenue', 'sum'),\n        avg_quantity=('quantity', 'mean'),\n        order_count=('order_id', 'count')\n    ).reset_index()\n\nsummary = aggregate_sales()\nsummary.head()",
+      "output": null,
+      "error": null,
+      "html": null,
+      "image": null
+    },
+    {
+      "type": "markdown",
+      "code": "## \ud83d\udcca Visualization\n\nOne-liner interactive Plotly charts. All return the figure object for further customization.",
+      "output": null,
+      "error": null,
+      "html": null,
+      "image": null
+    },
+    {
+      "type": "code",
+      "code": "# Interactive bar chart\nproduct_rev = sales.groupby('product')['revenue'].sum().reset_index()\nplot_bar(product_rev, x='product', y='revenue', title='Revenue by Product')",
+      "output": null,
+      "error": null,
+      "html": null,
+      "image": null
+    },
+    {
+      "type": "code",
+      "code": "# Interactive scatter plot with size and color encoding\nplot_scatter(sales, x='quantity', y='revenue', size='unit_price', color='product', title='Quantity vs Revenue')",
+      "output": null,
+      "error": null,
+      "html": null,
+      "image": null
+    },
+    {
+      "type": "code",
+      "code": "# Interactive histogram\nplot_histogram(sales, 'revenue', bins=25, title='Revenue Distribution')",
+      "output": null,
+      "error": null,
+      "html": null,
+      "image": null
+    },
+    {
+      "type": "code",
+      "code": "# Heatmap from a pivot (product x region \u2192 revenue)\nplot_heatmap(sales, x='region', y='product', value='revenue', title='Revenue: Product \u00d7 Region')",
+      "output": null,
+      "error": null,
+      "html": null,
+      "image": null
+    },
+    {
+      "type": "markdown",
+      "code": "## \ud83d\udcbe Data Export\n\nSave results back to S3 or local files.",
+      "output": null,
+      "error": null,
+      "html": null,
+      "image": null
+    },
+    {
+      "type": "code",
+      "code": "# Save to local file (auto-detects format from extension)\nto_local(summary, '/tmp/sales_summary.csv')\nto_local(summary, '/tmp/sales_summary.parquet')\nprint(\"Saved locally \u2713\")\n\n# Upload to S3\nuri = to_s3_csv(summary, info['bucket'], \"user-data/sales_summary.csv\")\nprint(f\"Uploaded to: {uri}\")",
+      "output": null,
+      "error": null,
+      "html": null,
+      "image": null
+    },
+    {
+      "type": "code",
+      "code": "# Verify the upload\nfiles = list_s3(info['bucket'], \"user-data/\")\nfiles",
+      "output": null,
+      "error": null,
+      "html": null,
+      "image": null
+    }
+  ]
+}

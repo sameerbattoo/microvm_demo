@@ -2,13 +2,14 @@
   position: absolute;
   inset: 0;
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: center;
   background: rgba(0, 0, 0, 0.6);
   backdrop-filter: blur(6px);
   z-index: 100;
   padding: var(--space-6);
   animation: fadeIn 0.2s ease;
+  overflow-y: auto;
 }
 
 @keyframes fadeIn {
@@ -461,4 +462,296 @@
   color: var(--text-tertiary);
   line-height: var(--line-height-normal);
   padding-left: 24px;
+}
+
+/* Secrets & Env Vars Section */
+.launch-config-tabs {
+  display: flex;
+  gap: 0;
+  border-bottom: 1px solid var(--border-subtle);
+  margin-bottom: 12px;
+}
+.launch-tab {
+  flex: 1;
+  padding: 8px 12px;
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  cursor: pointer;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+.launch-tab:hover {
+  color: var(--text-secondary);
+}
+.launch-tab-active {
+  color: var(--accent-primary);
+  border-bottom-color: var(--accent-primary);
+}
+
+.launch-secret-path {
+  font-size: 9px;
+  color: var(--text-muted);
+  display: block;
+  margin-left: 20px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 400px;
+}
+
+.launch-secret-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  padding: 4px 0;
+}
+.launch-secret-header:hover .launch-secret-name {
+  color: var(--accent-primary);
+}
+
+.launch-secret-chevron {
+  font-size: 10px;
+  color: var(--text-muted);
+  width: 12px;
+}
+
+.launch-secret-badge {
+  font-size: 9px;
+  background: var(--accent-primary);
+  color: white;
+  padding: 1px 5px;
+  border-radius: 8px;
+  margin-left: auto;
+}
+
+.launch-secret-keys-panel {
+  margin-top: 8px;
+  padding: 8px;
+  background: var(--surface-1);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-subtle);
+}
+.launch-secret-keys-title {
+  font-size: 10px;
+  color: var(--text-secondary);
+  margin-bottom: 6px;
+}
+.launch-secret-keys-title code {
+  color: var(--accent-primary);
+}
+
+.launch-secret-selected-summary {
+  margin-top: 10px;
+  padding: 8px;
+  background: var(--surface-1);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--accent-primary-muted, rgba(91,159,255,0.2));
+}
+.launch-secret-selected-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 0;
+  font-size: 11px;
+}
+.launch-secret-selected-row code {
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+.launch-secret-envvar-display {
+  color: var(--accent-primary);
+  font-weight: 600;
+}
+
+.launch-secret-keys {
+  margin-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 4px 0;
+}
+
+.launch-secret-key-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.launch-secret-key-name {
+  font-size: 11px;
+  color: var(--text-primary);
+}
+
+.launch-secrets-section {
+  margin-top: var(--space-3);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+.launch-secrets-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  cursor: pointer;
+  background: var(--surface-2);
+}
+.launch-secrets-header:hover {
+  background: var(--surface-3);
+}
+.launch-secrets-title {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  color: var(--text-secondary);
+}
+.launch-secrets-count {
+  font-size: 10px;
+  color: var(--text-muted);
+  margin-left: auto;
+}
+.launch-secrets-body {
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.launch-secrets-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.launch-secrets-label {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+.launch-secrets-list {
+  max-height: 150px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.launch-secrets-empty {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.launch-secrets-link {
+  background: none;
+  border: none;
+  color: var(--accent-primary);
+  cursor: pointer;
+  font-size: 11px;
+  padding: 0;
+  text-decoration: underline;
+}
+.launch-secret-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 4px 8px;
+  border-radius: 4px;
+  background: var(--surface-1);
+}
+.launch-secret-selected {
+  background: var(--accent-primary-subtle, rgba(91,159,255,0.08));
+  border: 1px solid var(--accent-primary-muted, rgba(91,159,255,0.3));
+}
+.launch-secret-check {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  font-size: 12px;
+}
+.launch-secret-name {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-primary);
+}
+.launch-secret-envvar {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  padding: 2px 6px;
+  border: 1px solid var(--border-default);
+  border-radius: 3px;
+  background: var(--surface-0);
+  color: var(--text-primary);
+  margin-left: 20px;
+  width: calc(100% - 20px);
+}
+
+.launch-secret-envvar-inline {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  padding: 2px 6px;
+  border: 1px solid var(--border-default);
+  border-radius: 3px;
+  background: var(--surface-0);
+  color: var(--accent-primary);
+  width: 140px;
+  font-weight: 600;
+}
+
+.launch-secret-arrow {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+.launch-envvar-row {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+.launch-envvar-key {
+  flex: 1;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  padding: 4px 6px;
+  border: 1px solid var(--border-default);
+  border-radius: 3px;
+  background: var(--surface-0);
+  color: var(--text-primary);
+}
+.launch-envvar-value {
+  flex: 2;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  padding: 4px 6px;
+  border: 1px solid var(--border-default);
+  border-radius: 3px;
+  background: var(--surface-0);
+  color: var(--text-primary);
+}
+.launch-envvar-remove {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 12px;
+  padding: 2px 4px;
+}
+.launch-envvar-remove:hover {
+  color: var(--accent-danger);
+}
+.launch-envvar-add {
+  background: none;
+  border: 1px dashed var(--border-default);
+  border-radius: 4px;
+  padding: 4px 8px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+.launch-envvar-add:hover {
+  border-color: var(--accent-primary);
+  color: var(--accent-primary);
 }

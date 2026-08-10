@@ -108,28 +108,31 @@ async def list_datasources(request: Request):
 
         if bucket_name:
             paginator = s3.get_paginator("list_objects_v2")
-            for page in paginator.paginate(Bucket=bucket_name, Prefix="samples/", MaxKeys=50):
-                for obj in page.get("Contents", []):
-                    key = obj["Key"]
-                    if key.endswith("/"):
-                        continue
-                    parts = key.replace("samples/", "", 1).split("/")
-                    if len(parts) > 1:
-                        continue
-                    size = obj["Size"]
-                    if size < 1024:
-                        size_str = f"{size} B"
-                    elif size < 1024 * 1024:
-                        size_str = f"{size / 1024:.1f} KB"
-                    else:
-                        size_str = f"{size / (1024 * 1024):.1f} MB"
-                    s3_files.append({
-                        "key": key,
-                        "bucket": bucket_name,
-                        "size": size_str,
-                        "size_bytes": size,
-                        "uri": f"s3://{bucket_name}/{key}",
-                    })
+            for prefix in ["samples/", "user-data/"]:
+                for page in paginator.paginate(Bucket=bucket_name, Prefix=prefix, MaxKeys=50):
+                    for obj in page.get("Contents", []):
+                        key = obj["Key"]
+                        if key.endswith("/"):
+                            continue
+                        # Skip Athena per-table subfolders (e.g., samples/sales_data/sales_data.csv)
+                        # Only show files directly under the prefix (one level deep)
+                        relative = key[len(prefix):]
+                        if '/' in relative:
+                            continue
+                        size = obj["Size"]
+                        if size < 1024:
+                            size_str = f"{size} B"
+                        elif size < 1024 * 1024:
+                            size_str = f"{size / 1024:.1f} KB"
+                        else:
+                            size_str = f"{size / (1024 * 1024):.1f} MB"
+                        s3_files.append({
+                            "key": key,
+                            "bucket": bucket_name,
+                            "size": size_str,
+                            "size_bytes": size,
+                            "uri": f"s3://{bucket_name}/{key}",
+                        })
     except Exception as e:
         logger.warning(f"Failed to list S3 sources: {e}")
 
@@ -308,3 +311,46 @@ async def get_datasource_snippet(source_type: str, source_id: str, language: str
         cell_type = "code"
 
     return {"code": code, "cell_type": cell_type}
+
+
+@router.get("/secrets")
+async def list_secrets(request: Request):
+    """List available secrets from AWS Secrets Manager (names only, not values)."""
+    try:
+        sm = boto3.client("secretsmanager", region_name=AWS_REGION)
+        secrets = []
+        paginator = sm.get_paginator("list_secrets")
+        for page in paginator.paginate(MaxResults=50):
+            for secret in page.get("SecretList", []):
+                secrets.append({
+                    "name": secret["Name"],
+                    "arn": secret["ARN"],
+                    "description": secret.get("Description", ""),
+                    "last_changed": secret.get("LastChangedDate", "").isoformat() if secret.get("LastChangedDate") else None,
+                })
+        return {"secrets": secrets}
+    except Exception as e:
+        logger.warning(f"Failed to list secrets: {e}")
+        return {"secrets": [], "error": str(e)}
+
+
+@router.get("/secrets/keys")
+async def list_secret_keys(secret_id: str = "", request: Request = None):
+    """Fetch keys from a JSON secret (returns key names only, not values)."""
+    if not secret_id:
+        return {"keys": [], "error": "secret_id query param required"}
+    try:
+        sm = boto3.client("secretsmanager", region_name=AWS_REGION)
+        resp = sm.get_secret_value(SecretId=secret_id)
+        secret_str = resp.get("SecretString", "")
+        try:
+            data = json.loads(secret_str)
+            if isinstance(data, dict):
+                return {"keys": list(data.keys()), "type": "json"}
+            else:
+                return {"keys": [], "type": "plaintext"}
+        except (json.JSONDecodeError, TypeError):
+            return {"keys": [], "type": "plaintext"}
+    except Exception as e:
+        logger.warning(f"Failed to get secret keys: {e}")
+        return {"keys": [], "error": str(e)}

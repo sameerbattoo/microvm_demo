@@ -13,6 +13,7 @@ import VariablesPanel from './panels/VariablesPanel'
 import PackagesPanel from './panels/PackagesPanel'
 import MicroVMsPanel from './panels/MicroVMsPanel'
 import AboutPanel from './panels/AboutPanel'
+import SnippetsPanel from './panels/SnippetsPanel'
 
 // Activity bar icon components
 function IconOutline({ width = 16, height = 16 }) {
@@ -281,6 +282,7 @@ export default function Sidebar({
     { id: 'notebooks', icon: <IconNotebook width={18} height={18} />, title: 'Notebooks', color: 'var(--accent-primary)' },
     { id: 'outline', icon: <IconOutline width={18} height={18} />, title: 'Cell Outline', color: '#cba6f7' },
     { id: 'data', icon: <IconDatabase width={18} height={18} />, title: 'Data Sources', color: '#7ec89f' },
+    { id: 'snippets', icon: <IconCode width={18} height={18} />, title: 'Snippets', color: '#f9e2af' },
     { id: 'variables', icon: <IconBraces width={18} height={18} />, title: 'Variables', color: '#f9e2af' },
     { id: 'packages', icon: <IconPackage width={18} height={18} />, title: 'Packages', color: '#f38ba8' },
     { id: 'terminal', icon: <IconTerminal width={18} height={18} />, title: 'Terminal', color: '#5cc2d4' },
@@ -393,6 +395,13 @@ export default function Sidebar({
               athenaWorkgroup={athenaWorkgroup}
               dsLoading={dsLoading}
               fetchDataSources={fetchDataSources}
+              onClose={() => setActivePanel(null)}
+            />
+          )}
+
+          {activePanel === 'snippets' && (
+            <SnippetsPanel
+              onInsertCode={onInsertCode}
               onClose={() => setActivePanel(null)}
             />
           )}

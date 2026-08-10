@@ -69,7 +69,7 @@ async def list_image_tiers(request: Request):
                         "memory_mib": mem,
                         "memory_gb": mem / 1024,
                         "vcpu": vcpu,
-                        "label": f"{mem / 1024:.1f} GB · {vcpu} vCPU",
+                        "label": f"\U0001f9e0 {mem / 1024:.1f} GB \u00b7 \u26a1 {vcpu} vCPU",
                         "image_name": name,
                     })
 
