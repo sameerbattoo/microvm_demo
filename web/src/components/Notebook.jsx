@@ -284,6 +284,12 @@ export default function Notebook({ tab, instances = {}, onUpdateTab, onMarkVmRun
           executionTime: null,
         }]
       })
+      // Scroll to the new/updated cell after render
+      setTimeout(() => {
+        const cells = document.querySelectorAll('.cell')
+        const lastCell = cells[cells.length - 1]
+        if (lastCell) lastCell.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      }, 100)
     }
     window.addEventListener('insert-code', handler)
     return () => window.removeEventListener('insert-code', handler)
