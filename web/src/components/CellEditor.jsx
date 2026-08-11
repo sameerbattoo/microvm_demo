@@ -18,8 +18,8 @@
  *   sessionId    - session ID for API calls
  */
 
-import { useRef, useEffect, useCallback } from 'react'
-import { EditorState, Compartment } from '@codemirror/state'
+import { useRef, useEffect, useLayoutEffect, useCallback } from 'react'
+import { EditorState, Compartment, Annotation } from '@codemirror/state'
 import { EditorView, keymap, placeholder as cmPlaceholder, lineNumbers, drawSelection, highlightActiveLine, highlightSpecialChars } from '@codemirror/view'
 import { defaultKeymap, indentWithTab, history, historyKeymap } from '@codemirror/commands'
 import { python } from '@codemirror/lang-python'
@@ -134,6 +134,12 @@ const syntaxColors = HighlightStyle.define([
 // ─── Search highlight — using CM6's native search extension ─────────────
 import { search, setSearchQuery as cmSetSearchQuery, SearchQuery, findNext, findPrevious } from '@codemirror/search'
 
+// ─── Annotation to mark external (programmatic) changes ─────────────────
+// When we dispatch changes from the value prop, we annotate the transaction
+// so the updateListener knows not to call onCodeChange back (prevents loop).
+// This is the same pattern used by @uiw/react-codemirror.
+const ExternalChange = Annotation.define()
+
 export default function CellEditor({
   code = '',
   language = 'python',
@@ -150,8 +156,6 @@ export default function CellEditor({
 }) {
   const containerRef = useRef(null)
   const viewRef = useRef(null)
-  const mountedRef = useRef(true)
-  const isExternalUpdate = useRef(false)
   const compartmentsRef = useRef(null)
 
   // Lazily create compartments — only once, tied to the editor lifetime
@@ -386,7 +390,8 @@ export default function CellEditor({
 
         // Update listener — sync code changes back to parent
         EditorView.updateListener.of((update) => {
-          if (update.docChanged && onCodeChangeRef.current) {
+          if (update.docChanged && onCodeChangeRef.current &&
+              !update.transactions.some(tr => tr.annotation(ExternalChange))) {
             onCodeChangeRef.current(update.state.doc.toString())
           }
           if (update.focusChanged && update.view.hasFocus && onFocusRef.current) {
@@ -408,32 +413,31 @@ export default function CellEditor({
     viewRef.current = view
 
     return () => {
-      mountedRef.current = false
+
       view.destroy()
       viewRef.current = null
     }
   }, []) // Only run once on mount
 
   // ─── Sync external code changes INTO the editor ───────────────────────
-  // Runs on every render — the `currentDoc !== code` guard prevents loops
-  useEffect(() => {
-    if (!mountedRef.current) return
+  // Uses the ExternalChange annotation so the updateListener knows to skip
+  // calling onCodeChange (prevents echo loop). Same pattern as @uiw/react-codemirror.
+
+  useLayoutEffect(() => {
     const view = viewRef.current
     if (!view) return
     const currentDoc = view.state.doc.toString()
     if (currentDoc !== code) {
-      // Direct state replacement — most reliable way to update CM6 externally
-      view.setState(
-        view.state.update({
-          changes: { from: 0, to: currentDoc.length, insert: code },
-        }).state
-      )
+      view.dispatch({
+        changes: { from: 0, to: currentDoc.length, insert: code },
+        annotations: [ExternalChange.of(true)],
+      })
     }
   })
 
   // ─── Switch language dynamically ─────────────────────────────────────
   useEffect(() => {
-    if (!mountedRef.current) return
+
     const view = viewRef.current
     if (!view) return
     view.dispatch({
@@ -443,7 +447,7 @@ export default function CellEditor({
 
   // ─── Update read-only state ───────────────────────────────────────────
   useEffect(() => {
-    if (!mountedRef.current) return
+
     const view = viewRef.current
     if (!view) return
     view.dispatch({
@@ -453,7 +457,7 @@ export default function CellEditor({
 
   // ─── Update autocomplete when variables change ────────────────────────
   useEffect(() => {
-    if (!mountedRef.current) return
+
     const view = viewRef.current
     if (!view) return
     view.dispatch({
@@ -470,7 +474,7 @@ export default function CellEditor({
   // ─── Update search highlighting ──────────────────────────────────────
   useEffect(() => {
     searchQueryRef.current = searchQuery
-    if (!mountedRef.current) return
+
     const view = viewRef.current
     if (!view) return
     // Set the search query (highlights all matches)

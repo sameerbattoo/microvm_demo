@@ -1541,3 +1541,95 @@
   border-color: #e06c1d;
   background: rgba(224, 108, 29, 0.08);
 }
+
+/* @param Widget Bar */
+.param-widgets-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 16px;
+  padding: 8px 12px;
+  padding-right: 140px;  /* leave room for cell action buttons */
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+  align-items: center;
+  width: 100%;
+}
+
+.param-widget {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.param-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  min-width: fit-content;
+}
+
+.param-slider-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.param-slider {
+  width: 100px;
+  height: 4px;
+  cursor: pointer;
+  accent-color: var(--accent-primary);
+}
+
+.param-value {
+  font-size: 11px;
+  font-family: var(--font-mono);
+  color: var(--accent-primary);
+  min-width: 30px;
+  text-align: right;
+}
+
+.param-select,
+.param-text,
+.param-number,
+.param-date {
+  font-size: 11px;
+  font-family: var(--font-mono);
+  padding: 3px 6px;
+  border: 1px solid var(--border-default);
+  border-radius: 4px;
+  background: var(--surface-0);
+  color: var(--text-primary);
+}
+.param-select { min-width: 80px; }
+.param-text { width: 120px; }
+.param-number { width: 70px; }
+.param-date { width: 130px; }
+
+/* Make the native date picker calendar icon visible in dark mode */
+.param-date::-webkit-calendar-picker-indicator {
+  filter: invert(0.8);
+  cursor: pointer;
+  opacity: 0.7;
+  transition: opacity 0.15s;
+}
+.param-date::-webkit-calendar-picker-indicator:hover {
+  opacity: 1;
+}
+
+.param-checkbox {
+  width: 14px;
+  height: 14px;
+  accent-color: var(--accent-primary);
+  cursor: pointer;
+}
+
+.param-select:focus,
+.param-text:focus,
+.param-number:focus,
+.param-date:focus {
+  outline: none;
+  border-color: var(--accent-primary);
+}

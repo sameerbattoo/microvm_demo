@@ -1,10 +1,56 @@
 [
-  { "id": "sales_analysis", "name": "Sales Data Analysis", "icon": "📊", "file": "sales_analysis.notebook.json" },
-  { "id": "time_series", "name": "Time Series Forecasting", "icon": "📈", "file": "time_series.notebook.json" },
-  { "id": "data_cleaning", "name": "Data Cleaning & Transform", "icon": "🧹", "file": "data_cleaning.notebook.json" },
-  { "id": "statistical_analysis", "name": "Statistical Analysis", "icon": "🔬", "file": "statistical_analysis.notebook.json" },
-  { "id": "public_apis", "name": "Public API Data Analysis", "icon": "🌐", "file": "public_apis.notebook.json" },
-  { "id": "aws_data_sources", "name": "AWS Data Sources", "icon": "☁️", "file": "aws_data_sources.notebook.json" },
-  { "id": "burst_demo", "name": "Memory & CPU Burst Demo", "icon": "⚡", "file": "burst_demo.notebook.json" },
-  { "id": "helper_functions", "name": "Helper Functions Demo", "icon": "🧰", "file": "helper_functions.notebook.json" }
+  {
+    "id": "sales_analysis",
+    "name": "Sales Data Analysis",
+    "icon": "\ud83d\udcca",
+    "file": "sales_analysis.notebook.json"
+  },
+  {
+    "id": "time_series",
+    "name": "Time Series Forecasting",
+    "icon": "\ud83d\udcc8",
+    "file": "time_series.notebook.json"
+  },
+  {
+    "id": "data_cleaning",
+    "name": "Data Cleaning & Transform",
+    "icon": "\ud83e\uddf9",
+    "file": "data_cleaning.notebook.json"
+  },
+  {
+    "id": "statistical_analysis",
+    "name": "Statistical Analysis",
+    "icon": "\ud83d\udd2c",
+    "file": "statistical_analysis.notebook.json"
+  },
+  {
+    "id": "public_apis",
+    "name": "Public API Data Analysis",
+    "icon": "\ud83c\udf10",
+    "file": "public_apis.notebook.json"
+  },
+  {
+    "id": "aws_data_sources",
+    "name": "AWS Data Sources",
+    "icon": "\u2601\ufe0f",
+    "file": "aws_data_sources.notebook.json"
+  },
+  {
+    "id": "burst_demo",
+    "name": "Memory & CPU Burst Demo",
+    "icon": "\u26a1",
+    "file": "burst_demo.notebook.json"
+  },
+  {
+    "id": "helper_functions",
+    "name": "Helper Functions Demo",
+    "icon": "\ud83e\uddf0",
+    "file": "helper_functions.notebook.json"
+  },
+  {
+    "id": "interactive_params",
+    "name": "Interactive Parameters",
+    "icon": "\ud83c\udf9b\ufe0f",
+    "file": "interactive_params.notebook.json"
+  }
 ]

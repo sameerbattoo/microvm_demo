@@ -71,7 +71,7 @@
     },
     {
       "type": "code",
-      "code": "# Interactive: Age vs Revenue scatter\nfig = px.scatter(\n    df_clean[df_clean['revenue'] > 0],\n    x='age', y='revenue',\n    color='country',\n    title='Age vs Revenue by Country',\n    opacity=0.6,\n    color_discrete_sequence=px.colors.qualitative.Set2\n)\nfig.update_layout(height=400)\nfig.show()",
+      "code": "# @param {\"type\": \"slider\", \"min\": 0, \"max\": 5000, \"step\": 100, \"default\": 0}\nmin_revenue = 0\n# @param {\"type\": \"dropdown\", \"options\": [\"all\", \"US\", \"UK\", \"DE\", \"JP\", \"FR\"], \"default\": \"all\"}\ncountry_filter = \"all\"\n# Interactive: Age vs Revenue scatter (filtered)\nfiltered = df_clean[df_clean['revenue'] > min_revenue]\nif country_filter != \"all\":\n    filtered = filtered[filtered['country'] == country_filter]\nfig = px.scatter(\n    filtered,\n    x='age', y='revenue',\n    color='country',\n    title=f'Age vs Revenue (min=${min_revenue}, country={country_filter})',\n    labels={'age': 'Customer Age', 'revenue': 'Revenue ($)'},\n    opacity=0.7,\n    hover_data=['name'],\n)\nfig.show()",
       "output": null,
       "error": null,
       "html": null,

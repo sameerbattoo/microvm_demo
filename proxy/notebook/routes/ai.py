@@ -113,7 +113,8 @@ async def ai_chat(request: Request):
                 yield f"data: {json.dumps(event)}\n\n"
             yield f"data: {json.dumps({'type': 'done'})}\n\n"
         except Exception as e:
-            logger.error(f"AI chat stream error: {e}")
+            import traceback
+            logger.error(f"AI chat stream error: {e}\n{traceback.format_exc()}")
             yield f"data: {json.dumps({'type': 'error', 'content': str(e)})}\n\n"
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")

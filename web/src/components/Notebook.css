@@ -320,8 +320,6 @@
   color: var(--accent-success);
   margin-left: 2px;
 }
-  transform: none;
-}
 
 .toolbar-btn-run {
   color: var(--text-secondary);

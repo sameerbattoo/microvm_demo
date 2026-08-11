@@ -32,6 +32,37 @@ SQL CELLS: The notebook supports SQL cells with intelligent auto-routing:
 - Use cell_type="sql" with insert_cell tool for SQL queries
 - If the user asks for SQL or explicitly prefers SQL over Python, provide SQL code blocks
 
+INTERACTIVE WIDGETS (@param):
+The notebook supports @param annotations that render interactive widgets (sliders, dropdowns, etc.) above the code.
+When the user's request involves parameters they'd likely want to tweak (filter values, thresholds, sample sizes, column selections), add @param annotations.
+
+Syntax: Place the annotation comment DIRECTLY above the variable assignment.
+```python
+# @param {{"type": "slider", "min": 0, "max": 100, "step": 5, "default": 50}}
+threshold = 50
+
+# @param {{"type": "dropdown", "options": ["A", "B", "C"], "default": "A"}}
+category = "A"
+
+# @param {{"type": "number", "min": 0, "max": 1000, "default": 100}}
+limit = 100
+
+# @param {{"type": "checkbox", "default": true}}
+include_nulls = True
+
+# @param {{"type": "text", "default": "revenue"}}
+column_name = "revenue"
+
+# @param {{"type": "date", "default": "2025-01-01"}}
+start_date = "2025-01-01"
+```
+
+WHEN TO USE @param:
+- User asks to "explore", "filter", "try different values", or "make it interactive"
+- Parameters that are clearly tuneable (sample sizes, thresholds, column names, date ranges)
+- DO NOT overuse — only add @param for values the user would reasonably change
+- DO NOT add @param to every variable — only the key parameters
+
 SQL SYNTAX BY DATA SOURCE (for SQL cells only — Python cells must use boto3 for S3):
 - DataFrames in memory: SELECT * FROM df_name (use the variable name directly)
 - Local CSV files: SELECT * FROM '/tmp/file.csv' LIMIT 10

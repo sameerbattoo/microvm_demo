@@ -53,6 +53,8 @@ class SandboxExecutor:
         self._preload_packages()
         # Inject helper functions into the namespace (available in every cell)
         self._inject_helpers()
+        # Set default Plotly dark theme (matches the notebook UI)
+        self._set_plotly_defaults()
 
     def _preload_packages(self):
         """Pre-import heavy packages into the interpreter cache (not the namespace).
@@ -76,6 +78,15 @@ class SandboxExecutor:
                         self._namespace[name] = obj
         except ImportError:
             pass  # Helpers not available (shouldn't happen in normal operation)
+
+    def _set_plotly_defaults(self):
+        """Set Plotly default template to dark theme (matches the notebook UI).
+        Users can override with: pio.templates.default = 'plotly' (for light)."""
+        try:
+            import plotly.io as pio
+            pio.templates.default = 'plotly_dark'
+        except ImportError:
+            pass
 
     def interrupt(self) -> bool:
         """
@@ -112,6 +123,18 @@ class SandboxExecutor:
         sys.stderr = stderr_capture
 
         variables_before = set(self._namespace.keys())
+
+        # Provide a display() function (like Jupyter's IPython.display.display)
+        # that allows users to explicitly render objects from anywhere in the code
+        # (inside if/else blocks, loops, functions, etc.)
+        display_outputs = []  # collects (type, value) tuples
+
+        def _display_fn(*objs):
+            """Display objects — works from inside conditionals, loops, and functions."""
+            for obj in objs:
+                display_outputs.append(obj)
+
+        self._namespace['display'] = _display_fn
 
         # Track current thread for interrupt support
         self._exec_thread_id = threading.current_thread().ident
@@ -166,6 +189,12 @@ class SandboxExecutor:
         if success:
             # Detect DataFrame as last expression result
             html_output = self._capture_dataframe(code)
+            # If no DataFrame/Plotly captured, check for any new Plotly figures in namespace
+            if not html_output:
+                html_output = self._capture_plotly_figure(variables_before)
+            # Check explicit display() calls (works from inside if/else, loops, functions)
+            if not html_output and display_outputs:
+                html_output = self._capture_display_outputs(display_outputs)
             # Detect matplotlib plot
             image_output = self._capture_plot()
 
@@ -192,52 +221,47 @@ class SandboxExecutor:
         return result
 
     def _capture_dataframe(self, code: str) -> str:
-        """If the last expression is a DataFrame, return its HTML table representation."""
+        """If the last top-level expression is a DataFrame/Plotly figure, return its HTML.
+        
+        Uses Python's AST to correctly identify the last top-level expression,
+        avoiding false matches from expressions inside if/else, for, while blocks.
+        """
+        import ast
         try:
-            # Get the last line of code to check if it's an expression that yields a DataFrame
-            lines = [l.strip() for l in code.strip().split('\n') if l.strip() and not l.strip().startswith('#')]
-            if not lines:
+            tree = ast.parse(code)
+            if not tree.body:
                 return ""
-            last_line = lines[-1]
-
-            # Detect fig.show() pattern — evaluate the figure object instead of show() which returns None
-            import re as _re
-            show_match = _re.match(r'^(\w+)\.show\(\)$', last_line)
-            if show_match:
-                last_line = show_match.group(1)
-
-            # Skip assignments, imports, print statements, function calls that don't return
-            # Check for assignment: has '=' but NOT inside a function call (keyword args)
-            if '=' in last_line and not last_line.startswith('=') and '==' not in last_line:
-                # Only skip if it's a real assignment (not keyword arg inside function call)
-                # A real assignment has '=' before any '(' on the line
-                eq_pos = last_line.index('=')
-                paren_pos = last_line.find('(')
-                if paren_pos == -1 or eq_pos < paren_pos:
-                    return ""
-            if last_line.startswith(('import ', 'from ', 'print(', 'def ', 'class ', 'for ', 'if ', 'while ')):
+            
+            last_node = tree.body[-1]
+            
+            # Only capture if the last top-level statement is a bare expression (Expr node)
+            if not isinstance(last_node, ast.Expr):
                 return ""
-
-            # Try to eval the last line and check if it's a DataFrame
+            
+            # Compile and eval just the expression
+            expr_code = ast.Expression(body=last_node.value)
+            ast.fix_missing_locations(expr_code)
+            
             try:
-                val = eval(last_line, self._namespace)
+                val = eval(compile(expr_code, "<sandbox>", "eval"), self._namespace)
             except Exception:
                 return ""
+            
+            if val is None:
+                return ""
 
-            # Check for pandas DataFrame or Series
             type_name = type(val).__name__
             module = type(val).__module__ or ""
 
+            # Check for pandas DataFrame or Series
             if 'pandas' in module and type_name in ('DataFrame', 'Series'):
                 MAX_DISPLAY_ROWS = 50
                 total_rows = len(val)
 
-                # Flatten MultiIndex columns (from .agg() with tuples) for clean rendering
                 if type_name == 'DataFrame' and hasattr(val, 'columns'):
                     if hasattr(val.columns, 'nlevels') and val.columns.nlevels > 1:
                         val = val.copy()
                         val.columns = ['_'.join(str(c) for c in col).strip('_') for col in val.columns]
-                    # Reset named index to avoid duplicate index-as-column in HTML
                     if val.index.name or (hasattr(val.index, 'names') and any(n for n in val.index.names if n)):
                         val = val.reset_index()
 
@@ -270,7 +294,6 @@ class SandboxExecutor:
                         include_plotlyjs='cdn',
                         config={'responsive': True, 'displayModeBar': True},
                     )
-                    # Wrap in a marker div so the frontend can detect it's a Plotly chart
                     return f'<div class="plotly-chart" data-plotly="true">{html}</div>'
                 except Exception:
                     return ""
@@ -340,6 +363,87 @@ class SandboxExecutor:
             return match.group(0)
 
         return re.sub(r'<td>([^<]*)</td>', enhance_cell, html)
+
+    def _capture_display_outputs(self, display_outputs: list) -> str:
+        """Process objects passed to the display() function.
+        
+        Handles Plotly figures, DataFrames, and other rich objects — just like
+        Jupyter's IPython.display.display(). This allows charts to render from
+        inside if/else blocks, loops, and function calls.
+        """
+        for obj in display_outputs:
+            try:
+                type_name = type(obj).__name__
+                module = type(obj).__module__ or ""
+
+                # Plotly Figure
+                if 'plotly' in module and type_name == 'Figure':
+                    html = obj.to_html(
+                        full_html=False,
+                        include_plotlyjs='cdn',
+                        config={'responsive': True, 'displayModeBar': True},
+                    )
+                    return f'<div class="plotly-chart" data-plotly="true">{html}</div>'
+
+                # Pandas DataFrame/Series
+                if 'pandas' in module and type_name in ('DataFrame', 'Series'):
+                    MAX_DISPLAY_ROWS = 50
+                    total_rows = len(obj)
+                    if type_name == 'DataFrame' and hasattr(obj, 'columns'):
+                        if hasattr(obj.columns, 'nlevels') and obj.columns.nlevels > 1:
+                            obj = obj.copy()
+                            obj.columns = ['_'.join(str(c) for c in col).strip('_') for col in obj.columns]
+                        if obj.index.name or (hasattr(obj.index, 'names') and any(n for n in obj.index.names if n)):
+                            obj = obj.reset_index()
+                    if hasattr(obj, 'head') and total_rows > MAX_DISPLAY_ROWS:
+                        display_val = obj.head(MAX_DISPLAY_ROWS)
+                        html = display_val.to_html(classes='df-table', max_rows=MAX_DISPLAY_ROWS, max_cols=20)
+                        html += f'<div class="df-truncation-note">Showing {MAX_DISPLAY_ROWS} of {total_rows} rows</div>'
+                        return self._linkify_urls(html)
+                    else:
+                        return self._linkify_urls(obj.to_html(classes='df-table', max_rows=MAX_DISPLAY_ROWS, max_cols=20))
+            except Exception:
+                continue
+        return ""
+
+    def _capture_plotly_figure(self, variables_before: set) -> str:
+        """Check namespace for any Plotly Figure created during this execution.
+        
+        This handles cases where a Plotly figure is created inside an if/else block
+        or stored in a variable but not returned as the last expression.
+        """
+        try:
+            import plotly.graph_objects as go
+
+            # Look for new variables that are Plotly Figures
+            for var_name in set(self._namespace.keys()) - variables_before - {'__builtins__'}:
+                val = self._namespace.get(var_name)
+                if isinstance(val, go.Figure):
+                    html = val.to_html(
+                        full_html=False,
+                        include_plotlyjs='cdn',
+                        config={'responsive': True, 'displayModeBar': True},
+                    )
+                    return f'<div class="plotly-chart" data-plotly="true">{html}</div>'
+            
+            # Also check well-known figure variable names that may have been overwritten
+            # Only if they weren't in the namespace before (meaning they were re-assigned this execution)
+            for var_name in ('fig', 'figure', 'chart'):
+                if var_name in variables_before:
+                    continue  # existed before this execution — don't capture old figures
+                val = self._namespace.get(var_name)
+                if isinstance(val, go.Figure):
+                    html = val.to_html(
+                        full_html=False,
+                        include_plotlyjs='cdn',
+                        config={'responsive': True, 'displayModeBar': True},
+                    )
+                    return f'<div class="plotly-chart" data-plotly="true">{html}</div>'
+        except ImportError:
+            pass
+        except Exception:
+            pass
+        return ""
 
     def _capture_plot(self) -> str:
         """If matplotlib has an active figure, capture it as base64 PNG and close it."""

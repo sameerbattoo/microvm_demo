@@ -12,7 +12,7 @@
       "executionNumber": null
     },
     {
-      "code": "# Visualize top 20 most populated countries\ntop20 = countries.head(20)\n\nplt.figure(figsize=(12, 6))\nplt.barh(top20['country_name'], top20['population'] / 1e6, color='#89b4fa')\nplt.xlabel('Population (millions)', color='#a6adc8')\nplt.title('Top 20 Countries by Population (World Bank API, 2022)', color='white', fontsize=14)\nplt.gca().invert_yaxis()\nplt.tick_params(colors='#a6adc8')\nplt.grid(axis='x', alpha=0.2)\nplt.tight_layout()\nplt.show()",
+      "code": "# @param {\"type\": \"slider\", \"min\": 5, \"max\": 50, \"step\": 5, \"default\": 20}\ntop_n = 20\n# Visualize top N most populated countries\ntopN = countries.head(top_n)\nplt.figure(figsize=(12, max(4, top_n * 0.3)))\nplt.barh(topN['country_name'], topN['population'] / 1e6, color='#89b4fa')\nplt.xlabel('Population (millions)', color='#a6adc8')\nplt.title(f'Top {top_n} Countries by Population (World Bank API, 2022)', color='white', fontsize=14)\nplt.gca().invert_yaxis()\nplt.xticks(color='#a6adc8')\nplt.yticks(color='#a6adc8')\nplt.grid(True, alpha=0.2, axis='x')\nplt.tight_layout()\nplt.show()",
       "output": null,
       "error": null,
       "html": null,
@@ -36,7 +36,7 @@
       "executionNumber": null
     },
     {
-      "code": "# Fetch cryptocurrency prices from CoinGecko (no auth)\nresp = requests.get('https://api.coingecko.com/api/v3/coins/markets', params={\n    'vs_currency': 'usd',\n    'order': 'market_cap_desc',\n    'per_page': 20,\n    'sparkline': False\n}, timeout=15)\ncrypto = pd.DataFrame(resp.json())[['name', 'symbol', 'current_price', 'market_cap', 'price_change_percentage_24h', 'total_volume']]\ncrypto.columns = ['name', 'symbol', 'price_usd', 'market_cap', 'change_24h_pct', 'volume_24h']\ncrypto['market_cap_B'] = (crypto['market_cap'] / 1e9).round(1)\nprint(\"Top 20 Cryptocurrencies by Market Cap (CoinGecko API):\")\ncrypto",
+      "code": "# @param {\"type\": \"dropdown\", \"options\": [\"usd\", \"eur\", \"gbp\", \"jpy\"], \"default\": \"usd\"}\nvs_currency = \"usd\"\n# @param {\"type\": \"slider\", \"min\": 5, \"max\": 50, \"step\": 5, \"default\": 20}\nnum_coins = 20\n# Fetch cryptocurrency prices from CoinGecko (no auth)\nresp = requests.get('https://api.coingecko.com/api/v3/coins/markets', params={\n    'vs_currency': vs_currency,\n    'order': 'market_cap_desc',\n    'per_page': num_coins,\n    'sparkline': False\n}, timeout=15)\ncrypto = pd.DataFrame(resp.json())[['name', 'symbol', 'current_price', 'market_cap', 'price_change_percentage_24h']]\ncrypto.columns = ['Name', 'Symbol', 'Price', 'Market Cap', '24h Change %']\nprint(f\"Top {num_coins} Cryptocurrencies by Market Cap (in {vs_currency.upper()})\")\ncrypto",
       "output": null,
       "error": null,
       "html": null,

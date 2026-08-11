@@ -280,6 +280,40 @@ def to_local(df: pd.DataFrame, path: str, index: bool = False) -> str:
 # VISUALIZATION — One-liner Plotly charts
 # =============================================================================
 
+def _apply_dark_theme(fig):
+    """Apply dark theme to a Plotly figure to match the notebook's dark UI."""
+    fig.update_layout(
+        template='plotly_dark',
+        paper_bgcolor='rgba(0,0,0,0)',
+        plot_bgcolor='rgba(0,0,0,0)',
+    )
+    return fig
+
+
+def _auto_display(fig):
+    """Auto-register a Plotly figure with the display system if available.
+    
+    This allows plot helpers to render charts even when called inside
+    if/else blocks, loops, or functions (where the return value isn't
+    captured as the cell's last expression).
+    """
+    import inspect
+    # Walk up the entire call stack to find the executor-injected `display`
+    frame = inspect.currentframe()
+    try:
+        f = frame.f_back  # skip _auto_display itself
+        while f:
+            display_fn = f.f_locals.get('display') or f.f_globals.get('display')
+            if callable(display_fn):
+                display_fn(fig)
+                break
+            f = f.f_back
+    except Exception:
+        pass
+    finally:
+        del frame
+
+
 def plot_line(df: pd.DataFrame, x: str, y: str, color: str = None, title: str = None):
     """
     Interactive line chart.
@@ -288,6 +322,8 @@ def plot_line(df: pd.DataFrame, x: str, y: str, color: str = None, title: str = 
         plot_line(df, x='date', y='revenue', color='product', title='Revenue Over Time')
     """
     fig = px.line(df, x=x, y=y, color=color, title=title)
+    _apply_dark_theme(fig)
+    _auto_display(fig)
     return fig
 
 
@@ -299,6 +335,8 @@ def plot_bar(df: pd.DataFrame, x: str, y: str, color: str = None, title: str = N
         plot_bar(df, x='product', y='revenue', color='region', title='Revenue by Product')
     """
     fig = px.bar(df, x=x, y=y, color=color, title=title)
+    _apply_dark_theme(fig)
+    _auto_display(fig)
     return fig
 
 
@@ -310,6 +348,8 @@ def plot_scatter(df: pd.DataFrame, x: str, y: str, size: str = None, color: str 
         plot_scatter(df, x='age', y='revenue', size='quantity', color='country')
     """
     fig = px.scatter(df, x=x, y=y, size=size, color=color, title=title)
+    _apply_dark_theme(fig)
+    _auto_display(fig)
     return fig
 
 
@@ -321,6 +361,8 @@ def plot_histogram(df: pd.DataFrame, column: str, bins: int = 30, title: str = N
         plot_histogram(df, 'revenue', bins=20, title='Revenue Distribution')
     """
     fig = px.histogram(df, x=column, nbins=bins, title=title)
+    _apply_dark_theme(fig)
+    _auto_display(fig)
     return fig
 
 
@@ -333,6 +375,8 @@ def plot_heatmap(df: pd.DataFrame, x: str, y: str, value: str, title: str = None
     """
     pivot = df.pivot_table(values=value, index=y, columns=x, aggfunc='sum')
     fig = px.imshow(pivot, title=title, color_continuous_scale='Blues', aspect='auto')
+    _apply_dark_theme(fig)
+    _auto_display(fig)
     return fig
 
 

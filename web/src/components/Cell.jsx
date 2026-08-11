@@ -4,6 +4,7 @@ import { sanitizeHtml, sanitizeMarkdown } from '../services/sanitize'
 import MarkdownCell from './MarkdownCell'
 import CellEditor from './CellEditor'
 import { IconPlay, IconPlus, IconTrash, IconX, IconStop, IconChevronDown, IconChevronRight, IconGripVertical, IconEraser, IconCode, IconDatabase, IconZap } from './Icons'
+import ParamWidgets from './ParamWidgets'
 import { PROXY_URL, AI_TIMEOUT_MS } from '../config'
 import { fetchWithTimeout } from '../services/fetchWithTimeout'
 import SortableTable from './SortableTable'
@@ -409,6 +410,13 @@ export default function Cell({
         )}
 
         {/* Code editor */}
+        {!codeCollapsed && cell.type !== 'markdown' && cell.code && cell.code.includes('@param') && (
+          <ParamWidgets
+            code={cell.code}
+            onCodeChange={onCodeChange}
+            onExecute={smartExecute}
+          />
+        )}
         {!codeCollapsed && (
           <div className="cell-input">
             {/* SQL output variable name */}

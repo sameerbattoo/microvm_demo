@@ -14,7 +14,7 @@
     },
     {
       "type": "code",
-      "code": "import pandas as pd\nimport numpy as np\nimport plotly.express as px\nimport plotly.graph_objects as go\nimport matplotlib.pyplot as plt\n\n# Generate sample sales data\nnp.random.seed(42)\nmonths = pd.date_range('2025-01-01', periods=12, freq='MS')\nproducts = ['Laptop', 'Phone', 'Tablet', 'Headphones', 'Monitor']\n\nrows = []\nfor month in months:\n    for product in products:\n        qty = np.random.randint(50, 500)\n        price = {'Laptop': 999, 'Phone': 699, 'Tablet': 449, 'Headphones': 149, 'Monitor': 349}[product]\n        rows.append({'date': month, 'product': product, 'quantity': qty, 'unit_price': price, 'revenue': qty * price})\n\nsales = pd.DataFrame(rows)\nprint(f\"Generated {len(sales)} rows of sales data\")\nsales.head(10)",
+      "code": "# @param {\"type\": \"slider\", \"min\": 6, \"max\": 36, \"step\": 6, \"default\": 24}\nnum_months = 24\n# @param {\"type\": \"number\", \"min\": 1, \"max\": 999, \"default\": 42}\nrandom_seed = 42\nimport pandas as pd\nimport numpy as np\nimport plotly.express as px\nimport plotly.graph_objects as go\nimport matplotlib.pyplot as plt\n# Generate sample sales data\nnp.random.seed(random_seed)\nmonths = pd.date_range('2023-01-01', periods=num_months, freq='MS')\nproducts = ['Widget A', 'Widget B', 'Gadget X', 'Gadget Y', 'Service Z']\ndata = []\nfor month in months:\n    for product in products:\n        base = {'Widget A': 150, 'Widget B': 200, 'Gadget X': 80, 'Gadget Y': 300, 'Service Z': 500}[product]\n        quantity = np.random.poisson(base)\n        unit_price = np.random.uniform(10, 50) if 'Widget' in product else np.random.uniform(50, 200)\n        revenue = quantity * unit_price\n        data.append({'date': month, 'product': product, 'quantity': quantity, 'unit_price': round(unit_price, 2), 'revenue': round(revenue, 2)})\nsales = pd.DataFrame(data)\nprint(f\"Generated {len(sales)} rows, {num_months} months, {len(products)} products\")\nsales.head(10)",
       "output": null,
       "error": null,
       "html": null,
@@ -98,7 +98,7 @@
     },
     {
       "type": "code",
-      "code": "# Static matplotlib: Monthly revenue trend\nmonthly_revenue = sales.groupby('date')['revenue'].sum()\n\nplt.figure(figsize=(10, 5))\nplt.plot(monthly_revenue.index, monthly_revenue.values, marker='o', linewidth=2, color='#89b4fa')\nplt.fill_between(monthly_revenue.index, monthly_revenue.values, alpha=0.1, color='#89b4fa')\nplt.title('Monthly Revenue Trend (matplotlib)', fontsize=14)\nplt.xlabel('Month')\nplt.ylabel('Revenue ($)')\nplt.xticks(rotation=45)\nplt.grid(alpha=0.2)\nplt.tight_layout()\nplt.show()",
+      "code": "# @param {\"type\": \"slider\", \"min\": 6, \"max\": 16, \"step\": 2, \"default\": 10}\nfig_width = 10\n# Static matplotlib: Monthly revenue trend\nmonthly_revenue = sales.groupby('date')['revenue'].sum()\nplt.figure(figsize=(fig_width, 5))\nplt.plot(monthly_revenue.index, monthly_revenue.values, marker='o', linewidth=2, color='#89b4fa')\nplt.fill_between(monthly_revenue.index, monthly_revenue.values, alpha=0.1, color='#89b4fa')\nplt.title('Monthly Total Revenue', color='white', fontsize=14)\nplt.xlabel('Date', color='#a6adc8')\nplt.ylabel('Revenue ($)', color='#a6adc8')\nplt.xticks(rotation=45, color='#a6adc8')\nplt.yticks(color='#a6adc8')\nplt.grid(True, alpha=0.2)\nplt.tight_layout()\nplt.show()",
       "output": null,
       "error": null,
       "html": null,
