@@ -280,6 +280,39 @@ def to_local(df: pd.DataFrame, path: str, index: bool = False) -> str:
 # VISUALIZATION — One-liner Plotly charts
 # =============================================================================
 
+def _validate_columns(df: pd.DataFrame, func_name: str, **col_args):
+    """
+    Validate that specified column names exist in the DataFrame.
+    Raises a helpful ValueError with 'did you mean?' suggestions if not found.
+    
+    Args:
+        df: The DataFrame to check against
+        func_name: Name of the calling function (for error messages)
+        **col_args: keyword args mapping param_name → column_name (or None to skip)
+    
+    Example:
+        _validate_columns(df, 'plot_bar', x='revnue', y='quantity')
+        → ValueError: plot_bar: column 'revnue' not found. Did you mean 'revenue'?
+    """
+    from difflib import get_close_matches
+    
+    available = list(df.columns)
+    for param_name, col_name in col_args.items():
+        if col_name is None:
+            continue
+        if col_name not in df.columns:
+            # Fuzzy match for suggestions
+            suggestions = get_close_matches(col_name, available, n=3, cutoff=0.5)
+            msg = f"{func_name}: column '{col_name}' not found in DataFrame"
+            if suggestions:
+                msg += f". Did you mean: {', '.join(repr(s) for s in suggestions)}?"
+            else:
+                msg += f". Available columns: {available[:15]}"
+                if len(available) > 15:
+                    msg += f" ... ({len(available)} total)"
+            raise ValueError(msg)
+
+
 def _apply_dark_theme(fig):
     """Apply dark theme to a Plotly figure to match the notebook's dark UI."""
     fig.update_layout(
@@ -321,6 +354,7 @@ def plot_line(df: pd.DataFrame, x: str, y: str, color: str = None, title: str = 
     Example:
         plot_line(df, x='date', y='revenue', color='product', title='Revenue Over Time')
     """
+    _validate_columns(df, 'plot_line', x=x, y=y, color=color)
     fig = px.line(df, x=x, y=y, color=color, title=title)
     _apply_dark_theme(fig)
     _auto_display(fig)
@@ -334,6 +368,7 @@ def plot_bar(df: pd.DataFrame, x: str, y: str, color: str = None, title: str = N
     Example:
         plot_bar(df, x='product', y='revenue', color='region', title='Revenue by Product')
     """
+    _validate_columns(df, 'plot_bar', x=x, y=y, color=color)
     fig = px.bar(df, x=x, y=y, color=color, title=title)
     _apply_dark_theme(fig)
     _auto_display(fig)
@@ -347,6 +382,7 @@ def plot_scatter(df: pd.DataFrame, x: str, y: str, size: str = None, color: str 
     Example:
         plot_scatter(df, x='age', y='revenue', size='quantity', color='country')
     """
+    _validate_columns(df, 'plot_scatter', x=x, y=y, size=size, color=color)
     fig = px.scatter(df, x=x, y=y, size=size, color=color, title=title)
     _apply_dark_theme(fig)
     _auto_display(fig)
@@ -360,6 +396,7 @@ def plot_histogram(df: pd.DataFrame, column: str, bins: int = 30, title: str = N
     Example:
         plot_histogram(df, 'revenue', bins=20, title='Revenue Distribution')
     """
+    _validate_columns(df, 'plot_histogram', column=column)
     fig = px.histogram(df, x=column, nbins=bins, title=title)
     _apply_dark_theme(fig)
     _auto_display(fig)
@@ -373,6 +410,7 @@ def plot_heatmap(df: pd.DataFrame, x: str, y: str, value: str, title: str = None
     Example:
         plot_heatmap(df, x='month', y='product', value='revenue', title='Sales Heatmap')
     """
+    _validate_columns(df, 'plot_heatmap', x=x, y=y, value=value)
     pivot = df.pivot_table(values=value, index=y, columns=x, aggfunc='sum')
     fig = px.imshow(pivot, title=title, color_continuous_scale='Blues', aspect='auto')
     _apply_dark_theme(fig)

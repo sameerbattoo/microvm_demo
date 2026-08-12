@@ -171,6 +171,20 @@ export default function Sidebar({
         setDynamoTables(data.dynamodb || [])
         setAthenaTables(data.athena || [])
         setAthenaWorkgroup(data.athena_workgroup || 'microvm-demo')
+
+        // Also fetch full catalog (with column schemas) if session is active
+        if (activeTab?.sessionId) {
+          try {
+            const catalogResp = await fetch(`${PROXY_URL}/datasources/catalog`, {
+              headers: { 'X-Session-Id': activeTab.sessionId },
+            })
+            if (catalogResp.ok) {
+              const catalog = await catalogResp.json()
+              data._catalog = catalog  // Attach catalog entries with column info
+            }
+          } catch {}
+        }
+
         if (onSyncDataSources) onSyncDataSources(data)
       }
     } catch (err) {

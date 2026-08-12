@@ -204,6 +204,7 @@ export default function CellEditor({
       // SQL: schema.table completion (e.g. database_name. or dynamodb.)
       if (language === 'sql') {
         const schemas = dataSourcesRef.current?.schemas || {}
+        const columns = dataSourcesRef.current?.columns || {}
         const tables = schemas[prefix]
         if (tables) {
           const options = tables
@@ -219,6 +220,16 @@ export default function CellEditor({
             })
           if (options.length > 0) {
             return { from: context.pos - partial.length, validFor: /^[\w"]*$/, options }
+          }
+        }
+        // SQL: table.column completion (e.g. sales_data.revenue)
+        const colNames = columns[prefix]
+        if (colNames) {
+          const options = colNames
+            .filter(c => c.toLowerCase().startsWith(partial.toLowerCase()) || partial === '')
+            .map(c => ({ label: c, type: 'property', detail: `column in ${prefix}` }))
+          if (options.length > 0) {
+            return { from: context.pos - partial.length, validFor: /^\w*$/, options }
           }
         }
       }
@@ -255,6 +266,53 @@ export default function CellEditor({
       }
 
       return null
+    }
+
+    // --- Python: bracket column completion (df[' or df[" → suggest columns) ---
+    if (language === 'python') {
+      const bracketMatch = textBefore.match(/(\w+)\[['"](\w*)$/)
+      if (bracketMatch) {
+        const varName = bracketMatch[1]
+        const partial = bracketMatch[2]
+        const columns = dataSourcesRef.current?.columns || {}
+        // Check if this variable has known columns (from catalog or namespace)
+        const colNames = columns[varName]
+        if (colNames) {
+          const options = colNames
+            .filter(c => c.toLowerCase().startsWith(partial.toLowerCase()) || partial === '')
+            .map(c => ({ label: c, type: 'property', detail: `column in ${varName}` }))
+          if (options.length > 0) {
+            return { from: context.pos - partial.length, validFor: /^\w*$/, options }
+          }
+        }
+      }
+    }
+
+    // --- SQL: column suggestions after SELECT/WHERE/ORDER BY (context-aware) ---
+    if (language === 'sql') {
+      const columns = dataSourcesRef.current?.columns || {}
+      // Detect if we're in a position where column names make sense
+      const sqlContext = textBefore.match(/\b(?:SELECT|WHERE|AND|OR|ORDER\s+BY|GROUP\s+BY|HAVING|ON|SET)\s+(?:.*,\s*)?(\w*)$/i)
+      if (sqlContext) {
+        const partial = sqlContext[1] || ''
+        // Find which table is referenced in the FROM clause of this cell
+        const fullDoc = context.state.doc.toString()
+        const fromMatch = fullDoc.match(/\bFROM\s+(?:dynamodb\.)?"?(\w[\w-]*)"?/i)
+          || fullDoc.match(/\bFROM\s+\w+\.(\w+)/i)
+          || fullDoc.match(/\bFROM\s+(\w+)/i)
+        if (fromMatch) {
+          const tableName = fromMatch[1]
+          const colNames = columns[tableName]
+          if (colNames && partial.length >= 1) {
+            const options = colNames
+              .filter(c => c.toLowerCase().startsWith(partial.toLowerCase()))
+              .map(c => ({ label: c, type: 'property', detail: `column` }))
+            if (options.length > 0) {
+              return { from: context.pos - partial.length, validFor: /^\w*$/, options }
+            }
+          }
+        }
+      }
     }
 
     // --- Word-based completion (variables, keywords, datasources) ---

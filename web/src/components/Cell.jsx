@@ -146,7 +146,30 @@ export default function Cell({
       }
     }
 
-    return { items, schemas }
+    // Build column map from catalog entries (for column-level autocomplete)
+    // columns: { "table_name": ["col1", "col2", ...], "dynamodb.table": [...], ... }
+    const columns = {}
+    if (dataSources._catalog?.entries) {
+      for (const entry of dataSources._catalog.entries) {
+        if (entry.status === 'discovered' && entry.columns?.length > 0) {
+          const colNames = entry.columns.map(c => c.name)
+          // Key by display_name (bare table name) for easy lookup
+          columns[entry.display_name] = colNames
+          // Also key by source_id for qualified references
+          columns[entry.source_id] = colNames
+        }
+      }
+    }
+    // Also extract Athena columns from the basic /datasources response (always available)
+    if (dataSources.athena) {
+      dataSources.athena.forEach(t => {
+        if (t.columns?.length > 0 && !columns[t.name]) {
+          columns[t.name] = t.columns.map(c => c.name || c)
+        }
+      })
+    }
+
+    return { items, schemas, columns }
   }, [dataSources])
 
   // Smart execute: detects NLP vs code and routes accordingly
