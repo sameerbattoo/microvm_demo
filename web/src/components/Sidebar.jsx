@@ -31,6 +31,13 @@ function IconSamples({ width = 16, height = 16 }) {
     </svg>
   )
 }
+function IconLogs({ width = 16, height = 16 }) {
+  return (
+    <svg width={width} height={height} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M4 6h16" /><path d="M4 10h16" /><path d="M4 14h10" /><path d="M4 18h8" /><circle cx="18" cy="16" r="3" /><path d="M18 14v2l1 1" />
+    </svg>
+  )
+}
 
 export default function Sidebar({
   tabs,
@@ -63,6 +70,8 @@ export default function Sidebar({
   vmMetrics = {},
   showTerminal = false,
   onToggleTerminal,
+  showLogs = false,
+  onToggleLogs,
 }) {
   // Activity bar state — which panel is active (null = collapsed)
   const [activePanel, setActivePanel] = useState(() => {
@@ -141,6 +150,13 @@ export default function Sidebar({
   const togglePanel = (panel) => {
     setActivePanel(prev => prev === panel ? null : panel)
   }
+
+  // Listen for keyboard shortcut events from App
+  useEffect(() => {
+    const handler = (e) => togglePanel(e.detail)
+    window.addEventListener('toggle-sidebar-panel', handler)
+    return () => window.removeEventListener('toggle-sidebar-panel', handler)
+  }, [])
 
   // --- Data Sources fetching ---
   const fetchDataSources = useCallback(async () => {
@@ -279,13 +295,14 @@ export default function Sidebar({
 
   // Activity bar items
   const activityItems = [
-    { id: 'notebooks', icon: <IconNotebook width={18} height={18} />, title: 'Notebooks', color: 'var(--accent-primary)' },
-    { id: 'outline', icon: <IconOutline width={18} height={18} />, title: 'Cell Outline', color: '#cba6f7' },
-    { id: 'data', icon: <IconDatabase width={18} height={18} />, title: 'Data Sources', color: '#7ec89f' },
-    { id: 'snippets', icon: <IconCode width={18} height={18} />, title: 'Snippets', color: '#f9e2af' },
-    { id: 'variables', icon: <IconBraces width={18} height={18} />, title: 'Variables', color: '#f9e2af' },
-    { id: 'packages', icon: <IconPackage width={18} height={18} />, title: 'Packages', color: '#f38ba8' },
-    { id: 'terminal', icon: <IconTerminal width={18} height={18} />, title: 'Terminal', color: '#5cc2d4' },
+    { id: 'notebooks', icon: <IconNotebook width={18} height={18} />, title: 'Notebooks (⌥1)', color: 'var(--accent-primary)' },
+    { id: 'outline', icon: <IconOutline width={18} height={18} />, title: 'Cell Outline (⌥2)', color: '#cba6f7' },
+    { id: 'data', icon: <IconDatabase width={18} height={18} />, title: 'Data Sources (⌥3)', color: '#7ec89f' },
+    { id: 'snippets', icon: <IconCode width={18} height={18} />, title: 'Snippets (⌥4)', color: '#f9e2af' },
+    { id: 'variables', icon: <IconBraces width={18} height={18} />, title: 'Variables (⌥5)', color: '#f9e2af' },
+    { id: 'packages', icon: <IconPackage width={18} height={18} />, title: 'Packages (⌥6)', color: '#f38ba8' },
+    { id: 'terminal', icon: <IconTerminal width={18} height={18} />, title: 'Terminal (⌥7)', color: '#5cc2d4' },
+    { id: 'logs', icon: <IconLogs width={18} height={18} />, title: 'MicroVM Logs (⌥8)', color: '#89b4fa' },
     { id: 'samples', icon: <IconSamples width={18} height={18} />, title: 'Sample Notebooks', color: '#e2b86b' },
   ]
 
@@ -299,11 +316,15 @@ export default function Sidebar({
             className={`activity-bar-item ${
               item.id === 'terminal'
                 ? (showTerminal ? 'activity-bar-item-active' : '')
-                : (activePanel === item.id ? 'activity-bar-item-active' : '')
+                : item.id === 'logs'
+                  ? (showLogs ? 'activity-bar-item-active' : '')
+                  : (activePanel === item.id ? 'activity-bar-item-active' : '')
             }`}
             onClick={() => {
               if (item.id === 'terminal') {
                 onToggleTerminal?.()
+              } else if (item.id === 'logs') {
+                onToggleLogs?.()
               } else {
                 togglePanel(item.id)
               }

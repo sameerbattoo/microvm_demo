@@ -209,7 +209,8 @@ async def hook_terminate(request: Request):
                 checkpoint_manager.save(session_state["session_id"])
                 logger.info(f"   ✅ Checkpoint saved: sessions/{session_state['session_id']}/")
             except Exception as e:
-                logger.error(f"   ❌ Checkpoint failed: {e}")
+                import traceback
+                logger.error(f"   ❌ Checkpoint failed: {e}\n{traceback.format_exc()}")
         else:
             logger.info(f"   ⏭️  Eternal mode — rotator handles state transfer, skipping checkpoint")
 
@@ -281,5 +282,6 @@ async def restore_state(request: Request):
             "restore_timings": checkpoint_manager.last_restore_timings,
         }
     except Exception as e:
-        logger.error(f"   ❌ Restore failed: {e}")
+        import traceback
+        logger.error(f"   ❌ Restore failed: {e}\n{traceback.format_exc()}")
         return {"success": False, "error": str(e)}

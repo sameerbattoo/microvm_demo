@@ -3,6 +3,7 @@ import Notebook from './components/Notebook'
 import Sidebar from './components/Sidebar'
 import AiChatPanel from './components/AiChatPanel'
 import TerminalPanel from './components/panels/TerminalPanel'
+import LogsPanel from './components/LogsPanel'
 import { ConfirmModal, InputModal } from './components/Modal'
 import { IconZap, IconSun, IconMoon, IconFlame } from './components/Icons'
 import { PROXY_URL } from './config'
@@ -234,7 +235,41 @@ export default function App() {
   // Modal state
   const [modal, setModal] = useState(null)
   const [showAiChat, setShowAiChat] = useState(true)
-  const [showTerminal, setShowTerminal] = useState(false)
+  const [bottomPanelTabs, setBottomPanelTabs] = useState(new Set()) // Set of 'terminal' | 'logs'
+  const [bottomPanelActive, setBottomPanelActive] = useState(null) // which tab is visible
+  const [bottomPanelHeight, setBottomPanelHeight] = useState(220) // resizable height
+
+  const toggleBottomTab = (tab) => {
+    setBottomPanelTabs(prev => {
+      const next = new Set(prev)
+      if (next.has(tab)) {
+        // Close this tab
+        next.delete(tab)
+        // If it was active, switch to the other or close panel
+        if (bottomPanelActive === tab) {
+          const remaining = [...next]
+          setBottomPanelActive(remaining.length > 0 ? remaining[0] : null)
+        }
+      } else {
+        // Open this tab and make it active
+        next.add(tab)
+        setBottomPanelActive(tab)
+      }
+      return next
+    })
+  }
+
+  const closeBottomTab = (tab) => {
+    setBottomPanelTabs(prev => {
+      const next = new Set(prev)
+      next.delete(tab)
+      if (bottomPanelActive === tab) {
+        const remaining = [...next]
+        setBottomPanelActive(remaining.length > 0 ? remaining[0] : null)
+      }
+      return next
+    })
+  }
   const [aiAvailable, setAiAvailable] = useState(false)
   const [newNotebookName, setNewNotebookName] = useState('')
   const [newNotebookDesc, setNewNotebookDesc] = useState('')
@@ -248,7 +283,29 @@ export default function App() {
       // Ctrl+` or Cmd+` — toggle terminal
       if (e.key === '`' && (e.ctrlKey || e.metaKey)) {
         e.preventDefault()
-        setShowTerminal(v => !v)
+        toggleBottomTab('terminal')
+      }
+      // Ctrl+L or Cmd+L — toggle logs panel
+      if (e.key === 'l' && (e.ctrlKey || e.metaKey)) {
+        e.preventDefault()
+        toggleBottomTab('logs')
+      }
+      // Option+1 through Option+6 — toggle sidebar panels
+      // Option+7 — toggle terminal, Option+8 — toggle logs
+      if (e.altKey && !e.ctrlKey && !e.metaKey) {
+        const digitMatch = e.code?.match(/^Digit([1-8])$/)
+        if (digitMatch) {
+          e.preventDefault()
+          const idx = parseInt(digitMatch[1])
+          if (idx <= 6) {
+            const panels = ['notebooks', 'outline', 'data', 'snippets', 'variables', 'packages']
+            window.dispatchEvent(new CustomEvent('toggle-sidebar-panel', { detail: panels[idx - 1] }))
+          } else if (idx === 7) {
+            toggleBottomTab('terminal')
+          } else if (idx === 8) {
+            toggleBottomTab('logs')
+          }
+        }
       }
       // Cmd+S / Ctrl+S — save notebook (prevent browser save dialog)
       if (e.key === 's' && (e.metaKey || e.ctrlKey)) {
@@ -841,8 +898,10 @@ export default function App() {
           onRunFromCell={(cellIdx) => {
             window.dispatchEvent(new CustomEvent('notebook-run-from-cell', { detail: { cellIdx } }))
           }}
-          showTerminal={showTerminal}
-          onToggleTerminal={() => setShowTerminal(v => !v)}
+          showTerminal={bottomPanelTabs.has('terminal')}
+          onToggleTerminal={() => toggleBottomTab('terminal')}
+          showLogs={bottomPanelTabs.has('logs')}
+          onToggleLogs={() => toggleBottomTab('logs')}
         />
         <main className="app-main">
           {tabs.length === 0 && (
@@ -963,12 +1022,73 @@ export default function App() {
             />
             )
           })()}
-          {showTerminal && (
-            <TerminalPanel
-              activeTab={tabs.find(t => t.id === activeTabId) || null}
-              onClose={() => setShowTerminal(false)}
-              theme={theme}
-            />
+          {bottomPanelTabs.size > 0 && (
+            <div className="bottom-panel-container" style={{ height: bottomPanelHeight }}>
+              <div
+                className="bottom-panel-resize-handle"
+                onMouseDown={(e) => {
+                  e.preventDefault()
+                  const startY = e.clientY
+                  const startHeight = bottomPanelHeight
+                  const handleMove = (moveEvent) => {
+                    const delta = startY - moveEvent.clientY
+                    setBottomPanelHeight(Math.max(100, Math.min(window.innerHeight * 0.7, startHeight + delta)))
+                  }
+                  const handleUp = () => {
+                    document.removeEventListener('mousemove', handleMove)
+                    document.removeEventListener('mouseup', handleUp)
+                  }
+                  document.addEventListener('mousemove', handleMove)
+                  document.addEventListener('mouseup', handleUp)
+                }}
+              />
+              <div className="bottom-panel-tabs">
+                {bottomPanelTabs.has('terminal') && (
+                  <button
+                    className={`bottom-panel-tab ${bottomPanelActive === 'terminal' ? 'bottom-panel-tab-active' : ''}`}
+                    onClick={() => setBottomPanelActive('terminal')}
+                  >
+                    Terminal
+                    {bottomPanelTabs.size > 1 && (
+                      <span className="bottom-panel-tab-close" onClick={(e) => { e.stopPropagation(); closeBottomTab('terminal') }}>&times;</span>
+                    )}
+                  </button>
+                )}
+                {bottomPanelTabs.has('logs') && (
+                  <button
+                    className={`bottom-panel-tab ${bottomPanelActive === 'logs' ? 'bottom-panel-tab-active' : ''}`}
+                    onClick={() => setBottomPanelActive('logs')}
+                  >
+                    Logs
+                    {bottomPanelTabs.size > 1 && (
+                      <span className="bottom-panel-tab-close" onClick={(e) => { e.stopPropagation(); closeBottomTab('logs') }}>&times;</span>
+                    )}
+                  </button>
+                )}
+                <button
+                  className="bottom-panel-close"
+                  onClick={() => { setBottomPanelTabs(new Set()); setBottomPanelActive(null) }}
+                  title="Close panel"
+                >
+                  &times;
+                </button>
+              </div>
+              {bottomPanelActive === 'terminal' && (
+                <TerminalPanel
+                  activeTab={tabs.find(t => t.id === activeTabId) || null}
+                  onClose={() => closeBottomTab('terminal')}
+                  theme={theme}
+                  embedded={bottomPanelTabs.size > 1}
+                />
+              )}
+              {bottomPanelActive === 'logs' && (
+                <LogsPanel
+                  activeTab={tabs.find(t => t.id === activeTabId) || null}
+                  onClose={() => closeBottomTab('logs')}
+                  embedded={bottomPanelTabs.size > 1}
+                />
+              )}
+            </div>
           )}
         </main>
         {showAiChat && (

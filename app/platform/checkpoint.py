@@ -294,7 +294,7 @@ class CheckpointManager:
             step_timings["deserialize"] = _time.perf_counter() - t0
             logger.info(f"   Restored {len(namespace)} variables ({len(pkl_bytes)/1024:.1f} KB, download: {step_timings['download_pkl']*1000:.0f}ms, deserialize: {step_timings['deserialize']*1000:.0f}ms)")
         except Exception as e:
-            logger.error(f"   Failed to restore namespace: {e}")
+            logger.error(f"   Failed to restore namespace: {e}\n{_tb.format_exc()}")
 
         # 2. Restore local files
         try:
@@ -314,7 +314,7 @@ class CheckpointManager:
             step_timings["download_files"] = 0
             step_timings["extract_files"] = 0
         except Exception as e:
-            logger.error(f"   Failed to restore files: {e}")
+            logger.error(f"   Failed to restore files: {e}\n{_tb.format_exc()}")
 
         # 3. Install user-installed packages (simple list — no diffing needed)
         try:

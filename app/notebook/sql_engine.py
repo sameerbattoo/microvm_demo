@@ -343,6 +343,12 @@ async def execute_sql(request: Request):
 
         executor._execution_count += 1
 
+        # Log SQL success with context
+        sql_lines = sql.strip().split('\n')
+        snippet_lines = [l for l in sql_lines if l.strip() and not l.strip().startswith('--')]
+        first_line = snippet_lines[0][:80] if snippet_lines else sql_lines[0][:80]
+        logger.info(f"  ✓ SQL OK ({elapsed_ms:.0f}ms) {row_count}×{col_count} engine={engine_used} → {output_var} | {first_line}")
+
         return {
             "success": True,
             "output": output,
@@ -359,7 +365,11 @@ async def execute_sql(request: Request):
     except Exception as e:
         elapsed_ms = (_time.perf_counter() - start) * 1000
         error_msg = str(e)
-        logger.warning(f"SQL execution error: {error_msg}")
+        sql_lines = sql.strip().split('\n')
+        snippet_lines = [l for l in sql_lines if l.strip() and not l.strip().startswith('--')]
+        first_line = snippet_lines[0][:80] if snippet_lines else sql_lines[0][:80]
+        logger.warning(f"  ✗ SQL ERROR ({elapsed_ms:.0f}ms) | {first_line}")
+        logger.warning(f"    {error_msg}")
         return {
             "success": False,
             "output": None,

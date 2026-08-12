@@ -51,10 +51,13 @@ async def install_package(request: Request):
                 capture_output=True, text=True, timeout=30
             )
             if result.returncode == 0:
+                logger.info(f"  ✓ Uninstalled {package}")
                 return {"success": True, "output": result.stdout.strip()}
             else:
+                logger.warning(f"  ✗ Uninstall failed: {package} — {result.stderr.strip()[:100]}")
                 return {"success": False, "error": result.stderr.strip() or "Uninstall failed"}
         except Exception as e:
+            logger.warning(f"  ✗ Uninstall error: {package} — {e}")
             return {"success": False, "error": str(e)}
     else:
         logger.info(f"📦 Installing package: {package}")
@@ -62,7 +65,10 @@ async def install_package(request: Request):
 
         # Track the installed package for checkpoint
         if result.success:
+            logger.info(f"  ✓ Installed {package}")
             request.app.state.checkpoint_manager.record_package_install(package)
+        else:
+            logger.warning(f"  ✗ Install failed: {package} — {result.error[:100]}")
 
         return {"success": result.success, "output": result.output, "error": result.error}
 
@@ -72,7 +78,13 @@ async def list_variables(request: Request):
     """List all variables in the sandbox namespace."""
     executor = request.app.state.executor
     request.app.state.session_state["request_count"] += 1
-    return {"variables": executor.get_variables(), "count": len(executor.get_variables())}
+    try:
+        variables = executor.get_variables()
+        return {"variables": variables, "count": len(variables)}
+    except Exception as e:
+        import traceback
+        logger.error(f"Failed to list variables: {e}\n{traceback.format_exc()}")
+        return JSONResponse(status_code=500, content={"error": f"Failed to inspect variables: {str(e)}"})
 
 
 @router.post("/introspect")
@@ -280,6 +292,7 @@ async def upload_file(request: Request):
 
     if result.success:
         shape_result = executor.execute(f"print(f'{{{var_name}}}.shape = {{{var_name}.shape}}')")
+        logger.info(f"  ✓ Loaded {filename} as '{var_name}' {shape_result.output.strip() if shape_result.success else ''}")
         return {
             "success": True,
             "variable_name": var_name,
@@ -287,6 +300,7 @@ async def upload_file(request: Request):
             "message": f"Loaded '{filename}' as DataFrame '{var_name}'",
             "shape": shape_result.output.strip() if shape_result.success else "",
         }
+    logger.warning(f"  ✗ Upload failed: {filename} — {result.error[:100]}")
     return {"success": False, "error": result.error}
 
 

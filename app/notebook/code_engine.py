@@ -33,6 +33,18 @@ async def execute_code(request: Request):
     logger.info(f"▶ Executing code (len={len(code)})")
     result = await asyncio.to_thread(executor.execute, code)
 
+    # Log outcome with context for CloudWatch observability
+    # Find the first meaningful line (skip @param annotations and blank lines)
+    code_lines = code.strip().split('\n')
+    snippet_lines = [l for l in code_lines if l.strip() and not l.strip().startswith('# @param')]
+    first_line = snippet_lines[0][:80] if snippet_lines else code_lines[0][:80]
+    if result.success:
+        vars_info = f" vars={result.variables_created}" if result.variables_created else ""
+        logger.info(f"  ✓ OK ({result.execution_time_ms:.0f}ms){vars_info} | {first_line}")
+    else:
+        logger.warning(f"  ✗ ERROR ({result.execution_time_ms:.0f}ms) | {first_line}")
+        logger.warning(f"    {result.error}")
+
     return {
         "success": result.success,
         "output": result.output,

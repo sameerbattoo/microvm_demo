@@ -535,20 +535,28 @@ class SandboxExecutor:
         - preview: first few items or .head() for collections
         """
         variables = {}
-        for name, value in self._namespace.items():
+        for name, value in list(self._namespace.items()):  # list() = snapshot to avoid mutation during iteration
             if name.startswith("__") and name.endswith("__"):
                 continue
+            if name.startswith("_"):
+                continue  # skip private/internal vars (display, _auto_display, etc.)
             # Skip modules, functions, classes
-            type_name = type(value).__name__
-            module = getattr(type(value), '__module__', '') or ''
+            try:
+                type_name = type(value).__name__
+                module = getattr(type(value), '__module__', '') or ''
+            except Exception:
+                continue
             if type_name in ('module', 'function', 'builtin_function_or_method', 'type'):
                 continue
 
             try:
-                # Basic repr (short)
-                val_repr = repr(value)
-                if len(val_repr) > 100:
-                    val_repr = val_repr[:100] + "..."
+                # Basic repr (short) — with safety timeout
+                try:
+                    val_repr = repr(value)
+                    if len(val_repr) > 100:
+                        val_repr = val_repr[:100] + "..."
+                except Exception:
+                    val_repr = f"<{type_name}>"
 
                 # Size
                 try:
@@ -567,19 +575,25 @@ class SandboxExecutor:
                 preview = val_repr
                 preview_type = "text"  # "text" or "html"
                 if 'pandas' in module and type_name == 'DataFrame':
-                    shape = f"{value.shape[0]} rows × {value.shape[1]} cols"
+                    try:
+                        shape = f"{value.shape[0]} rows × {value.shape[1]} cols"
+                    except Exception:
+                        shape = "DataFrame"
                     try:
                         preview = value.head(3).to_html(classes='var-df-preview', max_cols=6, max_rows=3)
+                        preview_type = "html"
                     except Exception:
-                        pass
-                    preview_type = "html"
+                        preview_type = "text"
                 elif 'pandas' in module and type_name == 'Series':
-                    shape = f"{len(value)} items"
+                    try:
+                        shape = f"{len(value)} items"
+                    except Exception:
+                        shape = "Series"
                     try:
                         preview = value.head(5).to_frame().to_html(classes='var-df-preview', max_rows=5)
                         preview_type = "html"
                     except Exception:
-                        pass
+                        preview_type = "text"
                 elif 'numpy' in module and hasattr(value, 'shape'):
                     shape = f"shape {value.shape}"
                 elif isinstance(value, (list, tuple)):

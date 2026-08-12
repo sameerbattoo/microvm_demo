@@ -1,0 +1,188 @@
+/* ============================================================
+   LogsPanel — Bottom panel for streaming CloudWatch logs
+   ============================================================ */
+
+.logs-bottom-panel {
+  flex-shrink: 0;
+  min-height: 100px;
+  max-height: 70vh;
+  border-top: 1px solid var(--border-subtle);
+  display: flex;
+  flex-direction: column;
+  background: var(--surface-0);
+  position: relative;
+}
+
+.logs-resize-handle {
+  position: absolute;
+  top: -3px;
+  left: 0;
+  right: 0;
+  height: 6px;
+  cursor: row-resize;
+  z-index: 10;
+}
+
+.logs-resize-handle:hover {
+  background: var(--accent-primary);
+  opacity: 0.4;
+}
+
+/* Header */
+.logs-panel-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 12px;
+  background: var(--surface-1);
+  border-bottom: 1px solid var(--border-subtle);
+  flex-shrink: 0;
+  user-select: none;
+}
+
+.logs-panel-title {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-secondary);
+}
+
+.logs-status {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+}
+
+.logs-status-connected {
+  background: #34eaad;
+}
+
+.logs-status-disconnected {
+  background: var(--text-muted);
+}
+
+.logs-filter-select {
+  font-size: 10px;
+  padding: 1px 4px;
+  border: 1px solid var(--border-default);
+  border-radius: 3px;
+  background: var(--surface-2);
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.logs-autoscroll {
+  font-size: 10px;
+  color: var(--text-muted);
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  cursor: pointer;
+}
+
+.logs-autoscroll input {
+  width: 12px;
+  height: 12px;
+  accent-color: var(--accent-primary);
+}
+
+.logs-count {
+  font-size: 10px;
+  color: var(--text-muted);
+  margin-left: auto;
+}
+
+.logs-panel-btn {
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-size: 10px;
+  display: flex;
+  align-items: center;
+}
+
+.logs-panel-btn:hover {
+  color: var(--text-primary);
+  background: var(--surface-3);
+}
+
+/* Log container */
+.logs-container {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 4px 0;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.logs-container::-webkit-scrollbar {
+  width: 6px;
+}
+
+.logs-container::-webkit-scrollbar-thumb {
+  background: var(--border-default);
+  border-radius: 3px;
+}
+
+.logs-empty {
+  padding: 20px;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-family: var(--font-sans);
+}
+
+/* Individual log line */
+.log-line {
+  display: flex;
+  gap: 8px;
+  padding: 1px 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.log-line:hover {
+  background: var(--surface-1);
+  white-space: normal;
+  word-break: break-all;
+}
+
+.log-time {
+  color: var(--text-muted);
+  flex-shrink: 0;
+  min-width: 75px;
+}
+
+.log-msg {
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Level colors */
+.log-info .log-msg {
+  color: var(--text-secondary);
+}
+
+.log-warn .log-msg {
+  color: var(--accent-warning);
+}
+
+.log-error .log-msg {
+  color: var(--accent-danger, #ff5c5c);
+}
+
+.log-debug .log-msg {
+  color: var(--text-muted);
+}
+
+/* Emoji/icon highlights in messages */
+.log-line .log-msg:has(🚀) { color: var(--accent-success); }

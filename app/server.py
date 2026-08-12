@@ -30,10 +30,30 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.notebook.executor import SandboxExecutor
 
 # --- Logging ---
+# Unified log format for all loggers (app + uvicorn access + uvicorn error)
+# This ensures consistent output in CloudWatch for the logs panel.
+LOG_FORMAT = "%(asctime)s [%(levelname)s] %(message)s"
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
+    format=LOG_FORMAT,
 )
+
+# Override uvicorn's formatters to match our format
+for _logger_name in ("uvicorn", "uvicorn.access", "uvicorn.error"):
+    _uv_logger = logging.getLogger(_logger_name)
+    _uv_logger.handlers = []  # Remove uvicorn's default handlers
+    _handler = logging.StreamHandler()
+    _handler.setFormatter(logging.Formatter(LOG_FORMAT))
+    _uv_logger.addHandler(_handler)
+    _uv_logger.propagate = False
+
+# Filter out noisy "Invalid HTTP request received" warnings (platform health probes)
+class _InvalidHttpFilter(logging.Filter):
+    def filter(self, record):
+        return "Invalid HTTP request received" not in record.getMessage()
+
+logging.getLogger("uvicorn.error").addFilter(_InvalidHttpFilter())
+
 logger = logging.getLogger(__name__)
 
 # =============================================================================
