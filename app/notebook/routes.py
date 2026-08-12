@@ -293,6 +293,8 @@ async def upload_file(request: Request):
     if result.success:
         shape_result = executor.execute(f"print(f'{{{var_name}}}.shape = {{{var_name}.shape}}')")
         logger.info(f"  ✓ Loaded {filename} as '{var_name}' {shape_result.output.strip() if shape_result.success else ''}")
+        # Refresh data catalog with newly uploaded file
+        request.app.state.data_catalog.refresh_local_files()
         return {
             "success": True,
             "variable_name": var_name,
@@ -360,3 +362,34 @@ async def list_packages():
     pkg_list = [{"name": p.get("name", ""), "version": p.get("version", "")} for p in packages]
     pkg_list.sort(key=lambda p: p["name"].lower())
     return {"packages": pkg_list, "count": len(pkg_list)}
+
+
+@router.get("/data-catalog")
+async def get_data_catalog(request: Request):
+    """
+    Return the full data catalog with discovered schemas.
+    
+    Progressive: returns whatever has been discovered so far.
+    Entries have status: "pending" (not yet discovered), "discovered" (schema available), "error".
+    
+    Query params:
+        source_id: (optional) return schema for a single source only
+    """
+    catalog = request.app.state.data_catalog
+    source_id = request.query_params.get("source_id")
+    
+    if source_id:
+        schema = catalog.get_schema(source_id)
+        if schema:
+            return schema
+        return JSONResponse(status_code=404, content={"error": f"Source not found: {source_id}"})
+    
+    return catalog.get_all()
+
+
+@router.post("/data-catalog/refresh-local")
+async def refresh_local_catalog(request: Request):
+    """Re-scan local /tmp files after a file upload."""
+    catalog = request.app.state.data_catalog
+    catalog.refresh_local_files()
+    return {"status": "refreshing"}

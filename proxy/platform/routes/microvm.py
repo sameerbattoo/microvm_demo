@@ -29,6 +29,8 @@ from proxy.platform.microvm_manager import (
     INGRESS_CONNECTOR, SHELL_INGRESS_CONNECTOR, EGRESS_CONNECTOR,
 )
 
+ATHENA_DB = os.environ.get("ATHENA_DB", "microvm_demo_db")
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["microvm"])
@@ -185,8 +187,33 @@ async def launch_microvm(request: Request):
             media_type="application/json",
         )
 
-    persistence_mode = os.environ.get("SESSION_PERSISTENCE_MODE", "eternal")
+    persistence_mode = os.environ.get("SESSION_PERSISTENCE_MODE", "checkpoint")
     logger.info(f"Launching MicroVM for: {notebook_name} (memory: {memory_mib} MiB, image: {image_arn})")
+
+    # Pre-fetch data source list to pass to VM for background schema discovery
+    data_sources = {"s3": [], "dynamodb": [], "athena": []}
+    try:
+        s3_client = boto3.client("s3", region_name=AWS_REGION)
+        bucket_name = vm_manager.get_artifacts_bucket()
+        if bucket_name:
+            data_sources["artifact_bucket"] = bucket_name
+            paginator = s3_client.get_paginator("list_objects_v2")
+            for prefix in ["samples/", "user-data/"]:
+                for page in paginator.paginate(Bucket=bucket_name, Prefix=prefix, MaxKeys=50):
+                    for obj in page.get("Contents", []):
+                        key = obj["Key"]
+                        if key.endswith("/") or '/' in key[len(prefix):]:
+                            continue
+                        data_sources["s3"].append({"key": key, "bucket": bucket_name, "uri": f"s3://{bucket_name}/{key}", "size_bytes": obj["Size"]})
+        ddb_client = boto3.client("dynamodb", region_name=AWS_REGION)
+        for t in ddb_client.list_tables().get("TableNames", []):
+            if "microvm" in t or "demo" in t:
+                data_sources["dynamodb"].append({"name": t, "region": AWS_REGION})
+        glue_client = boto3.client("glue", region_name=AWS_REGION)
+        for t in glue_client.get_tables(DatabaseName=ATHENA_DB).get("TableList", []):
+            data_sources["athena"].append({"name": t["Name"], "database": ATHENA_DB, "region": AWS_REGION})
+    except Exception as e:
+        logger.warning(f"Failed to pre-fetch datasources for VM: {e}")
 
     try:
         client = vm_manager.get_lambda_client()
@@ -209,6 +236,7 @@ async def launch_microvm(request: Request):
                 "artifacts_bucket": vm_manager.get_artifacts_bucket(),
                 "secrets": secrets,
                 "env_vars": env_vars,
+                "data_sources": data_sources,
             }),
         }
         if EXEC_ROLE_ARN:
@@ -499,14 +527,14 @@ async def list_instances(request: Request):
         return {
             "instances": instances,
             "total_cost": vm_manager.cost_tracker.get_total_cost(),
-            "persistence_mode": os.environ.get("SESSION_PERSISTENCE_MODE", "eternal"),
+            "persistence_mode": os.environ.get("SESSION_PERSISTENCE_MODE", "checkpoint"),
         }
     except Exception as e:
         logger.error(f"Failed to list instances: {e}")
         return {
             "instances": vm_manager.active_microvms,
             "total_cost": vm_manager.cost_tracker.get_total_cost(),
-            "persistence_mode": os.environ.get("SESSION_PERSISTENCE_MODE", "eternal"),
+            "persistence_mode": os.environ.get("SESSION_PERSISTENCE_MODE", "checkpoint"),
         }
 
 

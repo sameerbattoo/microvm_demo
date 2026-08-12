@@ -242,7 +242,10 @@ def fix_error(code: str, error: str, context: dict) -> str:
         if data_sources.get("athena"):
             for t in data_sources["athena"][:5]:
                 db = t.get("database", "")
-                ds_lines.append(f"  Athena: {db}.{t.get('name', '')}")
+                cols = t.get("columns", [])
+                col_names = ", ".join(c.get("name", "") for c in cols[:8]) if cols and isinstance(cols[0], dict) else ""
+                col_info = f" [{col_names}]" if col_names else ""
+                ds_lines.append(f"  Athena: {db}.{t.get('name', '')}{col_info}")
         if ds_lines:
             context_section += f"\n<available_data_sources>\n" + "\n".join(ds_lines) + "\n</available_data_sources>\n"
 

@@ -140,9 +140,13 @@ app.add_middleware(
 app.state.executor = executor
 app.state.session_state = session_state
 
-# Checkpoint manager (class-based — holds refs to executor + session_state)
+# Data catalog (background schema discovery — populated by /run hook)
+from app.notebook.data_catalog import DataCatalog
+app.state.data_catalog = DataCatalog()
+
+# Checkpoint manager (class-based — holds refs to executor + session_state + data_catalog)
 from app.platform.checkpoint import CheckpointManager
-app.state.checkpoint_manager = CheckpointManager(executor, session_state)
+app.state.checkpoint_manager = CheckpointManager(executor, session_state, data_catalog=app.state.data_catalog)
 
 # --- Register route modules ---
 from app.platform.hooks import router as hooks_router, proxy_router as hooks_proxy_router

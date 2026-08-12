@@ -77,13 +77,13 @@ async def hook_run(request: Request):
         payload = json.loads(run_payload)
         session_state["session_id"] = payload.get("session_id", run_payload)
         session_state["checkpoint_enabled"] = payload.get("checkpoint_enabled", False)
-        session_state["persistence_mode"] = payload.get("persistence_mode", "eternal")
+        session_state["persistence_mode"] = payload.get("persistence_mode", "checkpoint")
         session_state["artifacts_bucket"] = payload.get("artifacts_bucket")
         restore_from = payload.get("restore_from")
     except (json.JSONDecodeError, TypeError):
         session_state["session_id"] = run_payload
         session_state["checkpoint_enabled"] = False
-        session_state["persistence_mode"] = "eternal"
+        session_state["persistence_mode"] = "checkpoint"
 
     logger.info(f"🚀 HOOK /run — Sandbox started")
     logger.info(f"   MicroVM ID: {session_state['microvm_id']}")
@@ -141,6 +141,12 @@ async def hook_run(request: Request):
                         logger.warning(f"   Failed to fetch secret {arn}: {e}")
     except Exception as e:
         logger.warning(f"   Failed to inject env vars/secrets: {e}")
+
+    # Start background data catalog schema discovery
+    data_sources = payload.get("data_sources", {})
+    if data_sources:
+        logger.info(f"   📊 Starting data catalog discovery ({len(data_sources.get('s3', []))} S3, {len(data_sources.get('dynamodb', []))} DynamoDB, {len(data_sources.get('athena', []))} Athena)")
+        request.app.state.data_catalog.start_discovery(data_sources)
 
     return {"status": "running", "session_id": session_state["session_id"]}
 

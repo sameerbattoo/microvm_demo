@@ -180,6 +180,9 @@ async def get_datasource_schema(source_type: str, source_id: str, request: Reque
     """
     Get column schema for a specific data source.
 
+    First tries the VM's data catalog (pre-discovered schemas) for instant response.
+    Falls back to direct AWS API calls if the VM catalog doesn't have it.
+
     Args:
         source_type: 'athena', 'dynamodb', 's3', 'local'
         source_id: Table name, S3 URI, or file path
@@ -203,6 +206,30 @@ async def get_datasource_schema(source_type: str, source_id: str, request: Reque
     )
     from dataclasses import asdict
     import httpx
+
+    vm_manager = request.app.state.vm_manager
+
+    # --- Try VM data catalog first (instant, pre-discovered) ---
+    if session_id:
+        session_vm = vm_manager.get_session_vm(session_id)
+        if session_vm:
+            try:
+                token = vm_manager.get_auth_token(session_vm["vm_id"])
+                async with httpx.AsyncClient(timeout=5.0) as client:
+                    resp = await client.get(
+                        f"https://{session_vm['endpoint']}/data-catalog",
+                        headers={"X-aws-proxy-auth": token},
+                        params={"source_id": source_id},
+                    )
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        # Only return if schema has been discovered (not pending)
+                        if data.get("status") == "discovered" and data.get("columns"):
+                            return data
+            except Exception:
+                pass  # Fall through to direct provider
+
+    # --- Fallback: direct provider (original approach) ---
 
     # For local files, we need to execute code on the VM
     if source_type == "local":
@@ -266,6 +293,38 @@ async def get_datasource_schema(source_type: str, source_id: str, request: Reque
         "row_count": schema.row_count,
         "size": schema.size,
     }
+
+
+@router.get("/datasources/catalog")
+async def get_full_catalog(request: Request):
+    """
+    Get the full data catalog from the VM (all sources with discovered schemas).
+    Proxies GET /data-catalog from the active VM for the given session.
+    Returns the progressive catalog — entries may still be "pending" if discovery is in progress.
+    """
+    import httpx
+
+    session_id = request.headers.get("X-Session-Id", "")
+    if not session_id:
+        return Response(content='{"error": "X-Session-Id header required"}', status_code=400, media_type="application/json")
+
+    vm_manager = request.app.state.vm_manager
+    session_vm = vm_manager.get_session_vm(session_id)
+    if not session_vm:
+        return Response(content='{"error": "No active VM for this session"}', status_code=404, media_type="application/json")
+
+    try:
+        token = vm_manager.get_auth_token(session_vm["vm_id"])
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(
+                f"https://{session_vm['endpoint']}/data-catalog",
+                headers={"X-aws-proxy-auth": token},
+            )
+            if resp.status_code == 200:
+                return resp.json()
+            return Response(content=resp.text, status_code=resp.status_code, media_type="application/json")
+    except Exception as e:
+        return Response(content=f'{{"error": "Failed to reach VM: {str(e)}"}}', status_code=502, media_type="application/json")
 
 
 @router.get("/datasources/snippet")

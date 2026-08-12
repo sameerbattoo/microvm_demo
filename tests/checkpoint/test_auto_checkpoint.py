@@ -519,6 +519,22 @@ def main():
     else:
         checks.append(("local file", False))
         log(f"  ❌ File check failed: {result.get('error')}")
+    # Check data catalog restored with local file schema
+    try:
+        catalog_resp = requests.get(f"{PROXY_URL}/datasources/catalog", headers={"X-Session-Id": new_session_id}, timeout=10)
+        if catalog_resp.status_code == 200:
+            catalog = catalog_resp.json()
+            discovered = catalog.get("discovered", 0)
+            total = catalog.get("total", 0)
+            local_entries = [e for e in catalog.get("entries", []) if e.get("source_type") == "local"]
+            checks.append(("data catalog restored", discovered > 0))
+            log(f"  {"\u2713" if discovered > 0 else "\u274c"} Data catalog: {discovered}/{total} sources, {len(local_entries)} local files")
+        else:
+            checks.append(("data catalog restored", False))
+            log(f"  \u274c Data catalog endpoint returned {catalog_resp.status_code}")
+    except Exception as e:
+        checks.append(("data catalog restored", False))
+        log(f"  \u274c Data catalog check failed: {e}")
 
     # Check installed package (tabulate)
     with timed("Verify installed package") as t:

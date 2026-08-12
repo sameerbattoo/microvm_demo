@@ -88,9 +88,10 @@ class CheckpointManager:
     need to be passed to every method call.
     """
 
-    def __init__(self, executor, session_state: dict, *, skip_display_objects: bool = True):
+    def __init__(self, executor, session_state: dict, *, skip_display_objects: bool = True, data_catalog=None):
         self._executor = executor
         self._session_state = session_state
+        self._data_catalog = data_catalog
         self._bucket: str | None = None
         self._skip_display_objects = skip_display_objects
         self._user_installed_packages: list[str] = []  # Packages installed via /install endpoint
@@ -254,6 +255,15 @@ class CheckpointManager:
             ContentType="application/json",
         )
         step_timings["metadata"] = _time.perf_counter() - t0
+
+        # 5. Save data catalog (discovered schemas — avoids re-discovery on new VM)
+        t0 = _time.perf_counter()
+        if self._data_catalog and self._data_catalog.discovery_complete:
+            catalog_data = json.dumps(self._data_catalog.get_all())
+            s3.put_object(Bucket=self.bucket, Key=f"{prefix}/data_catalog.json", Body=catalog_data, ContentType="application/json")
+            logger.info(f"   Data catalog: saved ({len(catalog_data)} bytes)")
+        step_timings["data_catalog"] = _time.perf_counter() - t0
+
         total_time = sum(step_timings.values())
         logger.info(f"   ✅ Checkpoint complete: s3://{self.bucket}/{prefix}/ ({total_time*1000:.0f}ms total)")
         logger.info(f"   ⏱  Breakdown: serialize={step_timings['serialize']*1000:.0f}ms, upload_pkl={step_timings['upload_pkl']*1000:.0f}ms, archive={step_timings['archive_files']*1000:.0f}ms, packages={step_timings['packages']*1000:.0f}ms, metadata={step_timings['metadata']*1000:.0f}ms")
@@ -339,6 +349,35 @@ class CheckpointManager:
         except Exception as e:
             logger.warning(f"   Package restore warning: {e}")
             step_timings["packages"] = _time.perf_counter() - t0 if 't0' in dir() else 0
+
+        # 4. Restore data catalog (pre-discovered schemas)
+        try:
+            t0 = _time.perf_counter()
+            resp = s3.get_object(Bucket=self.bucket, Key=f"{prefix}/data_catalog.json")
+            catalog_json = json.loads(resp["Body"].read().decode("utf-8"))
+            if self._data_catalog and catalog_json.get("entries"):
+                from app.notebook.data_catalog import CatalogEntry, ColumnInfo
+                for entry_data in catalog_json["entries"]:
+                    entry = CatalogEntry(
+                        source_type=entry_data["source_type"],
+                        source_id=entry_data["source_id"],
+                        display_name=entry_data["display_name"],
+                        columns=[ColumnInfo(**c) for c in entry_data.get("columns", [])],
+                        row_count=entry_data.get("row_count"),
+                        size=entry_data.get("size", ""),
+                        status=entry_data.get("status", "discovered"),
+                        metadata=entry_data.get("metadata", {}),
+                    )
+                    self._data_catalog._entries[entry.source_id] = entry
+                self._data_catalog._discovery_complete = True
+                logger.info(f"   Data catalog: restored {len(catalog_json['entries'])} entries")
+            step_timings["data_catalog"] = _time.perf_counter() - t0
+        except s3.exceptions.NoSuchKey:
+            logger.info("   No data catalog found (will re-discover)")
+            step_timings["data_catalog"] = 0
+        except Exception as e:
+            logger.warning(f"   Data catalog restore warning: {e}")
+            step_timings["data_catalog"] = 0
 
         total_time = sum(step_timings.values())
         logger.info(f"   ✅ Session restored from: {session_id} ({total_time*1000:.0f}ms total)")

@@ -353,6 +353,29 @@ def main():
                 p, tot = int(parts[0]), int(parts[1])
                 record_check("R1: All variables survived", p == tot)
     log("")
+    # Verify data catalog survived rotation (schemas should persist)
+    try:
+        catalog_resp = requests.get(f"{PROXY_URL}/datasources/catalog", headers={"X-Session-Id": session_id}, timeout=10)
+        if catalog_resp.status_code == 200:
+            catalog = catalog_resp.json()
+            discovered = catalog.get("discovered", 0)
+            total = catalog.get("total", 0)
+            local_entries = [e for e in catalog.get("entries", []) if e.get("source_type") == "local"]
+            csv_entry = next((e for e in local_entries if "rotation_test" in e.get("source_id", "")), None)
+            catalog_ok = csv_entry is not None and csv_entry.get("status") == "discovered"
+            record_check("R1: Data catalog survived rotation", catalog_ok)
+            if catalog_ok:
+                cols = [c["name"] for c in csv_entry.get("columns", [])]
+                log(f"  \u2713 Data catalog: rotation_test.csv columns={cols}")
+            else:
+                log(f"  \u26a0 Data catalog: rotation_test.csv not found or not discovered (total={total}, local={len(local_entries)})")
+        else:
+            record_check("R1: Data catalog survived rotation", False)
+            log(f"  \u274c Data catalog endpoint returned {catalog_resp.status_code}")
+    except Exception as e:
+        record_check("R1: Data catalog survived rotation", False)
+        log(f"  \u274c Data catalog check failed: {e}")
+    log("")
 
     # ================================================================
     # ROTATION 2 SETUP: Package install + SQL + mutations (VM2)

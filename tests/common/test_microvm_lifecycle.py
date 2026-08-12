@@ -321,6 +321,25 @@ def main():
     log("  ✓ Checkpoint state created")
     print()
 
+    # Verify data catalog is populated (background discovery should have completed)
+    log("TEST 10b: Verify data catalog is populated")
+    time.sleep(3)
+    try:
+        catalog_resp = requests.get(f"{PROXY_URL}/datasources/catalog", headers={"X-Session-Id": vm2_session}, timeout=10)
+        if catalog_resp.status_code == 200:
+            catalog = catalog_resp.json()
+            discovered = catalog.get("discovered", 0)
+            total = catalog.get("total", 0)
+            log(f"  Data catalog: {discovered}/{total} sources discovered (complete={catalog.get('discovery_complete')})")
+            if discovered > 0:
+                log("  \u2713 Data catalog populated before checkpoint")
+            else:
+                log("  \u26a0 Data catalog empty (discovery may still be in progress)")
+        else:
+            log(f"  \u26a0 Catalog endpoint returned {catalog_resp.status_code}")
+    except Exception as e:
+        log(f"  \u26a0 Could not check catalog: {e}")
+    print()
     # Capture the computed value for later comparison
     vars_before = get_variables(vm2_session).get("variables", {})
     computed_before = vars_before.get("computed", {}).get("value", "")
@@ -408,6 +427,24 @@ def main():
                 log("  (Restore may require specific namespace serialization support)")
         else:
             log(f"  ⚠ Execution after restore failed: {result.get('error')}")
+        print()
+        # --- 13b. Validate data catalog restored ---
+        log("TEST 13b: Verify data catalog restored from checkpoint")
+        try:
+            catalog_resp = requests.get(f"{PROXY_URL}/datasources/catalog", headers={"X-Session-Id": vm3_session}, timeout=10)
+            if catalog_resp.status_code == 200:
+                catalog = catalog_resp.json()
+                discovered = catalog.get("discovered", 0)
+                total = catalog.get("total", 0)
+                log(f"  Data catalog after restore: {discovered}/{total} sources")
+                if discovered > 0:
+                    log("  \u2713 Data catalog restored from checkpoint!")
+                else:
+                    log("  \u26a0 Data catalog empty after restore (will re-discover on next launch)")
+            else:
+                log(f"  \u26a0 Catalog endpoint returned {catalog_resp.status_code} (VM may still be starting)")
+        except Exception as e:
+            log(f"  \u26a0 Could not check catalog after restore: {e}")
         print()
 
         # --- 14. Validate packages ---

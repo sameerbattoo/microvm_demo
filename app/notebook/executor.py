@@ -69,7 +69,7 @@ class SandboxExecutor:
     def _inject_helpers(self):
         """Inject helper functions into the namespace so they're available in every cell."""
         try:
-            from app import helpers
+            from app.notebook import helpers
             # Add all public functions from helpers to the namespace
             for name in dir(helpers):
                 if not name.startswith('_'):

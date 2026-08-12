@@ -253,7 +253,7 @@ class MicrovmManager:
             "notebook_name": notebook_name,
             "session_id": session_id,
             "checkpoint_enabled": True,
-            "persistence_mode": "eternal",
+            "persistence_mode": "checkpoint",
             "artifacts_bucket": bucket,
         })
 

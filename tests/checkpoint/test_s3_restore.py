@@ -233,6 +233,35 @@ print(f"File size: {os.path.getsize('/tmp/test_products.csv')} bytes")
     restore_session_id = session_id
 
     # ================================================================
+    # PHASE 2b: Verify data catalog discovered the local file
+    # ================================================================
+    log("")
+    log("PHASE 2b: Triggering local file catalog refresh + verify...")
+    # Trigger refresh so the catalog picks up the new file
+    try:
+        requests.post(f"{PROXY_URL}/proxy/data-catalog/refresh-local", headers={"X-Session-Id": session_id}, timeout=5)
+    except Exception:
+        pass
+    time.sleep(3)  # Give background scan time
+    try:
+        catalog_resp = requests.get(f"{PROXY_URL}/datasources/catalog", headers={"X-Session-Id": session_id}, timeout=10)
+        if catalog_resp.status_code == 200:
+            catalog = catalog_resp.json()
+            entries = catalog.get("entries", [])
+            local_entries = [e for e in entries if e.get("source_type") == "local"]
+            log(f"  Catalog total: {catalog.get('total', 0)} sources, local files: {len(local_entries)}")
+            products_entry = next((e for e in local_entries if "test_products" in e.get("source_id", "")), None)
+            if products_entry and products_entry.get("status") == "discovered":
+                cols = [c["name"] for c in products_entry.get("columns", [])]
+                log(f"  \u2705 test_products.csv discovered: columns={cols}")
+            else:
+                log(f"  \u26a0 test_products.csv not yet discovered (status={products_entry.get('status') if products_entry else 'missing'})")
+        else:
+            log(f"  \u26a0 Catalog endpoint returned {catalog_resp.status_code}")
+    except Exception as e:
+        log(f"  \u26a0 Could not check catalog: {e}")
+
+    # ================================================================
     # PHASE 3: Terminate MicroVM (triggers checkpoint)
     # ================================================================
     log("")
@@ -417,6 +446,26 @@ print(f'rows={len(rows)}, header={rows[0]}, first_data={rows[1]}')
         log(f"  ❌ File content check failed: {result.get('error') or result.get('output')}")
 
     # ================================================================
+    # Check data catalog restored
+    checks_total += 1
+    try:
+        catalog_resp = requests.get(f"{PROXY_URL}/datasources/catalog", headers={"X-Session-Id": restore_session_id_new}, timeout=10)
+        if catalog_resp.status_code == 200:
+            catalog = catalog_resp.json()
+            entries = catalog.get("entries", [])
+            local_entries = [e for e in entries if e.get("source_type") == "local"]
+            products_entry = next((e for e in local_entries if "test_products" in e.get("source_id", "")), None)
+            if products_entry and products_entry.get("columns"):
+                cols = [c["name"] for c in products_entry.get("columns", [])]
+                log(f"  \u2705 Data catalog restored: test_products.csv columns={cols}")
+                checks_passed += 1
+            else:
+                log(f"  \u274c Data catalog NOT restored (test_products.csv missing or no columns)")
+        else:
+            log(f"  \u274c Catalog endpoint returned {catalog_resp.status_code}")
+    except Exception as e:
+        log(f"  \u274c Data catalog check failed: {e}")
+    print()
     # PHASE 6b: Fetch internal checkpoint timings from the restored VM
     # ================================================================
     log("")

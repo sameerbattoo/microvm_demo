@@ -207,15 +207,75 @@ def install_package(package_name: str) -> str:
 @tool
 def get_available_data_sources() -> str:
     """
-    Get the list of available data sources (S3 files, DynamoDB tables, Athena tables, local files).
-    Use this to understand what data the user can access from this notebook.
-    ONLY reports user data files in /tmp/ — never system files.
+    Get the list of available data sources with full schema information (columns, types, samples).
+    Use this to understand what data the user can access and the exact column names/types.
+    Call this BEFORE generating code that references data sources — it gives you exact column names.
 
     Returns:
-        Formatted list of available data sources with schema info where available.
+        Formatted list of data sources with column schemas where discovered.
     """
-    data_sources = _get_context().get("data_sources")
-    uploaded_files = _get_context().get("uploaded_files", [])
+    import httpx
+
+    context = _get_context()
+    session_id = context.get("session_id", "")
+    proxy_url = context.get("proxy_url", "http://localhost:8081")
+
+    # Try fetching the full data catalog from the VM (has schema info)
+    catalog = None
+    if session_id:
+        try:
+            resp = httpx.get(
+                f"{proxy_url}/datasources/catalog",
+                headers={"X-Session-Id": session_id},
+                timeout=5.0,
+            )
+            if resp.status_code == 200:
+                catalog = resp.json()
+        except Exception:
+            pass
+
+    # If we got the catalog with discovered schemas, use it
+    if catalog and catalog.get("entries"):
+        lines = []
+        # Group by source type
+        by_type = {}
+        for entry in catalog["entries"]:
+            st = entry["source_type"]
+            if st not in by_type:
+                by_type[st] = []
+            by_type[st].append(entry)
+
+        type_labels = {"s3": "S3 Files", "dynamodb": "DynamoDB Tables", "athena": "Athena Tables", "local": "Local Files (/tmp/)"}
+
+        for src_type, label in type_labels.items():
+            entries = by_type.get(src_type, [])
+            if not entries:
+                continue
+            lines.append(f"{label}:")
+            for entry in entries:
+                name = entry.get("display_name", entry["source_id"])
+                size = entry.get("size", "")
+                row_count = entry.get("row_count")
+                status = entry.get("status", "pending")
+                size_info = f" ({size})" if size else ""
+                row_info = f", {row_count} rows" if row_count else ""
+
+                if status == "discovered" and entry.get("columns"):
+                    cols = entry["columns"]
+                    col_summary = ", ".join(f"{c['name']}:{c['dtype']}" for c in cols[:12])
+                    if len(cols) > 12:
+                        col_summary += f", ... ({len(cols)} total)"
+                    lines.append(f"  - {entry['source_id']}{size_info}{row_info}")
+                    lines.append(f"    Columns: [{col_summary}]")
+                else:
+                    lines.append(f"  - {entry['source_id']}{size_info}{row_info} [{status}]")
+            lines.append("")
+
+        return "\n".join(lines) if lines else "No data sources found."
+
+    # Fallback: basic info from frontend-passed context (no schema)
+    data_sources = context.get("data_sources")
+    uploaded_files = context.get("uploaded_files", [])
 
     if not data_sources and not uploaded_files:
         return "No data source information available."
@@ -252,10 +312,9 @@ def get_available_data_sources() -> str:
             lines.append("")
 
         if athena:
-            lines.append("Athena Tables (query via boto3 or awswrangler):")
+            lines.append("Athena Tables:")
             for t in athena:
                 cols = t.get('columns', [])
-                # Columns can be dicts ({"name": "x", "type": "y"}) or strings
                 if cols and isinstance(cols[0], dict):
                     col_names = [c.get('name', '') for c in cols[:10]]
                 else:
