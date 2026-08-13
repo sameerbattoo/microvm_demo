@@ -480,11 +480,11 @@ def sample_data(name: str = None) -> pd.DataFrame:
     """
     Load a built-in sample dataset from S3.
     
-    Available: 'sales', 'customers', 'web_traffic', 'ab_test'
+    Dynamically discovers available datasets from the S3 samples/ prefix.
     
     Example:
-        df = sample_data('sales')
-        df = sample_data()  # lists available datasets
+        df = sample_data()       # lists available datasets
+        df = sample_data('orders')
     """
     # Discover bucket from account
     try:
@@ -492,41 +492,62 @@ def sample_data(name: str = None) -> pd.DataFrame:
         account = sts.get_caller_identity()['Account']
         bucket = f"microvm-sandbox-artifacts-{account}-{_REGION}"
     except Exception:
-        bucket = None
+        print("  Could not determine S3 bucket. Check AWS credentials.")
+        return None
 
-    datasets = {
-        'sales': {'local': '/tmp/sales_data.csv', 's3_key': 'samples/sales_data.csv'},
-        'customers': {'local': '/tmp/customers.csv', 's3_key': 'samples/customers.csv'},
-        'web_traffic': {'local': '/tmp/web_traffic.csv', 's3_key': 'samples/web_traffic.csv'},
-        'ab_test': {'local': '/tmp/ab_test_results.csv', 's3_key': 'samples/ab_test_results.csv'},
-    }
-    
+    # Dynamically discover available sample datasets from S3
+    s3 = boto3.client('s3', region_name=_REGION)
+    try:
+        resp = s3.list_objects_v2(Bucket=bucket, Prefix='samples/', Delimiter='/')
+        # Collect CSV files at top level and in sub-prefixes
+        datasets = {}
+        # Top-level CSV files in samples/
+        for obj in resp.get('Contents', []):
+            key = obj['Key']
+            if key.endswith('.csv'):
+                fname = key.split('/')[-1]
+                dataset_name = fname.replace('.csv', '')
+                datasets[dataset_name] = key
+        # Sub-prefix folders (e.g., samples/orders/orders.csv)
+        for prefix_info in resp.get('CommonPrefixes', []):
+            prefix = prefix_info['Prefix']  # e.g., samples/orders/
+            sub_resp = s3.list_objects_v2(Bucket=bucket, Prefix=prefix)
+            for obj in sub_resp.get('Contents', []):
+                key = obj['Key']
+                if key.endswith('.csv'):
+                    fname = key.split('/')[-1]
+                    dataset_name = fname.replace('.csv', '')
+                    datasets[dataset_name] = key
+    except Exception as e:
+        print(f"  Could not list sample datasets from S3: {e}")
+        return None
+
     if name is None:
-        print("Available datasets:", ', '.join(datasets.keys()))
-        print("Usage: df = sample_data('sales')")
+        print(f"Available datasets: {', '.join(sorted(datasets.keys()))}")
+        print("Usage: df = sample_data('dataset_name')")
         return None
-    
+
     if name not in datasets:
-        print(f"Dataset '{name}' not found. Available: {', '.join(datasets.keys())}")
+        print(f"Dataset '{name}' not found. Available: {', '.join(sorted(datasets.keys()))}")
         return None
 
-    info = datasets[name]
+    s3_key = datasets[name]
+    local_path = f"/tmp/{name}.csv"
 
-    # Try local first (faster if already downloaded)
-    if os.path.exists(info['local']):
-        return pd.read_csv(info['local'])
+    # Try local cache first (faster if already downloaded)
+    if os.path.exists(local_path):
+        return pd.read_csv(local_path)
 
-    # Fall back to S3
-    if bucket:
-        try:
-            df = read_s3_csv(bucket, info['s3_key'])
-            # Cache locally for next time
-            df.to_csv(info['local'], index=False)
-            return df
-        except Exception as e:
-            print(f"  Warning: Could not load from S3: {e}")
+    # Download from S3
+    try:
+        df = read_s3_csv(bucket, s3_key)
+        # Cache locally for next time
+        df.to_csv(local_path, index=False)
+        return df
+    except Exception as e:
+        print(f"  Warning: Could not load from S3: {e}")
 
-    print(f"  Dataset '{name}' not available locally or from S3.")
+    print(f"  Dataset '{name}' not available.")
     return None
 
 

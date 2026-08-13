@@ -1,11 +1,11 @@
 {
   "name": "AWS Data Sources",
-  "description": "Connect to S3, DynamoDB, and Athena from the MicroVM. Merge data across all 3 sources for unified analysis.",
-  "savedAt": "2026-07-16T00:00:00.000Z",
+  "description": "Connect to S3, DynamoDB, and Athena from the MicroVM using built-in helpers. Merge data across all sources for unified e-commerce analysis.",
+  "savedAt": "2026-08-13T00:00:00.000Z",
   "cells": [
     {
       "type": "markdown",
-      "code": "# AWS Multi-Source Data Pipeline\n\nThis notebook demonstrates connecting to **3 AWS data sources** from a single MicroVM sandbox:\n\n| Source | Service | Data |\n|--------|---------|------|\n| S3 | CSV files | 500 sales orders |\n| DynamoDB | NoSQL scan | 10 product catalog items |\n| Athena | SQL query | 200 customers |\n\nAll services are accessed via the MicroVM's **execution role** — no credentials to manage.",
+      "code": "# AWS Multi-Source E-Commerce Pipeline\n\nThis notebook demonstrates connecting to **4 AWS data sources** from a single MicroVM sandbox using built-in helper functions:\n\n| Source | Service | Data | Helper |\n|--------|---------|------|--------|\n| Athena | SQL tables | orders (2000), customers (500), products (100) | `read_athena(sql)` |\n| S3 | CSV files | clickstream (10K), inventory (500), marketing (20) | `read_s3_csv(bucket, key)` |\n| DynamoDB | NoSQL | reviews (200), recommendations (522) | `read_dynamodb(table)` |\n| Local | /tmp files | sales_targets, competitor_prices | `read_local(path)` |\n\nAll services are accessed via the MicroVM's **execution role** \u2014 no credentials to manage.",
       "output": null,
       "error": null,
       "html": null,
@@ -14,7 +14,7 @@
     },
     {
       "type": "code",
-      "code": "import boto3\nimport pandas as pd\nimport matplotlib.pyplot as plt\nimport time\n\n# The MicroVM has an execution role with AWS credentials injected automatically.\nsession = boto3.Session(region_name='us-west-2')\nsts = session.client('sts')\nidentity = sts.get_caller_identity()\nprint(f\"MicroVM is running as: {identity['Arn']}\")\nprint(f\"Account: {identity['Account']}\")\n\naccount = identity['Account']\nbucket = f'microvm-sandbox-artifacts-{account}-us-west-2'",
+      "code": "# Check identity and environment\ninfo = whoami()\nprint(f\"Account: {info['account']}\")\nprint(f\"Region:  {info['region']}\")\nprint(f\"Bucket:  {info['bucket']}\")",
       "output": null,
       "error": null,
       "html": null,
@@ -23,7 +23,7 @@
     },
     {
       "type": "markdown",
-      "code": "## Source 1: S3\n\nRead sales order data directly from a CSV file in S3. The execution role has `s3:GetObject` permission on the artifacts bucket.",
+      "code": "## Source 1: Athena (SQL Tables)\n\nQuery structured transactional data using standard SQL. The `read_athena()` helper handles query execution, polling, and returns a DataFrame.",
       "output": null,
       "error": null,
       "html": null,
@@ -32,7 +32,7 @@
     },
     {
       "type": "code",
-      "code": "s3_client = session.client('s3')\nobj = s3_client.get_object(Bucket=bucket, Key='samples/sales_data.csv')\nsales = pd.read_csv(obj['Body'])\nsales['date'] = pd.to_datetime(sales['date'])\nsales['revenue'] = sales['quantity'] * sales['unit_price'] * (1 - sales['discount'])\nprint(f\"\\u2713 S3: Loaded {len(sales)} orders\")\nsales.head()",
+      "code": "# Load all 3 Athena tables\norders = read_athena(\"SELECT * FROM microvm_demo_db.orders\")\ncustomers = read_athena(\"SELECT * FROM microvm_demo_db.customers\")\nproducts = read_athena(\"SELECT * FROM microvm_demo_db.products\")\n\nprint(f\"\u2713 Orders:    {orders.shape[0]} rows \u00d7 {orders.shape[1]} cols\")\nprint(f\"\u2713 Customers: {customers.shape[0]} rows \u00d7 {customers.shape[1]} cols\")\nprint(f\"\u2713 Products:  {products.shape[0]} rows \u00d7 {products.shape[1]} cols\")\norders.head()",
       "output": null,
       "error": null,
       "html": null,
@@ -41,7 +41,7 @@
     },
     {
       "type": "markdown",
-      "code": "## Source 2: DynamoDB\n\nScan the product catalog table. DynamoDB returns `Decimal` types which we convert to float for pandas compatibility.",
+      "code": "## Source 2: DynamoDB (NoSQL)\n\nScan product reviews and recommendations. The `read_dynamodb()` helper handles Decimal conversion and pagination.",
       "output": null,
       "error": null,
       "html": null,
@@ -50,7 +50,7 @@
     },
     {
       "type": "code",
-      "code": "dynamo = session.resource('dynamodb')\ntable = dynamo.Table('microvm-demo-data')\nresponse = table.scan()\nproducts = pd.DataFrame(response['Items'])\n\n# Fix Decimal types from DynamoDB\nfor col in ['price', 'stock', 'rating']:\n    products[col] = products[col].astype(float)\n\nprint(f\"\\u2713 DynamoDB: Loaded {len(products)} products\")\nproducts.sort_values('price', ascending=False)",
+      "code": "# Scan DynamoDB tables\nreviews = read_dynamodb('ecommerce-reviews')\nrecommendations = read_dynamodb('ecommerce-recommendations')\n\nprint(f\"\u2713 Reviews:         {len(reviews)} rows\")\nprint(f\"\u2713 Recommendations: {len(recommendations)} rows\")\nreviews.head()",
       "output": null,
       "error": null,
       "html": null,
@@ -59,7 +59,7 @@
     },
     {
       "type": "markdown",
-      "code": "## Source 3: Athena\n\nQuery customer data using standard SQL via Athena. The `athena_query()` helper:\n1. Starts the query execution\n2. Polls until completion\n3. Returns results as a pandas DataFrame\n\nThe `microvm-demo` workgroup has a pre-configured S3 output location, so no bucket needed in the query.",
+      "code": "## Source 3: S3 Files (Raw/Semi-Structured)\n\nRead operational and behavioral data stored as CSV files in S3.",
       "output": null,
       "error": null,
       "html": null,
@@ -68,7 +68,7 @@
     },
     {
       "type": "code",
-      "code": "athena = session.client('athena')\n\ndef athena_query(sql):\n    \"\"\"Run an Athena query and return results as a DataFrame.\"\"\"\n    exec_id = athena.start_query_execution(\n        QueryString=sql, WorkGroup='microvm-demo'\n    )['QueryExecutionId']\n    while athena.get_query_execution(QueryExecutionId=exec_id)['QueryExecution']['Status']['State'] in ('QUEUED', 'RUNNING'):\n        time.sleep(1)\n    results = athena.get_query_results(QueryExecutionId=exec_id)\n    columns = [c['Label'] for c in results['ResultSet']['ResultSetMetadata']['ColumnInfo']]\n    rows = [[f.get('VarCharValue', '') for f in r['Data']] for r in results['ResultSet']['Rows'][1:]]\n    return pd.DataFrame(rows, columns=columns)\n\ncustomers = athena_query(\"SELECT * FROM microvm_demo_db.customers\")\ncustomers['age'] = pd.to_numeric(customers['age'], errors='coerce')\ncustomers['lifetime_value'] = pd.to_numeric(customers['lifetime_value'], errors='coerce')\nprint(f\"\\u2713 Athena: Loaded {len(customers)} customers\")\ncustomers.head()",
+      "code": "# Get bucket name from environment\nimport os\naccount = os.environ.get('ACCOUNT_ID', whoami()['account'])\nbucket = f'microvm-sandbox-artifacts-{account}-us-west-2'\n\n# Load S3 files\nclickstream = read_s3_csv(bucket, 'samples/clickstream_events.csv')\ninventory = read_s3_csv(bucket, 'samples/inventory_daily.csv')\nmarketing = read_s3_csv(bucket, 'samples/marketing_campaigns.csv')\n\nprint(f\"\u2713 Clickstream: {len(clickstream)} events\")\nprint(f\"\u2713 Inventory:   {len(inventory)} daily snapshots\")\nprint(f\"\u2713 Marketing:   {len(marketing)} campaigns\")\nclickstream.head()",
       "output": null,
       "error": null,
       "html": null,
@@ -77,7 +77,7 @@
     },
     {
       "type": "markdown",
-      "code": "## Merge: All 3 Sources Combined\n\nJoin the data:\n- **Sales** (S3) enriched with **product ratings** (DynamoDB) via keyword matching\n- Then merged with **customer demographics** (Athena) on `customer_id`",
+      "code": "## Cross-Source Join: Orders \u00d7 Products \u00d7 Reviews\n\nJoin Athena orders with products, then enrich with DynamoDB review ratings.",
       "output": null,
       "error": null,
       "html": null,
@@ -86,7 +86,7 @@
     },
     {
       "type": "code",
-      "code": "# Build keyword mapping: DynamoDB product names -> generic sales product names\ndef match_product(product_name):\n    for generic in ['Laptop', 'Monitor', 'Tablet', 'Phone', 'Headphones', 'Keyboard', 'Webcam', 'Chair', 'Desk', 'Hub', 'Stand', 'Lamp']:\n        if generic.lower() in product_name.lower():\n            return generic\n    return None\n\nproducts['generic_name'] = products['name'].apply(match_product)\nrating_lookup = products.groupby('generic_name').agg(\n    avg_rating=('rating', 'mean'),\n    category=('category', 'first')\n)\n\n# Enrich sales with DynamoDB product metadata\nsales_enriched = sales.merge(rating_lookup, left_on='product', right_index=True, how='left')\nsales_enriched['category'] = sales_enriched['category'].fillna('Electronics')\nsales_enriched['avg_rating'] = sales_enriched['avg_rating'].fillna(4.0)\n\n# Merge with customer data from Athena\nsales_enriched = sales_enriched.merge(\n    customers[['customer_id', 'country', 'age', 'lifetime_value']],\n    on='customer_id', how='left'\n)\n\nprint(f\"\\u2713 Merged dataset: {len(sales_enriched)} rows \\u00d7 {len(sales_enriched.columns)} columns\")\nprint(f\"  Sources: S3 (orders) + DynamoDB (products) + Athena (customers)\")\nsales_enriched.head()",
+      "code": "# Join orders with products (both from Athena)\norder_details = orders.merge(products[['product_id', 'name', 'category', 'brand']], on='product_id', how='left')\n\n# Calculate average review rating per product from DynamoDB\navg_reviews = reviews.groupby('productId').agg(\n    avg_rating=('rating', 'mean'),\n    review_count=('reviewId', 'count')\n).reset_index()\n\n# Enrich with review data\norder_details = order_details.merge(\n    avg_reviews, left_on='product_id', right_on='productId', how='left'\n)\n\nprint(f\"\u2713 Merged dataset: {len(order_details)} rows \u00d7 {len(order_details.columns)} cols\")\nprint(f\"  Sources: Athena (orders + products) + DynamoDB (reviews)\")\norder_details[['order_id', 'product_id', 'name', 'category', 'total', 'avg_rating', 'review_count']].head(10)",
       "output": null,
       "error": null,
       "html": null,
@@ -95,7 +95,7 @@
     },
     {
       "type": "markdown",
-      "code": "## Analysis: Revenue by Country\n\nGroup by customer country (from Athena) and aggregate revenue (from S3 sales).",
+      "code": "## Analysis: Revenue by Category & Country\n\nUsing the merged data to analyze revenue patterns.",
       "output": null,
       "error": null,
       "html": null,
@@ -104,7 +104,16 @@
     },
     {
       "type": "code",
-      "code": "customer_orders = sales_enriched.groupby('customer_id').agg(\n    total_revenue=('revenue', 'sum'),\n    order_count=('order_id', 'count'),\n    avg_order_value=('revenue', 'mean'),\n    country=('country', 'first'),\n    age=('age', 'first'),\n    lifetime_value=('lifetime_value', 'first')\n).reset_index()\n\ncountry_summary = customer_orders.groupby('country').agg(\n    customers=('customer_id', 'count'),\n    total_revenue=('total_revenue', 'sum'),\n    avg_lifetime_value=('lifetime_value', 'mean'),\n    avg_age=('age', 'mean')\n).round(2).sort_values('total_revenue', ascending=False)\n\nprint(\"Revenue by Customer Country (Athena customers \\u00d7 S3 sales):\")\ncountry_summary",
+      "code": "# Revenue by category\norders['total'] = pd.to_numeric(orders['total'], errors='coerce')\ncategory_revenue = order_details.groupby('category').agg(\n    total_revenue=('total', 'sum'),\n    order_count=('order_id', 'count'),\n    avg_order=('total', 'mean')\n).round(2).sort_values('total_revenue', ascending=False)\n\nprint(\"Revenue by Product Category:\")\ncategory_revenue",
+      "output": null,
+      "error": null,
+      "html": null,
+      "image": null,
+      "executionNumber": null
+    },
+    {
+      "type": "code",
+      "code": "# Revenue by shipping country\ncountry_revenue = order_details.groupby('shipping_country').agg(\n    total_revenue=('total', 'sum'),\n    order_count=('order_id', 'count')\n).round(2).sort_values('total_revenue', ascending=False)\n\nplot_bar(country_revenue.reset_index(), x='shipping_country', y='total_revenue', title='Revenue by Shipping Country')",
       "output": null,
       "error": null,
       "html": null,
@@ -113,7 +122,7 @@
     },
     {
       "type": "markdown",
-      "code": "## Visualization: Multi-Source Dashboard\n\nFour charts using data from all three sources:\n1. Revenue by category *(DynamoDB metadata)*\n2. Revenue by country *(Athena customers)*\n3. Monthly trend *(S3 order dates)*\n4. Age vs lifetime value scatter *(Athena demographics)*",
+      "code": "## Visualization: Multi-Source Dashboard\n\nUsing `plot_*` helpers for interactive Plotly charts with data from all sources.",
       "output": null,
       "error": null,
       "html": null,
@@ -122,16 +131,7 @@
     },
     {
       "type": "code",
-      "code": "fig, axes = plt.subplots(2, 2, figsize=(14, 10))\ncolors = ['#89b4fa', '#a6e3a1', '#f9e2af', '#f38ba8', '#cba6f7', '#fab387']\n\n# 1. Revenue by Product Category (DynamoDB enrichment)\ncat_rev = sales_enriched.groupby('category')['revenue'].sum().sort_values(ascending=False)\naxes[0,0].bar(cat_rev.index, cat_rev.values, color=colors[:len(cat_rev)])\naxes[0,0].set_title('Revenue by Category\\n(DynamoDB product metadata)', color='white', fontsize=11)\naxes[0,0].set_ylabel('Revenue ($)', color='#a6adc8')\naxes[0,0].tick_params(colors='#a6adc8')\naxes[0,0].grid(axis='y', alpha=0.15)\n\n# 2. Revenue by Country (Athena customer data)\ntop_countries = country_summary.head(6)\naxes[0,1].barh(top_countries.index, top_countries['total_revenue'], color=colors)\naxes[0,1].set_title('Revenue by Customer Country\\n(Athena customer data)', color='white', fontsize=11)\naxes[0,1].set_xlabel('Revenue ($)', color='#a6adc8')\naxes[0,1].tick_params(colors='#a6adc8')\naxes[0,1].grid(axis='x', alpha=0.15)\n\n# 3. Monthly Trend (S3 sales data)\nsales_enriched['month'] = sales_enriched['date'].dt.to_period('M').astype(str)\nmonthly = sales_enriched.groupby('month')['revenue'].sum()\naxes[1,0].plot(range(len(monthly)), monthly.values, marker='o', linewidth=2, color='#89b4fa')\naxes[1,0].fill_between(range(len(monthly)), monthly.values, alpha=0.1, color='#89b4fa')\naxes[1,0].set_title('Monthly Revenue Trend\\n(S3 order data)', color='white', fontsize=11)\naxes[1,0].set_xlabel('Month', color='#a6adc8')\naxes[1,0].set_ylabel('Revenue ($)', color='#a6adc8')\naxes[1,0].set_xticks(range(0, len(monthly), 2))\naxes[1,0].set_xticklabels(monthly.index[::2], rotation=45)\naxes[1,0].tick_params(colors='#a6adc8')\naxes[1,0].grid(alpha=0.15)\n\n# 4. Customer Age vs Lifetime Value scatter (Athena data)\naxes[1,1].scatter(\n    customer_orders['age'], customer_orders['lifetime_value'],\n    c=customer_orders['total_revenue'], cmap='cool', alpha=0.6, s=30\n)\naxes[1,1].set_title('Age vs Lifetime Value\\n(Athena customers, colored by revenue)', color='white', fontsize=11)\naxes[1,1].set_xlabel('Age', color='#a6adc8')\naxes[1,1].set_ylabel('Lifetime Value ($)', color='#a6adc8')\naxes[1,1].tick_params(colors='#a6adc8')\naxes[1,1].grid(alpha=0.15)\n\nplt.suptitle('Multi-Source Analytics Dashboard\\nS3 + DynamoDB + Athena', color='white', fontsize=14, y=1.02)\nplt.tight_layout()\nplt.show()",
-      "output": null,
-      "error": null,
-      "html": null,
-      "image": null,
-      "executionNumber": null
-    },
-    {
-      "type": "markdown",
-      "code": "## Chart 2: Rating vs Revenue\n\nBubble chart showing the relationship between **product ratings** (from DynamoDB) and **total revenue** (from S3 sales). Bubble size represents order count.",
+      "code": "# Clickstream funnel (S3 data)\nfunnel = clickstream.groupby('action').size().reset_index(name='count').sort_values('count', ascending=False)\nplot_bar(funnel, x='action', y='count', title='Clickstream Event Distribution (S3)')",
       "output": null,
       "error": null,
       "html": null,
@@ -140,43 +140,7 @@
     },
     {
       "type": "code",
-      "code": "product_perf = sales_enriched.groupby('product').agg(\n    total_revenue=('revenue', 'sum'),\n    total_orders=('order_id', 'count'),\n    rating=('avg_rating', 'first')\n).reset_index()\n\nfig, ax = plt.subplots(figsize=(10, 5))\nscatter = ax.scatter(\n    product_perf['rating'], product_perf['total_revenue'],\n    s=product_perf['total_orders'] * 3, alpha=0.7,\n    c=range(len(product_perf)), cmap='viridis'\n)\n\nfor _, row in product_perf.iterrows():\n    ax.annotate(row['product'], (row['rating'], row['total_revenue']),\n                fontsize=9, color='#cdd6f4', ha='center', va='bottom')\n\nax.set_xlabel('Product Rating (DynamoDB)', color='#a6adc8', fontsize=11)\nax.set_ylabel('Total Revenue (S3 sales)', color='#a6adc8', fontsize=11)\nax.set_title('Product Rating vs Revenue\\n(bubble size = order count)', color='white', fontsize=13)\nax.tick_params(colors='#a6adc8')\nax.grid(alpha=0.15)\nplt.tight_layout()\nplt.show()",
-      "output": null,
-      "error": null,
-      "html": null,
-      "image": null,
-      "executionNumber": null
-    },
-    {
-      "type": "markdown",
-      "code": "## Bonus: Direct Athena SQL\n\nYou can run arbitrary SQL queries against any table in the `microvm_demo_db` database. Here we filter `web_traffic` for high-traffic days.",
-      "output": null,
-      "error": null,
-      "html": null,
-      "image": null,
-      "executionNumber": null
-    },
-    {
-      "type": "code",
-      "code": "web_traffic = athena_query(\"\"\"\n    SELECT date, visitors, page_views, bounce_rate, avg_session_min\n    FROM microvm_demo_db.web_traffic\n    WHERE visitors > 1000\n    ORDER BY visitors DESC\n    LIMIT 20\n\"\"\")\nweb_traffic['visitors'] = pd.to_numeric(web_traffic['visitors'])\nweb_traffic['page_views'] = pd.to_numeric(web_traffic['page_views'])\nprint(\"Top 20 high-traffic days (Athena SQL query):\")\nweb_traffic",
-      "output": null,
-      "error": null,
-      "html": null,
-      "image": null,
-      "executionNumber": null
-    },
-    {
-      "type": "markdown",
-      "code": "---\n\n## Summary\n\nAll 3 AWS data sources accessed seamlessly from a single MicroVM sandbox. The execution role handles authentication automatically.",
-      "output": null,
-      "error": null,
-      "html": null,
-      "image": null,
-      "executionNumber": null
-    },
-    {
-      "type": "code",
-      "code": "print(\"\\u2550\" * 50)\nprint(\"  Multi-Source Data Pipeline Complete\")\nprint(\"\\u2550\" * 50)\nprint(f\"\\n  Data Sources Used:\")\nprint(f\"    \\u2713 S3        \\u2014 {len(sales)} sales orders (CSV)\")\nprint(f\"    \\u2713 DynamoDB  \\u2014 {len(products)} products (NoSQL)\")\nprint(f\"    \\u2713 Athena    \\u2014 {len(customers)} customers (SQL query)\")\nprint(f\"\\n  Merged Dataset:\")\nprint(f\"    \\u2022 {len(sales_enriched)} rows \\u00d7 {len(sales_enriched.columns)} columns\")\nprint(f\"    \\u2022 Revenue range: ${sales_enriched['revenue'].min():.0f} - ${sales_enriched['revenue'].max():.0f}\")\nprint(f\"    \\u2022 Countries: {sales_enriched['country'].nunique()}\")\nprint(f\"    \\u2022 Products: {sales_enriched['product'].nunique()} across {sales_enriched['category'].nunique()} categories\")\nprint(f\"\\n  All 3 AWS data sources seamlessly accessed from this MicroVM.\")",
+      "code": "# Review ratings distribution (DynamoDB data)\nrating_dist = reviews.groupby('rating').size().reset_index(name='count')\nplot_bar(rating_dist, x='rating', y='count', title='Product Review Ratings (DynamoDB)')",
       "output": null,
       "error": null,
       "html": null,

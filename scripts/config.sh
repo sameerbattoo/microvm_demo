@@ -84,9 +84,11 @@ export PROXY_PORT="8081"
 export BACKEND_PORT="8080"
 
 # Sample data resource names
-export DYNAMO_TABLE="microvm-demo-data"
 export ATHENA_DB="microvm_demo_db"
 export ATHENA_WORKGROUP="microvm-demo"
+
+# Legacy table (for cleanup only — not used by app)
+export LEGACY_DYNAMO_TABLE="microvm-demo-data"
 
 # Project root
 export ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

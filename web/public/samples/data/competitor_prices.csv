@@ -1,0 +1,86 @@
+product_id,product_name,category,our_price,competitor_price,competitor_name,scraped_date
+PROD-0001,TechPro Electronics Item 1,Electronics,142.50,128.99,CompetitorA,2025-06-15
+PROD-0001,TechPro Electronics Item 1,Electronics,142.50,155.00,CompetitorB,2025-06-18
+PROD-0001,TechPro Electronics Item 1,Electronics,142.50,139.99,CompetitorC,2025-06-20
+PROD-0002,StyleCraft Clothing Item 2,Clothing,89.99,79.99,CompetitorA,2025-06-15
+PROD-0002,StyleCraft Clothing Item 2,Clothing,89.99,94.50,CompetitorB,2025-06-18
+PROD-0003,HomeEssentials Home & Kitchen Item 3,Home & Kitchen,67.50,72.00,CompetitorA,2025-06-15
+PROD-0003,HomeEssentials Home & Kitchen Item 3,Home & Kitchen,67.50,59.99,CompetitorC,2025-06-20
+PROD-0004,SportFit Sports Item 4,Sports,54.99,49.99,CompetitorA,2025-06-15
+PROD-0004,SportFit Sports Item 4,Sports,54.99,58.00,CompetitorB,2025-06-18
+PROD-0005,ReadMore Books Item 5,Books,24.99,22.50,CompetitorA,2025-06-15
+PROD-0005,ReadMore Books Item 5,Books,24.99,26.99,CompetitorC,2025-06-20
+PROD-0009,TechPro Electronics Item 9,Electronics,289.00,275.00,CompetitorA,2025-06-15
+PROD-0009,TechPro Electronics Item 9,Electronics,289.00,299.99,CompetitorB,2025-06-18
+PROD-0009,TechPro Electronics Item 9,Electronics,289.00,269.00,CompetitorC,2025-06-20
+PROD-0010,StyleCraft Clothing Item 10,Clothing,45.00,42.99,CompetitorA,2025-06-15
+PROD-0010,StyleCraft Clothing Item 10,Clothing,45.00,48.50,CompetitorB,2025-06-18
+PROD-0017,TechPro Electronics Item 17,Electronics,199.99,185.00,CompetitorA,2025-06-16
+PROD-0017,TechPro Electronics Item 17,Electronics,199.99,210.00,CompetitorB,2025-06-19
+PROD-0017,TechPro Electronics Item 17,Electronics,199.99,192.50,CompetitorC,2025-06-21
+PROD-0018,StyleCraft Clothing Item 18,Clothing,129.00,119.99,CompetitorA,2025-06-16
+PROD-0018,StyleCraft Clothing Item 18,Clothing,129.00,135.00,CompetitorB,2025-06-19
+PROD-0025,TechPro Electronics Item 25,Electronics,349.00,329.00,CompetitorA,2025-06-16
+PROD-0025,TechPro Electronics Item 25,Electronics,349.00,365.00,CompetitorB,2025-06-19
+PROD-0025,TechPro Electronics Item 25,Electronics,349.00,339.99,CompetitorC,2025-06-21
+PROD-0026,StyleCraft Clothing Item 26,Clothing,78.00,69.99,CompetitorA,2025-06-16
+PROD-0026,StyleCraft Clothing Item 26,Clothing,78.00,82.50,CompetitorC,2025-06-21
+PROD-0033,TechPro Electronics Item 33,Electronics,159.99,149.00,CompetitorA,2025-06-17
+PROD-0033,TechPro Electronics Item 33,Electronics,159.99,169.99,CompetitorB,2025-06-20
+PROD-0034,StyleCraft Clothing Item 34,Clothing,62.00,55.99,CompetitorA,2025-06-17
+PROD-0034,StyleCraft Clothing Item 34,Clothing,62.00,65.00,CompetitorB,2025-06-20
+PROD-0041,TechPro Electronics Item 41,Electronics,225.00,215.00,CompetitorA,2025-06-17
+PROD-0041,TechPro Electronics Item 41,Electronics,225.00,239.99,CompetitorC,2025-06-22
+PROD-0042,StyleCraft Clothing Item 42,Clothing,95.00,89.99,CompetitorA,2025-06-17
+PROD-0042,StyleCraft Clothing Item 42,Clothing,95.00,99.00,CompetitorB,2025-06-20
+PROD-0049,TechPro Electronics Item 49,Electronics,179.00,165.00,CompetitorA,2025-06-18
+PROD-0049,TechPro Electronics Item 49,Electronics,179.00,189.99,CompetitorB,2025-06-21
+PROD-0050,StyleCraft Clothing Item 50,Clothing,110.00,99.99,CompetitorA,2025-06-18
+PROD-0050,StyleCraft Clothing Item 50,Clothing,110.00,115.00,CompetitorC,2025-06-22
+PROD-0057,TechPro Electronics Item 57,Electronics,265.00,249.99,CompetitorA,2025-06-18
+PROD-0057,TechPro Electronics Item 57,Electronics,265.00,279.00,CompetitorB,2025-06-21
+PROD-0057,TechPro Electronics Item 57,Electronics,265.00,259.00,CompetitorC,2025-06-22
+PROD-0058,StyleCraft Clothing Item 58,Clothing,85.00,79.99,CompetitorA,2025-06-18
+PROD-0058,StyleCraft Clothing Item 58,Clothing,85.00,89.50,CompetitorB,2025-06-21
+PROD-0065,TechPro Electronics Item 65,Electronics,195.00,179.99,CompetitorA,2025-06-19
+PROD-0065,TechPro Electronics Item 65,Electronics,195.00,205.00,CompetitorB,2025-06-22
+PROD-0066,StyleCraft Clothing Item 66,Clothing,72.00,65.99,CompetitorA,2025-06-19
+PROD-0066,StyleCraft Clothing Item 66,Clothing,72.00,75.00,CompetitorC,2025-06-23
+PROD-0073,TechPro Electronics Item 73,Electronics,310.00,295.00,CompetitorA,2025-06-19
+PROD-0073,TechPro Electronics Item 73,Electronics,310.00,325.00,CompetitorB,2025-06-22
+PROD-0073,TechPro Electronics Item 73,Electronics,310.00,299.99,CompetitorC,2025-06-23
+PROD-0074,StyleCraft Clothing Item 74,Clothing,55.00,49.99,CompetitorA,2025-06-19
+PROD-0074,StyleCraft Clothing Item 74,Clothing,55.00,58.50,CompetitorB,2025-06-22
+PROD-0081,TechPro Electronics Item 81,Electronics,145.00,135.00,CompetitorA,2025-06-20
+PROD-0081,TechPro Electronics Item 81,Electronics,145.00,152.00,CompetitorB,2025-06-23
+PROD-0082,StyleCraft Clothing Item 82,Clothing,98.00,89.99,CompetitorA,2025-06-20
+PROD-0082,StyleCraft Clothing Item 82,Clothing,98.00,105.00,CompetitorC,2025-06-24
+PROD-0089,TechPro Electronics Item 89,Electronics,275.00,259.99,CompetitorA,2025-06-20
+PROD-0089,TechPro Electronics Item 89,Electronics,275.00,289.00,CompetitorB,2025-06-23
+PROD-0089,TechPro Electronics Item 89,Electronics,275.00,269.00,CompetitorC,2025-06-24
+PROD-0090,StyleCraft Clothing Item 90,Clothing,68.00,62.99,CompetitorA,2025-06-20
+PROD-0090,StyleCraft Clothing Item 90,Clothing,68.00,72.50,CompetitorB,2025-06-23
+PROD-0097,TechPro Electronics Item 97,Electronics,215.00,199.99,CompetitorA,2025-06-21
+PROD-0097,TechPro Electronics Item 97,Electronics,215.00,225.00,CompetitorB,2025-06-24
+PROD-0097,TechPro Electronics Item 97,Electronics,215.00,209.00,CompetitorC,2025-06-25
+PROD-0098,StyleCraft Clothing Item 98,Clothing,115.00,105.00,CompetitorA,2025-06-21
+PROD-0098,StyleCraft Clothing Item 98,Clothing,115.00,119.99,CompetitorB,2025-06-24
+PROD-0011,HomeEssentials Home & Kitchen Item 11,Home & Kitchen,89.99,82.00,CompetitorA,2025-06-15
+PROD-0011,HomeEssentials Home & Kitchen Item 11,Home & Kitchen,89.99,95.00,CompetitorB,2025-06-18
+PROD-0019,HomeEssentials Home & Kitchen Item 19,Home & Kitchen,125.00,119.99,CompetitorA,2025-06-16
+PROD-0019,HomeEssentials Home & Kitchen Item 19,Home & Kitchen,125.00,132.00,CompetitorC,2025-06-21
+PROD-0006,FreshChoice Food & Grocery Item 6,Food & Grocery,18.99,16.99,CompetitorA,2025-06-16
+PROD-0006,FreshChoice Food & Grocery Item 6,Food & Grocery,18.99,20.50,CompetitorB,2025-06-19
+PROD-0014,FreshChoice Food & Grocery Item 14,Food & Grocery,32.50,29.99,CompetitorA,2025-06-17
+PROD-0014,FreshChoice Food & Grocery Item 14,Food & Grocery,32.50,34.00,CompetitorC,2025-06-22
+PROD-0022,FreshChoice Food & Grocery Item 22,Food & Grocery,24.99,22.50,CompetitorA,2025-06-18
+PROD-0007,GlowUp Beauty Item 7,Beauty,45.00,39.99,CompetitorA,2025-06-16
+PROD-0007,GlowUp Beauty Item 7,Beauty,45.00,48.50,CompetitorB,2025-06-19
+PROD-0015,GlowUp Beauty Item 15,Beauty,62.00,55.99,CompetitorA,2025-06-17
+PROD-0015,GlowUp Beauty Item 15,Beauty,62.00,65.00,CompetitorC,2025-06-22
+PROD-0023,GlowUp Beauty Item 23,Beauty,38.99,35.00,CompetitorA,2025-06-18
+PROD-0008,PlayTime Toys Item 8,Toys,29.99,26.99,CompetitorA,2025-06-16
+PROD-0008,PlayTime Toys Item 8,Toys,29.99,32.50,CompetitorB,2025-06-19
+PROD-0016,PlayTime Toys Item 16,Toys,44.00,39.99,CompetitorA,2025-06-17
+PROD-0016,PlayTime Toys Item 16,Toys,44.00,46.50,CompetitorC,2025-06-22
+PROD-0024,PlayTime Toys Item 24,Toys,19.99,17.50,CompetitorA,2025-06-18

@@ -39,7 +39,7 @@ const SNIPPETS = [
       {
         name: 'read_athena',
         desc: 'Run Athena SQL query',
-        code: `# Run an Athena SQL query\ndf = read_athena("SELECT * FROM sales_data LIMIT 100")\ndf.head()`,
+        code: `# Run an Athena SQL query\ndf = read_athena("SELECT * FROM <table_name> LIMIT 100")\ndf.head()`,
       },
       {
         name: 'read_url',
@@ -147,7 +147,7 @@ const SNIPPETS = [
       {
         name: 'sample_data',
         desc: 'Load built-in sample dataset',
-        code: `# Load a built-in sample dataset\n# Available: 'sales', 'customers', 'web_traffic', 'ab_test'\ndf = sample_data('sales')\ndf.head()`,
+        code: `# Load a built-in sample dataset\n# Call without args to list available datasets\ndf = sample_data()  # lists available\ndf = sample_data('dataset_name')\ndf.head()`,
       },
     ],
   },

@@ -161,18 +161,12 @@ const PUBLIC_APIS = [
   { id: 'publicholidays', name: 'Public Holidays', icon: '📅', desc: 'Holidays by country and year', code: `import pandas as pd, requests\n\ndef public_holidays(country='US', year=2025):\n    """Get holidays. Countries: US, GB, DE, FR, JP, IN, AU, CA"""\n    resp = requests.get(f'https://date.nager.at/api/v3/publicholidays/{year}/{country}', timeout=60).json()\n    return pd.DataFrame(resp)[['date','localName','name','countryCode']]\n\ndf = public_holidays('US', 2025)\ndf` },
 ]
 
-const SAMPLE_DATA_FILES = [
-  { name: 'sales_data.csv', size: '500 rows', desc: 'Orders with products, regions, discounts' },
-  { name: 'customers.csv', size: '200 rows', desc: 'Customer data (some messy values)' },
-  { name: 'web_traffic.csv', size: '730 rows', desc: 'Daily visitors over 2 years' },
-  { name: 'ab_test_results.csv', size: '1000 rows', desc: 'A/B test conversion data' },
-]
+
 
 export default function DataSourcesPanel({
   uploadedFiles,
   onUploadFile,
   onDeleteFile,
-  onUploadSampleData,
   onInsertCode,
   activeTab,
   s3Files,
@@ -183,7 +177,6 @@ export default function DataSourcesPanel({
   fetchDataSources,
   onClose,
 }) {
-  const [sampleDataExpanded, setSampleDataExpanded] = useState(true)
   const [sandboxExpanded, setSandboxExpanded] = useState(true)
   const [s3Expanded, setS3Expanded] = useState(true)
   const [dynamoExpanded, setDynamoExpanded] = useState(true)
@@ -262,30 +255,35 @@ export default function DataSourcesPanel({
             ))}
           </>
         ) : sandboxExpanded ? (
-          <div className="sidebar-empty-inline">No files in sandbox.</div>
+          <div className="sidebar-empty-inline">
+            No files in sandbox.
+            {activeTab?.status === 'connected' && (
+              <span
+                className="sidebar-load-samples-pill"
+                onClick={async () => {
+                  try {
+                    const filenames = ['sales_targets_q3.csv', 'competitor_prices.csv']
+                    for (const name of filenames) {
+                      const resp = await fetch(`/samples/data/${name}`)
+                      if (resp.ok) {
+                        const blob = await resp.blob()
+                        const file = new File([blob], name, { type: 'text/csv' })
+                        onUploadFile(file)
+                      }
+                    }
+                  } catch (err) {
+                    console.error('Failed to load sample files:', err)
+                  }
+                }}
+                title="Upload bundled sample data files to the sandbox"
+              >
+                Load samples
+              </span>
+            )}
+          </div>
         ) : null}
 
-        {/* Sample Data */}
-        <div className="sidebar-subheader sidebar-subheader-toggle" onClick={() => setSampleDataExpanded(!sampleDataExpanded)}>
-          <IconFile width={11} height={11} /> Sample Data
-          <span className="sidebar-subheader-chevron">{sampleDataExpanded ? '▾' : '▸'}</span>
-        </div>
-        {sampleDataExpanded && SAMPLE_DATA_FILES.map(sample => (
-          <div
-            key={sample.name}
-            className="sidebar-file-item sidebar-sample-data"
-            onClick={() => onUploadSampleData(sample.name)}
-            title={sample.desc}
-          >
-            <span className="sidebar-file-icon sidebar-icon-file-csv">
-              <IconFile width={13} height={13} />
-            </span>
-            <div className="sidebar-file-info">
-              <span className="sidebar-file-name">{sample.name}</span>
-              <span className="sidebar-file-meta">{sample.size}</span>
-            </div>
-          </div>
-        ))}
+
 
         {/* S3 Bucket */}
         <div className="sidebar-subheader sidebar-subheader-toggle" onClick={() => setS3Expanded(!s3Expanded)}>

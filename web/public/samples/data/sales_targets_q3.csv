@@ -1,0 +1,33 @@
+region,category,target_revenue,actual_revenue
+North America,Electronics,250762.00,179264.00
+North America,Clothing,185430.00,192847.00
+North America,Home & Kitchen,142580.00,148920.00
+North America,Sports,98450.00,101230.00
+North America,Books,45230.00,47890.00
+North America,Food & Grocery,67340.00,71250.00
+North America,Beauty,52180.00,54620.00
+North America,Toys,38920.00,36450.00
+Europe,Electronics,198340.00,185620.00
+Europe,Clothing,167890.00,172450.00
+Europe,Home & Kitchen,125670.00,118340.00
+Europe,Sports,87650.00,92180.00
+Europe,Books,38450.00,40120.00
+Europe,Food & Grocery,56780.00,58940.00
+Europe,Beauty,44320.00,42890.00
+Europe,Toys,32150.00,34560.00
+Latin America,Electronics,145230.00,121780.00
+Latin America,Clothing,112450.00,118960.00
+Latin America,Home & Kitchen,89760.00,94520.00
+Latin America,Sports,67340.00,71890.00
+Latin America,Books,28670.00,30450.00
+Latin America,Food & Grocery,41230.00,39870.00
+Latin America,Beauty,33450.00,35120.00
+Latin America,Toys,24780.00,22340.00
+Asia Pacific,Electronics,178540.00,152080.00
+Asia Pacific,Clothing,134670.00,141230.00
+Asia Pacific,Home & Kitchen,98450.00,102780.00
+Asia Pacific,Sports,76890.00,79450.00
+Asia Pacific,Books,34560.00,36780.00
+Asia Pacific,Food & Grocery,48920.00,51340.00
+Asia Pacific,Beauty,39780.00,37650.00
+Asia Pacific,Toys,28340.00,30120.00

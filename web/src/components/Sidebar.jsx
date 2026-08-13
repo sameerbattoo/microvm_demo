@@ -38,6 +38,13 @@ function IconLogs({ width = 16, height = 16 }) {
     </svg>
   )
 }
+function IconIntel({ width = 16, height = 16 }) {
+  return (
+    <svg width={width} height={height} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M12 2a7 7 0 0 0-7 7c0 2.38 1.19 4.47 3 5.74V17a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1v-2.26c1.81-1.27 3-3.36 3-5.74a7 7 0 0 0-7-7z" /><path d="M9 21h6" /><path d="M9 18h6" /><line x1="12" y1="2" x2="12" y2="6" /><line x1="12" y1="9" x2="12" y2="13" />
+    </svg>
+  )
+}
 
 export default function Sidebar({
   tabs,
@@ -51,7 +58,6 @@ export default function Sidebar({
   onUploadFile,
   onDeleteFile,
   onLoadSample,
-  onUploadSampleData,
   onInsertCode,
   cells = [],
   variables = {},
@@ -72,6 +78,8 @@ export default function Sidebar({
   onToggleTerminal,
   showLogs = false,
   onToggleLogs,
+  showIntel = false,
+  onToggleIntel,
 }) {
   // Activity bar state — which panel is active (null = collapsed)
   const [activePanel, setActivePanel] = useState(() => {
@@ -172,7 +180,7 @@ export default function Sidebar({
         setAthenaTables(data.athena || [])
         setAthenaWorkgroup(data.athena_workgroup || 'microvm-demo')
 
-        // Also fetch full catalog (with column schemas) if session is active
+        // Fetch full catalog (with column schemas) if session is active
         if (activeTab?.sessionId) {
           try {
             const catalogResp = await fetch(`${PROXY_URL}/datasources/catalog`, {
@@ -317,6 +325,7 @@ export default function Sidebar({
     { id: 'packages', icon: <IconPackage width={18} height={18} />, title: 'Packages (⌥6)', color: '#f38ba8' },
     { id: 'terminal', icon: <IconTerminal width={18} height={18} />, title: 'Terminal (⌥7)', color: '#5cc2d4' },
     { id: 'logs', icon: <IconLogs width={18} height={18} />, title: 'MicroVM Logs (⌥8)', color: '#89b4fa' },
+    { id: 'intel', icon: <IconIntel width={18} height={18} />, title: 'Workbook Intel (⌥9)', color: '#f9e2af' },
     { id: 'samples', icon: <IconSamples width={18} height={18} />, title: 'Sample Notebooks', color: '#e2b86b' },
   ]
 
@@ -332,13 +341,17 @@ export default function Sidebar({
                 ? (showTerminal ? 'activity-bar-item-active' : '')
                 : item.id === 'logs'
                   ? (showLogs ? 'activity-bar-item-active' : '')
-                  : (activePanel === item.id ? 'activity-bar-item-active' : '')
+                  : item.id === 'intel'
+                    ? (showIntel ? 'activity-bar-item-active' : '')
+                    : (activePanel === item.id ? 'activity-bar-item-active' : '')
             }`}
             onClick={() => {
               if (item.id === 'terminal') {
                 onToggleTerminal?.()
               } else if (item.id === 'logs') {
                 onToggleLogs?.()
+              } else if (item.id === 'intel') {
+                onToggleIntel?.()
               } else {
                 togglePanel(item.id)
               }
@@ -421,7 +434,6 @@ export default function Sidebar({
               uploadedFiles={uploadedFiles}
               onUploadFile={onUploadFile}
               onDeleteFile={onDeleteFile}
-              onUploadSampleData={onUploadSampleData}
               onInsertCode={onInsertCode}
               activeTab={activeTab}
               s3Files={s3Files}

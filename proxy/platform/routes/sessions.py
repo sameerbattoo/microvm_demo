@@ -140,7 +140,7 @@ async def list_datasources(request: Request):
         ddb = boto3.client("dynamodb", region_name=AWS_REGION)
         resp = ddb.list_tables()
         for table_name in resp.get("TableNames", []):
-            if "microvm" in table_name or "demo" in table_name:
+            if "microvm" in table_name or "demo" in table_name or "ecommerce" in table_name:
                 desc = ddb.describe_table(TableName=table_name)
                 item_count = desc["Table"].get("ItemCount", 0)
                 dynamodb_tables.append({

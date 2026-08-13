@@ -15,7 +15,7 @@ DEFAULT_REGION = "us-west-2"
 
 # Generation parameters
 AGENT_TEMPERATURE = 0.2          # Low temperature for code generation (deterministic)
-AGENT_MAX_TOKENS = 4096          # Max tokens for agent responses
+AGENT_MAX_TOKENS = 32768          # Max output tokens (model supports up to 64K)
 TAG_TEMPERATURE = 0.0            # Zero temperature for tag suggestion (single-word answers)
 TAG_MAX_TOKENS = 10              # Very short response for tag suggestions
 EXPLAIN_MAX_TOKENS = 512         # Explanation should be concise

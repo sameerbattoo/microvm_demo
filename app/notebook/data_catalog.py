@@ -64,6 +64,7 @@ class DataCatalog:
         self._lock = threading.Lock()
         self._discovery_thread: threading.Thread | None = None
         self._discovery_complete = False
+        self._on_complete_callback = None  # Called when discovery finishes
 
     @property
     def is_discovering(self) -> bool:
@@ -186,6 +187,13 @@ class DataCatalog:
         elapsed = time.time() - start
         self._discovery_complete = True
         logger.info(f"📊 Data catalog: discovery complete ({discovered} OK, {errors} errors, {elapsed:.1f}s)")
+
+        # Fire callback to notify proxy that catalog is ready
+        if self._on_complete_callback:
+            try:
+                self._on_complete_callback()
+            except Exception as e:
+                logger.warning(f"   Catalog ready callback failed: {e}")
 
     # ─── Local Files ─────────────────────────────────────────────────────────
 

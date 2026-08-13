@@ -289,13 +289,13 @@ def main():
     # TEST 6: Athena table — database.table (Athena engine)
     # ================================================================
     log("━" * 70)
-    log("  TEST 6: Athena table — SELECT FROM microvm_demo_db.sales_data")
+    log("  TEST 6: Athena table — SELECT FROM microvm_demo_db.orders")
     log("━" * 70)
 
     with timed("Query"):
         r = execute_sql(session_id,
-            "SELECT * FROM microvm_demo_db.sales_data LIMIT 10",
-            "athena_sales",
+            "SELECT * FROM microvm_demo_db.orders LIMIT 10",
+            "athena_orders",
             timeout=60
         )
     check("T6: success", r.get("success"), r.get("error", ""))
@@ -307,13 +307,13 @@ def main():
     # TEST 7: DynamoDB — single table (PartiQL)
     # ================================================================
     log("━" * 70)
-    log("  TEST 7: DynamoDB — SELECT FROM dynamodb.\"microvm-demo-data\"")
+    log("  TEST 7: DynamoDB — SELECT FROM dynamodb.\"ecommerce-reviews\"")
     log("━" * 70)
 
     with timed("Query"):
         r = execute_sql(session_id,
-            'SELECT * FROM dynamodb."microvm-demo-data" LIMIT 5',
-            "dynamo_data",
+            'SELECT * FROM dynamodb."ecommerce-reviews" LIMIT 5',
+            "dynamo_reviews",
             timeout=30
         )
     check("T7: success", r.get("success"), r.get("error", ""))
@@ -371,11 +371,10 @@ def main():
 
     with timed("Query"):
         r = execute_sql(session_id,
-            "SELECT a.region, COUNT(*) as athena_rows, s.cnt as df_rows "
-            "FROM microvm_demo_db.sales_data a "
-            "JOIN (SELECT region, COUNT(*) as cnt FROM sales GROUP BY region) s "
-            "ON a.region = s.region "
-            "GROUP BY a.region, s.cnt "
+            "SELECT o.order_id, o.product_id, o.shipping_country, p.product, p.category "
+            "FROM microvm_demo_db.orders o "
+            "CROSS JOIN products p "
+            "WHERE o.shipping_country = 'US' "
             "LIMIT 10",
             "athena_mixed",
             timeout=60
@@ -394,9 +393,9 @@ def main():
 
     with timed("Query"):
         r = execute_sql(session_id,
-            'SELECT category, COUNT(*) as cnt '
-            'FROM dynamodb."microvm-demo-data" '
-            'GROUP BY category '
+            'SELECT rating, COUNT(*) as cnt '
+            'FROM dynamodb."ecommerce-reviews" '
+            'GROUP BY rating '
             'ORDER BY cnt DESC',
             "dynamo_grouped",
             timeout=30
@@ -407,10 +406,44 @@ def main():
     log("")
 
     # ================================================================
-    # TEST 12: DataFrame stored from SQL result (chained queries)
+    # TEST 12: Mixed — Athena + read_csv('/tmp/...') (the routing bug fix)
     # ================================================================
     log("━" * 70)
-    log("  TEST 12: Chained SQL — query result of previous SQL")
+    log("  TEST 12: Mixed — Athena tables + read_csv('/tmp/local_file')")
+    log("━" * 70)
+
+    # First create a local file to join with
+    execute_code(session_id,
+        "import csv\n"
+        "with open('/tmp/price_overrides.csv', 'w', newline='') as f:\n"
+        "    w = csv.writer(f)\n"
+        "    w.writerow(['product_id', 'override_price'])\n"
+        "    w.writerow(['PROD-0001', 99.99])\n"
+        "    w.writerow(['PROD-0002', 79.99])\n"
+        "    w.writerow(['PROD-0003', 59.99])\n"
+        "print('price_overrides.csv created')"
+    )
+
+    with timed("Query"):
+        r = execute_sql(session_id,
+            "SELECT p.product_id, p.name, p.price, ov.override_price "
+            "FROM microvm_demo_db.products p "
+            "JOIN read_csv('/tmp/price_overrides.csv') ov ON p.product_id = ov.product_id "
+            "ORDER BY p.product_id",
+            "products_with_overrides",
+            timeout=60
+        )
+    check("T12: success", r.get("success"), r.get("error", ""))
+    check("T12: engine=duckdb+athena (mixed)", "athena" in (r.get("engine") or ""), f"got: {r.get('engine')}")
+    check("T12: 3 rows (matched products)", r.get("row_count") == 3, f"got: {r.get('row_count')}")
+    check("T12: 4 columns", r.get("column_count") == 4, f"got: {r.get('column_count')}")
+    log("")
+
+    # ================================================================
+    # TEST 13: DataFrame stored from SQL result (chained queries)
+    # ================================================================
+    log("━" * 70)
+    log("  TEST 13: Chained SQL — query result of previous SQL")
     log("━" * 70)
 
     # The previous queries stored results as DataFrames. Query one of them.
@@ -419,9 +452,201 @@ def main():
             "SELECT * FROM order_summary WHERE cnt > 1",
             "popular_products"
         )
-    check("T12: success", r.get("success"), r.get("error", ""))
-    check("T12: engine=duckdb", r.get("engine") == "duckdb", f"got: {r.get('engine')}")
-    check("T12: Widget has cnt=2", r.get("row_count", 0) >= 1, f"got: {r.get('row_count')}")
+    check("T13: success", r.get("success"), r.get("error", ""))
+    check("T13: engine=duckdb", r.get("engine") == "duckdb", f"got: {r.get('engine')}")
+    check("T13: Widget has cnt=2", r.get("row_count", 0) >= 1, f"got: {r.get('row_count')}")
+    log("")
+
+    # ================================================================
+    # TEST 14: read_csv('/tmp/...') alone (should route to DuckDB, not Athena)
+    # ================================================================
+    log("━" * 70)
+    log("  TEST 14: read_csv('/tmp/...') — DuckDB function for local file")
+    log("━" * 70)
+
+    with timed("Query"):
+        r = execute_sql(session_id,
+            "SELECT * FROM read_csv('/tmp/price_overrides.csv') LIMIT 10",
+            "local_via_readcsv"
+        )
+    check("T14: success", r.get("success"), r.get("error", ""))
+    check("T14: engine=duckdb", r.get("engine") == "duckdb", f"got: {r.get('engine')}")
+    check("T14: 3 rows", r.get("row_count") == 3, f"got: {r.get('row_count')}")
+    log("")
+
+    # ================================================================
+    # TEST 15: Athena multi-table JOIN (pure Athena — stays in Athena)
+    # ================================================================
+    log("━" * 70)
+    log("  TEST 15: Athena JOIN Athena — pure Athena multi-table")
+    log("━" * 70)
+
+    with timed("Query"):
+        r = execute_sql(session_id,
+            "SELECT o.order_id, o.shipping_country, p.name, p.category "
+            "FROM microvm_demo_db.orders o "
+            "JOIN microvm_demo_db.products p ON o.product_id = p.product_id "
+            "LIMIT 10",
+            "athena_join",
+            timeout=60
+        )
+    check("T15: success", r.get("success"), r.get("error", ""))
+    check("T15: engine=athena", r.get("engine") == "athena", f"got: {r.get('engine')}")
+    check("T15: has rows", r.get("row_count", 0) > 0, f"got: {r.get('row_count')}")
+    check("T15: 4 columns", r.get("column_count") == 4, f"got: {r.get('column_count')}")
+    log("")
+
+    # ================================================================
+    # TEST 16: S3 read_csv + Athena table JOIN (mixed cloud sources)
+    # ================================================================
+    log("━" * 70)
+    log("  TEST 16: S3 read_csv + Athena table JOIN")
+    log("━" * 70)
+
+    if s3_files:
+        bucket = s3_files[0]["bucket"]
+        # Use clickstream_events.csv from S3 + Athena products
+        s3_key_clickstream = next((f["key"] for f in s3_files if "clickstream" in f["key"]), s3_files[0]["key"])
+        with timed("Query"):
+            r = execute_sql(session_id,
+                f"SELECT c.action, p.category, COUNT(*) as cnt "
+                f"FROM read_csv('s3://{bucket}/{s3_key_clickstream}') c "
+                f"JOIN microvm_demo_db.products p ON c.product_id = p.product_id "
+                f"WHERE c.product_id != '' "
+                f"GROUP BY c.action, p.category "
+                f"ORDER BY cnt DESC LIMIT 10",
+                "s3_athena_mixed",
+                timeout=60
+            )
+        check("T16: success", r.get("success"), r.get("error", ""))
+        check("T16: engine contains athena", "athena" in (r.get("engine") or ""), f"got: {r.get('engine')}")
+        check("T16: has rows", r.get("row_count", 0) > 0, f"got: {r.get('row_count')}")
+    else:
+        log("  ⚠ No S3 files available — skipping T16")
+        check("T16: skipped", True)
+    log("")
+
+    # ================================================================
+    # TEST 17: DynamoDB + local file JOIN (NoSQL + file)
+    # ================================================================
+    log("━" * 70)
+    log("  TEST 17: DynamoDB + local file JOIN")
+    log("━" * 70)
+
+    # Create a product lookup file to join with reviews
+    execute_code(session_id,
+        "import csv\n"
+        "with open('/tmp/product_lookup.csv', 'w', newline='') as f:\n"
+        "    w = csv.writer(f)\n"
+        "    w.writerow(['product_id', 'product_name'])\n"
+        "    for i in range(1, 11):\n"
+        "        w.writerow([f'PROD-{i:04d}', f'Product {i}'])\n"
+        "print('product_lookup.csv created')"
+    )
+
+    with timed("Query"):
+        r = execute_sql(session_id,
+            'SELECT r.productId, pl.product_name, r.rating, r.title '
+            'FROM dynamodb."ecommerce-reviews" r '
+            "JOIN '/tmp/product_lookup.csv' pl ON r.productId = pl.product_id "
+            "LIMIT 10",
+            "dynamo_local_join",
+            timeout=30
+        )
+    check("T17: success", r.get("success"), r.get("error", ""))
+    check("T17: engine=duckdb+dynamodb", r.get("engine") == "duckdb+dynamodb", f"got: {r.get('engine')}")
+    check("T17: has rows", r.get("row_count", 0) > 0, f"got: {r.get('row_count')}")
+    log("")
+
+    # ================================================================
+    # TEST 18: CTE / WITH clause referencing Athena table
+    # ================================================================
+    log("━" * 70)
+    log("  TEST 18: CTE (WITH clause) referencing Athena table")
+    log("━" * 70)
+
+    with timed("Query"):
+        r = execute_sql(session_id,
+            "WITH top_customers AS ("
+            "  SELECT user_id, SUM(total) as total_spend "
+            "  FROM microvm_demo_db.orders "
+            "  GROUP BY user_id "
+            "  ORDER BY total_spend DESC LIMIT 5"
+            ") "
+            "SELECT tc.user_id, tc.total_spend, c.name, c.segment "
+            "FROM top_customers tc "
+            "JOIN microvm_demo_db.customers c ON tc.user_id = c.user_id",
+            "top_spenders",
+            timeout=60
+        )
+    check("T18: success", r.get("success"), r.get("error", ""))
+    check("T18: engine=athena", r.get("engine") == "athena", f"got: {r.get('engine')}")
+    check("T18: 5 rows (top 5)", r.get("row_count") == 5, f"got: {r.get('row_count')}")
+    log("")
+
+    # ================================================================
+    # TEST 19: Empty result set (valid query, no matching rows)
+    # ================================================================
+    log("━" * 70)
+    log("  TEST 19: Empty result set — valid query, zero rows")
+    log("━" * 70)
+
+    with timed("Query"):
+        r = execute_sql(session_id,
+            "SELECT * FROM '/tmp/orders.csv' WHERE amount > 99999",
+            "empty_result"
+        )
+    check("T19: success", r.get("success"), r.get("error", ""))
+    check("T19: engine=duckdb", r.get("engine") == "duckdb", f"got: {r.get('engine')}")
+    check("T19: 0 rows", r.get("row_count") == 0, f"got: {r.get('row_count')}")
+    log("")
+
+    # ================================================================
+    # TEST 20: SQL with comments (should not confuse classifier)
+    # ================================================================
+    log("━" * 70)
+    log("  TEST 20: SQL with comments — classifier ignores comments")
+    log("━" * 70)
+
+    with timed("Query"):
+        r = execute_sql(session_id,
+            "-- This query joins Athena orders with local prices\n"
+            "/* Multi-line comment:\n"
+            "   FROM dynamodb.\"fake-table\" -- this should be ignored\n"
+            "*/\n"
+            "SELECT o.order_id, o.total "
+            "FROM microvm_demo_db.orders o "
+            "WHERE o.total > 100 LIMIT 5",
+            "commented_query",
+            timeout=60
+        )
+    check("T20: success", r.get("success"), r.get("error", ""))
+    check("T20: engine=athena (not confused by comments)", r.get("engine") == "athena", f"got: {r.get('engine')}")
+    check("T20: has rows", r.get("row_count", 0) > 0, f"got: {r.get('row_count')}")
+    log("")
+
+    # ================================================================
+    # TEST 21: Triple source — Athena + DynamoDB + local file
+    # ================================================================
+    log("━" * 70)
+    log("  TEST 21: Triple source — Athena + DynamoDB + local file")
+    log("━" * 70)
+
+    with timed("Query"):
+        r = execute_sql(session_id,
+            "SELECT p.product_id, p.name, r.avg_rating, pl.product_name "
+            "FROM microvm_demo_db.products p "
+            "LEFT JOIN ("
+            '  SELECT productId, AVG(rating) as avg_rating FROM dynamodb."ecommerce-reviews" GROUP BY productId'
+            ") r ON p.product_id = r.productId "
+            "LEFT JOIN '/tmp/product_lookup.csv' pl ON p.product_id = pl.product_id "
+            "LIMIT 10",
+            "triple_source",
+            timeout=60
+        )
+    check("T21: success", r.get("success"), r.get("error", ""))
+    check("T21: engine=duckdb+athena+dynamodb", "athena" in (r.get("engine") or "") and "dynamodb" in (r.get("engine") or ""), f"got: {r.get('engine')}")
+    check("T21: has rows", r.get("row_count", 0) > 0, f"got: {r.get('row_count')}")
     log("")
 
     # ================================================================
@@ -458,7 +683,16 @@ def main():
     print(f"    T8-T9:   Local file JOINs               → DuckDB")
     print(f"    T10:     Athena + DataFrame             → Athena → DuckDB")
     print(f"    T11:     DynamoDB + GROUP BY            → scan → DuckDB")
-    print(f"    T12:     Chained SQL (query prev result)→ DuckDB")
+    print(f"    T12:     Athena + read_csv('/tmp/...')   → Athena → DuckDB (regression fix)")
+    print(f"    T13:     Chained SQL (query prev result)→ DuckDB")
+    print(f"    T14:     read_csv('/tmp/...') alone     → DuckDB")
+    print(f"    T15:     Athena JOIN Athena             → Athena (stays in Athena)")
+    print(f"    T16:     S3 read_csv + Athena JOIN      → mixed → DuckDB")
+    print(f"    T17:     DynamoDB + local file JOIN     → scan → DuckDB")
+    print(f"    T18:     CTE/WITH + Athena             → Athena")
+    print(f"    T19:     Empty result (0 rows)          → DuckDB")
+    print(f"    T20:     SQL with comments              → Athena (comments ignored)")
+    print(f"    T21:     Triple source (Athena+DDB+file)→ materialize all → DuckDB")
     print()
     print("=" * 70)
 

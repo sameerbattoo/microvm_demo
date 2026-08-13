@@ -43,7 +43,7 @@
         "dynamodb:DescribeTable",
         "dynamodb:PartiQLSelect"
       ],
-      "Resource": "arn:aws:dynamodb:*:*:table/microvm-demo-*"
+      "Resource": ["arn:aws:dynamodb:*:*:table/microvm-demo-*", "arn:aws:dynamodb:*:*:table/ecommerce-*"]
     },
     {
       "Sid": "DynamoDBListTables",

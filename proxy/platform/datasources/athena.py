@@ -174,19 +174,8 @@ class AthenaSchemaProvider(DataSourceProvider):
             database = self._database
             table_name = source_id
         return (
-            f"import boto3, pandas as pd, time\n"
-            f"\n"
-            f"def athena_query(sql, workgroup='{self._workgroup}', region='{self._region}'):\n"
-            f"    c = boto3.client('athena', region_name=region)\n"
-            f"    eid = c.start_query_execution(QueryString=sql, WorkGroup=workgroup)['QueryExecutionId']\n"
-            f"    while c.get_query_execution(QueryExecutionId=eid)['QueryExecution']['Status']['State'] in ('QUEUED','RUNNING'):\n"
-            f"        time.sleep(0.5)\n"
-            f"    rows = c.get_query_results(QueryExecutionId=eid)['ResultSet']['Rows']\n"
-            f"    header = [col['VarCharValue'] for col in rows[0]['Data']]\n"
-            f"    data = [[col.get('VarCharValue','') for col in row['Data']] for row in rows[1:]]\n"
-            f"    return pd.DataFrame(data, columns=header)\n"
-            f"\n"
-            f"{table_name} = athena_query(\"SELECT * FROM {database}.{table_name} LIMIT 100\")\n"
+            f"# Query Athena table\n"
+            f"{table_name} = read_athena(\"SELECT * FROM {database}.{table_name} LIMIT 100\")\n"
             f"{table_name}.head()"
         )
 

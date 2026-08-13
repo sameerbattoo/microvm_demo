@@ -824,6 +824,37 @@
   padding-left: 20px;
 }
 
+.sidebar-load-samples-pill {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 3px 12px;
+  font-size: 11px;
+  background: rgba(99, 102, 241, 0.15);
+  color: #818cf8;
+  border: 1px solid rgba(99, 102, 241, 0.3);
+  border-radius: 12px;
+  cursor: pointer;
+  font-weight: 500;
+  transition: background 0.15s, color 0.15s;
+  vertical-align: middle;
+}
+
+.sidebar-load-samples-pill:hover {
+  background: rgba(99, 102, 241, 0.3);
+  color: #a5b4fc;
+}
+
+[data-theme="light"] .sidebar-load-samples-pill {
+  background: rgba(79, 70, 229, 0.1);
+  color: #4f46e5;
+  border-color: rgba(79, 70, 229, 0.3);
+}
+
+[data-theme="light"] .sidebar-load-samples-pill:hover {
+  background: rgba(79, 70, 229, 0.2);
+  color: #3730a3;
+}
+
 .sidebar-ds-clickable {
   cursor: pointer;
 }

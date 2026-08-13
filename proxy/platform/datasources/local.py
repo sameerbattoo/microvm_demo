@@ -125,15 +125,7 @@ else:
         ext = source_id.rsplit('.', 1)[-1].lower() if '.' in source_id else "csv"
         var_name = source_id.rsplit('/', 1)[-1].rsplit('.', 1)[0].replace('-', '_').replace(' ', '_')
 
-        if ext == "csv":
-            return f"import pandas as pd\n\n{var_name} = pd.read_csv('{source_id}')\n{var_name}.head()"
-        elif ext == "parquet":
-            return f"import pandas as pd\n\n{var_name} = pd.read_parquet('{source_id}')\n{var_name}.head()"
-        elif ext in ("xlsx", "xls"):
-            return f"import pandas as pd\n\n{var_name} = pd.read_excel('{source_id}')\n{var_name}.head()"
-        elif ext == "json":
-            return f"import pandas as pd\n\n{var_name} = pd.read_json('{source_id}', lines=True)\n{var_name}.head()"
-        return f"# Read {source_id}"
+        return f"# Read local file\n{var_name} = read_local('{source_id}')\n{var_name}.head()"
 
     def get_sql_snippet(self, source_id: str) -> str:
         return f"SELECT * FROM '{source_id}' LIMIT 100"

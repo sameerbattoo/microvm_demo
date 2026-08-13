@@ -207,7 +207,7 @@ async def launch_microvm(request: Request):
                         data_sources["s3"].append({"key": key, "bucket": bucket_name, "uri": f"s3://{bucket_name}/{key}", "size_bytes": obj["Size"]})
         ddb_client = boto3.client("dynamodb", region_name=AWS_REGION)
         for t in ddb_client.list_tables().get("TableNames", []):
-            if "microvm" in t or "demo" in t:
+            if "microvm" in t or "demo" in t or "ecommerce" in t:
                 data_sources["dynamodb"].append({"name": t, "region": AWS_REGION})
         glue_client = boto3.client("glue", region_name=AWS_REGION)
         for t in glue_client.get_tables(DatabaseName=ATHENA_DB).get("TableList", []):

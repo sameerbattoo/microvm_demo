@@ -4,6 +4,7 @@ import Sidebar from './components/Sidebar'
 import AiChatPanel from './components/AiChatPanel'
 import TerminalPanel from './components/panels/TerminalPanel'
 import LogsPanel from './components/LogsPanel'
+import IntelPanel from './components/IntelPanel'
 import { ConfirmModal, InputModal } from './components/Modal'
 import { IconZap, IconSun, IconMoon, IconFlame } from './components/Icons'
 import { PROXY_URL } from './config'
@@ -271,6 +272,47 @@ export default function App() {
     })
   }
   const [aiAvailable, setAiAvailable] = useState(false)
+  const [intelShownForSession, setIntelShownForSession] = useState(null) // tracks which session we auto-showed intel for
+
+  // Auto-show Intel panel when intel becomes available
+  useEffect(() => {
+    const activeTab = tabs.find(t => t.id === activeTabId)
+    const sessionId = activeTab?.sessionId
+    if (!sessionId || sessionId === intelShownForSession) return
+    if (activeTab?.status !== 'connected') return
+
+    let cancelled = false
+
+    const checkIntel = async () => {
+      if (cancelled) return
+      try {
+        const resp = await fetch(`${PROXY_URL}/workbook-intel`, { headers: { 'X-Session-Id': sessionId } })
+        if (resp.ok && !cancelled) {
+          const data = await resp.json()
+          if (data.status === 'ready' && data.intel) {
+            // Auto-open the intel panel
+            setBottomPanelTabs(prev => new Set([...prev, 'intel']))
+            setBottomPanelActive('intel')
+            setIntelShownForSession(sessionId)
+            return true  // done
+          }
+        }
+      } catch {}
+      return false
+    }
+
+    // Poll every 15s starting at 30s, up to 3 minutes
+    let attempts = 0
+    const maxAttempts = 10
+    const poll = async () => {
+      if (cancelled || attempts >= maxAttempts) return
+      attempts++
+      const done = await checkIntel()
+      if (!done && !cancelled) setTimeout(poll, 15000)
+    }
+    const timer = setTimeout(poll, 30000)
+    return () => { cancelled = true; clearTimeout(timer) }
+  }, [activeTabId, tabs.find?.(t => t?.id === activeTabId)?.status])
   const [newNotebookName, setNewNotebookName] = useState('')
   const [newNotebookDesc, setNewNotebookDesc] = useState('')
 
@@ -291,9 +333,9 @@ export default function App() {
         toggleBottomTab('logs')
       }
       // Option+1 through Option+6 — toggle sidebar panels
-      // Option+7 — toggle terminal, Option+8 — toggle logs
+      // Option+7 — toggle terminal, Option+8 — toggle logs, Option+9 — toggle intel
       if (e.altKey && !e.ctrlKey && !e.metaKey) {
-        const digitMatch = e.code?.match(/^Digit([1-8])$/)
+        const digitMatch = e.code?.match(/^Digit([1-9])$/)
         if (digitMatch) {
           e.preventDefault()
           const idx = parseInt(digitMatch[1])
@@ -304,6 +346,8 @@ export default function App() {
             toggleBottomTab('terminal')
           } else if (idx === 8) {
             toggleBottomTab('logs')
+          } else if (idx === 9) {
+            toggleBottomTab('intel')
           }
         }
       }
@@ -632,6 +676,8 @@ export default function App() {
     } catch {}
   }, [instances, tabs])
 
+  const intelTriggerTimer = useRef(null)
+
   const uploadFile = useCallback(async (file) => {
     // Find the active tab's connection to upload to
     const activeTab = tabs.find(t => t.id === activeTabId)
@@ -676,6 +722,18 @@ export default function App() {
             ) }
           : t
         ))
+
+        // Debounced intel trigger: fires 2s after the last successful upload
+        if (result.success && activeTab.sessionId) {
+          clearTimeout(intelTriggerTimer.current)
+          intelTriggerTimer.current = setTimeout(() => {
+            fetch(`${PROXY_URL}/workbook-intel/generate`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', 'X-Session-Id': activeTab.sessionId },
+              body: JSON.stringify({ trigger: 'file_upload' }),
+            }).catch(() => {})
+          }, 2000)
+        }
       } catch {
         setTabs(prev => prev.map(t => t.id === activeTabId
           ? { ...t, _localFiles: (t._localFiles || []).map(f =>
@@ -695,57 +753,7 @@ export default function App() {
     ))
   }, [activeTabId])
 
-  const uploadSampleData = useCallback(async (filename) => {
-    const activeTab = tabs.find(t => t.id === activeTabId)
-    if (!activeTab || activeTab.status !== 'connected') {
-      alert('Connect to a sandbox first before loading data files.')
-      return
-    }
 
-    // Fetch the sample file from public/samples/data/
-    try {
-      const resp = await fetch(`/samples/data/${filename}`)
-      const text = await resp.text()
-      const base64 = btoa(text)
-
-      const size = text.length < 1024 * 1024
-        ? `${(text.length / 1024).toFixed(1)} KB`
-        : `${(text.length / (1024 * 1024)).toFixed(1)} MB`
-
-      setTabs(prev => prev.map(t => t.id === activeTabId
-        ? { ...t, _localFiles: [...(t._localFiles || []), { name: filename, size, variable: null, status: 'uploading' }] }
-        : t
-      ))
-
-      const headers = { 'Content-Type': 'application/json' }
-      if (activeTab.sessionId) {
-        headers['X-Session-Id'] = activeTab.sessionId
-      }
-
-      const uploadResp = await fetch(`${activeTab.microvmEndpoint}/upload`, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({ filename, data: base64 }),
-      })
-      const result = await uploadResp.json()
-
-      setTabs(prev => prev.map(t => t.id === activeTabId
-        ? { ...t, _localFiles: (t._localFiles || []).map(f =>
-            f.name === filename
-              ? { ...f, variable: result.variable_name || null, status: result.success ? 'ready' : 'error' }
-              : f
-          ) }
-        : t
-      ))
-    } catch (err) {
-      setTabs(prev => prev.map(t => t.id === activeTabId
-        ? { ...t, _localFiles: (t._localFiles || []).map(f =>
-            f.name === filename ? { ...f, status: 'error', variable: 'failed' } : f
-          ) }
-        : t
-      ))
-    }
-  }, [tabs, activeTabId])
 
   const loadSample = useCallback(async (sampleUrl, sampleName) => {
     try {
@@ -863,7 +871,6 @@ export default function App() {
           onUploadFile={uploadFile}
           onDeleteFile={deleteFile}
           onLoadSample={loadSample}
-          onUploadSampleData={uploadSampleData}
           onInsertCode={insertCode}
           cells={(tabs.find(t => t.id === activeTabId)?._cells) || []}
           variables={(tabs.find(t => t.id === activeTabId)?._variables) || {}}
@@ -902,6 +909,8 @@ export default function App() {
           onToggleTerminal={() => toggleBottomTab('terminal')}
           showLogs={bottomPanelTabs.has('logs')}
           onToggleLogs={() => toggleBottomTab('logs')}
+          showIntel={bottomPanelTabs.has('intel')}
+          onToggleIntel={() => toggleBottomTab('intel')}
         />
         <main className="app-main">
           {tabs.length === 0 && (
@@ -1065,6 +1074,17 @@ export default function App() {
                     )}
                   </button>
                 )}
+                {bottomPanelTabs.has('intel') && (
+                  <button
+                    className={`bottom-panel-tab ${bottomPanelActive === 'intel' ? 'bottom-panel-tab-active' : ''}`}
+                    onClick={() => setBottomPanelActive('intel')}
+                  >
+                    Intel
+                    {bottomPanelTabs.size > 1 && (
+                      <span className="bottom-panel-tab-close" onClick={(e) => { e.stopPropagation(); closeBottomTab('intel') }}>&times;</span>
+                    )}
+                  </button>
+                )}
                 <button
                   className="bottom-panel-close"
                   onClick={() => { setBottomPanelTabs(new Set()); setBottomPanelActive(null) }}
@@ -1086,6 +1106,20 @@ export default function App() {
                   activeTab={tabs.find(t => t.id === activeTabId) || null}
                   onClose={() => closeBottomTab('logs')}
                   embedded={bottomPanelTabs.size > 1}
+                />
+              )}
+              {bottomPanelActive === 'intel' && (
+                <IntelPanel
+                  activeTab={tabs.find(t => t.id === activeTabId) || null}
+                  onClose={() => closeBottomTab('intel')}
+                  onInsertPrompt={(prompt) => {
+                    // Open AI chat and send the prompt
+                    setShowAiChat(true)
+                    // Delay to let chat panel mount, then inject the message
+                    setTimeout(() => {
+                      window.dispatchEvent(new CustomEvent('ai-chat-send', { detail: prompt }))
+                    }, 300)
+                  }}
                 />
               )}
             </div>

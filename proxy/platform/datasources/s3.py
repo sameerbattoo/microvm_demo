@@ -121,28 +121,13 @@ class S3SchemaProvider(DataSourceProvider):
         var_name = key.rsplit('/', 1)[-1].rsplit('.', 1)[0].replace('-', '_').replace(' ', '_')
 
         if ext == "csv":
-            return (
-                f"import boto3\n"
-                f"import pandas as pd\n"
-                f"\n"
-                f"s3 = boto3.client('s3')\n"
-                f"obj = s3.get_object(Bucket='{bucket}', Key='{key}')\n"
-                f"{var_name} = pd.read_csv(obj['Body'])\n"
-                f"{var_name}.head()"
-            )
+            return f"# Read CSV from S3\n{var_name} = read_s3_csv('{bucket}', '{key}')\n{var_name}.head()"
         elif ext == "parquet":
-            return (
-                f"import boto3\n"
-                f"import pandas as pd\n"
-                f"import io\n"
-                f"\n"
-                f"s3 = boto3.client('s3')\n"
-                f"obj = s3.get_object(Bucket='{bucket}', Key='{key}')\n"
-                f"{var_name} = pd.read_parquet(io.BytesIO(obj['Body'].read()))\n"
-                f"{var_name}.head()"
-            )
+            return f"# Read Parquet from S3\n{var_name} = read_s3_parquet('{bucket}', '{key}')\n{var_name}.head()"
+        elif ext == "json":
+            return f"# Read JSON from S3\n{var_name} = read_s3_json('{bucket}', '{key}')\n{var_name}.head()"
         else:
-            return f"# Read s3://{bucket}/{key}"
+            return f"# Read s3://{bucket}/{key}\n{var_name} = read_s3_csv('{bucket}', '{key}')\n{var_name}.head()"
 
     def get_sql_snippet(self, source_id: str) -> str:
         bucket, key = self._parse_s3_path(source_id)

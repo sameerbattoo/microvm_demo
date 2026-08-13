@@ -109,15 +109,11 @@ class DynamoDBSchemaProvider(DataSourceProvider):
             return []
 
     def get_python_snippet(self, source_id: str) -> str:
+        var_name = source_id.replace('-', '_')
         return (
-            f"import boto3\n"
-            f"import pandas as pd\n"
-            f"\n"
-            f"dynamodb = boto3.resource('dynamodb', region_name='{self._region}')\n"
-            f"table = dynamodb.Table('{source_id}')\n"
-            f"response = table.scan()\n"
-            f"{source_id.replace('-', '_')} = pd.DataFrame(response['Items'])\n"
-            f"{source_id.replace('-', '_')}.head()"
+            f"# Scan DynamoDB table into DataFrame\n"
+            f"{var_name} = read_dynamodb('{source_id}')\n"
+            f"{var_name}.head()"
         )
 
     def get_sql_snippet(self, source_id: str) -> str:

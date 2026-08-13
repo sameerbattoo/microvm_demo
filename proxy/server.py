@@ -73,6 +73,7 @@ from proxy.platform.routes.metrics import router as metrics_router
 from proxy.notebook.routes.notebooks import router as notebooks_router
 from proxy.notebook.routes.ai import router as ai_router
 from proxy.notebook.routes.logs import router as logs_router
+from proxy.notebook.routes.intel import router as intel_router
 from proxy.platform.routes.terminal import router as terminal_router
 
 app.include_router(microvm_router)
@@ -81,6 +82,7 @@ app.include_router(metrics_router)
 app.include_router(sessions_router)
 app.include_router(ai_router)
 app.include_router(logs_router)
+app.include_router(intel_router)
 app.include_router(terminal_router)
 
 

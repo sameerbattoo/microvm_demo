@@ -53,6 +53,23 @@ export default function AiChatPanel({ activeTab, uploadedFiles = [], onClose, on
     return () => { if (chatAbortRef.current) chatAbortRef.current.abort() }
   }, [])
 
+  // Listen for external prompt injection (from Intel panel [Run] buttons)
+  useEffect(() => {
+    const handler = (e) => {
+      const prompt = e.detail
+      if (prompt) {
+        setInput(prompt)
+        // Auto-send after React re-renders with the new input
+        setTimeout(() => {
+          const sendBtn = document.querySelector('.ai-panel-send')
+          if (sendBtn && !sendBtn.disabled) sendBtn.click()
+        }, 200)
+      }
+    }
+    window.addEventListener('ai-chat-send', handler)
+    return () => window.removeEventListener('ai-chat-send', handler)
+  }, [])
+
   const handleResizeStart = (e) => {
     e.preventDefault()
     isResizing.current = true

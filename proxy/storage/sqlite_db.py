@@ -98,6 +98,13 @@ CREATE TABLE IF NOT EXISTS ai_sessions (
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+CREATE TABLE IF NOT EXISTS workbook_intel (
+    session_id TEXT PRIMARY KEY,
+    s3_key TEXT NOT NULL,
+    generated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    version INTEGER NOT NULL DEFAULT 1
+);
+
 CREATE INDEX IF NOT EXISTS idx_vm_metrics_lookup
     ON vm_metrics(microvm_id, timestamp DESC);
 
@@ -334,3 +341,29 @@ class SqliteStorage(StorageBackend):
     def ai_session_delete(self, session_id: str) -> None:
         with self._db() as conn:
             conn.execute("DELETE FROM ai_sessions WHERE id = ?", (session_id,))
+
+    # ============================================================
+    # WORKBOOK INTEL
+    # ============================================================
+
+    def workbook_intel_save(self, session_id: str, s3_key: str) -> None:
+        """Save or update workbook intel metadata."""
+        now = datetime.now(timezone.utc).isoformat()
+        with self._db() as conn:
+            conn.execute(
+                """INSERT INTO workbook_intel (session_id, s3_key, generated_at, version)
+                   VALUES (?, ?, ?, 1)
+                   ON CONFLICT(session_id) DO UPDATE SET s3_key = ?, generated_at = ?, version = version + 1""",
+                (session_id, s3_key, now, s3_key, now)
+            )
+
+    def workbook_intel_get(self, session_id: str) -> dict | None:
+        """Get workbook intel metadata for a session."""
+        with self._db() as conn:
+            row = conn.execute(
+                "SELECT session_id, s3_key, generated_at, version FROM workbook_intel WHERE session_id = ?",
+                (session_id,)
+            ).fetchone()
+            if row:
+                return {"session_id": row[0], "s3_key": row[1], "generated_at": row[2], "version": row[3]}
+            return None

@@ -21,7 +21,7 @@
     },
     {
       "type": "code",
-      "code": "# Load a built-in sample dataset\n# Available: 'sales', 'customers', 'web_traffic', 'ab_test'\ndf = sample_data('sales')\nprint(f\"Loaded {len(df)} rows\")\ndf.head()",
+      "code": "# Load a built-in sample dataset\n# Call with no args to see available datasets\ndf = sample_data('orders')\nprint(f\"Loaded {len(df)} rows\")\ndf.head()",
       "output": null,
       "error": null,
       "html": null,
@@ -29,7 +29,7 @@
     },
     {
       "type": "code",
-      "code": "# Read CSV directly from S3 (uses the execution role \u2014 no credentials needed)\nbucket = info['bucket']\nsales = read_s3_csv(bucket, \"samples/sales_data.csv\")\nprint(f\"Loaded {len(sales)} rows from S3\")\nsales.head()",
+      "code": "# Read CSV directly from S3 (uses the execution role \u2014 no credentials needed)\nbucket = info['bucket']\nclickstream = read_s3_csv(bucket, \"samples/clickstream_events.csv\")\nprint(f\"Loaded {len(clickstream)} rows from S3\")\nclickstream.head()",
       "output": null,
       "error": null,
       "html": null,
@@ -37,7 +37,7 @@
     },
     {
       "type": "code",
-      "code": "# Read from DynamoDB (scans the table into a DataFrame)\ndynamo_df = read_dynamodb(\"microvm-demo-data\")\nprint(f\"DynamoDB: {len(dynamo_df)} items\")\ndynamo_df.head()",
+      "code": "# Read from DynamoDB (scans the table into a DataFrame)\nreviews = read_dynamodb(\"ecommerce-reviews\")\nprint(f\"DynamoDB: {len(reviews)} items\")\nreviews.head()",
       "output": null,
       "error": null,
       "html": null,
@@ -61,7 +61,7 @@
     },
     {
       "type": "code",
-      "code": "# Profile a DataFrame: types, nulls, unique values\nprofile(sales)",
+      "code": "# Profile a DataFrame: types, nulls, unique values\nprofile(clickstream)",
       "output": null,
       "error": null,
       "html": null,
@@ -77,7 +77,7 @@
     },
     {
       "type": "code",
-      "code": "# Preview first 5 rows from S3 without downloading the full file\npreview = head_s3(info['bucket'], \"samples/sales_data.csv\", n=5)\npreview",
+      "code": "# Preview first 5 rows from S3 without downloading the full file\npreview = head_s3(info['bucket'], \"samples/clickstream_events.csv\", n=5)\npreview",
       "output": null,
       "error": null,
       "html": null,
@@ -85,7 +85,7 @@
     },
     {
       "type": "code",
-      "code": "# Compare two DataFrames (useful for before/after cleaning)\n# First compute revenue column\nsales['revenue'] = sales['quantity'] * sales['unit_price'] * (1 - sales['discount'])\n\n# Create a \"cleaned\" version by dropping nulls and adding a column\nsales_clean = sales.dropna().copy()\nsales_clean['revenue_rank'] = sales_clean['revenue'].rank(ascending=False)\n\ncompare_df(sales, sales_clean, \"original\", \"cleaned\")",
+      "code": "# Compare two DataFrames (useful for before/after cleaning)\n# Create a \"cleaned\" version by filtering out empty product_ids\nclickstream_clean = clickstream[clickstream['product_id'] != ''].copy()\nclickstream_clean['duration_bucket'] = pd.cut(clickstream_clean['duration_seconds'].astype(int), bins=[0, 30, 60, 120, 300], labels=['<30s', '30-60s', '1-2min', '2-5min'])\n\ncompare_df(clickstream, clickstream_clean, \"original\", \"cleaned\")",
       "output": null,
       "error": null,
       "html": null,
@@ -93,7 +93,7 @@
     },
     {
       "type": "code",
-      "code": "# Time a computation with @timer\n@timer\ndef aggregate_sales():\n    # Compute revenue if not already present\n    if 'revenue' not in sales.columns:\n        sales['revenue'] = sales['quantity'] * sales['unit_price'] * (1 - sales['discount'])\n    return sales.groupby(['product', 'region']).agg(\n        total_revenue=('revenue', 'sum'),\n        avg_quantity=('quantity', 'mean'),\n        order_count=('order_id', 'count')\n    ).reset_index()\n\nsummary = aggregate_sales()\nsummary.head()",
+      "code": "# Time a computation with @timer\n@timer\ndef aggregate_orders():\n    return df.groupby(['shipping_country', 'payment_method']).agg(\n        total_revenue=('total', 'sum'),\n        avg_quantity=('quantity', 'mean'),\n        order_count=('order_id', 'count')\n    ).reset_index()\n\nsummary = aggregate_orders()\nsummary.head()",
       "output": null,
       "error": null,
       "html": null,
@@ -109,7 +109,7 @@
     },
     {
       "type": "code",
-      "code": "# Interactive bar chart\nproduct_rev = sales.groupby('product')['revenue'].sum().reset_index()\nplot_bar(product_rev, x='product', y='revenue', title='Revenue by Product')",
+      "code": "# Interactive bar chart\ncountry_rev = df.groupby('shipping_country')['total'].sum().reset_index()\nplot_bar(country_rev, x='shipping_country', y='total', title='Revenue by Country')",
       "output": null,
       "error": null,
       "html": null,
@@ -117,7 +117,7 @@
     },
     {
       "type": "code",
-      "code": "# Interactive scatter plot with size and color encoding\nplot_scatter(sales, x='quantity', y='revenue', size='unit_price', color='product', title='Quantity vs Revenue')",
+      "code": "# Interactive scatter plot with size and color encoding\nplot_scatter(df, x='quantity', y='total', size='unit_price', color='payment_method', title='Quantity vs Total by Payment Method')",
       "output": null,
       "error": null,
       "html": null,
@@ -125,7 +125,7 @@
     },
     {
       "type": "code",
-      "code": "# Interactive histogram\nplot_histogram(sales, 'revenue', bins=25, title='Revenue Distribution')",
+      "code": "# Interactive histogram\nplot_histogram(df, 'total', bins=25, title='Order Total Distribution')",
       "output": null,
       "error": null,
       "html": null,
@@ -133,7 +133,7 @@
     },
     {
       "type": "code",
-      "code": "# Heatmap from a pivot (product x region \u2192 revenue)\nplot_heatmap(sales, x='region', y='product', value='revenue', title='Revenue: Product \u00d7 Region')",
+      "code": "# Heatmap from a pivot (country x payment_method \u2192 revenue)\nplot_heatmap(df, x='shipping_country', y='payment_method', value='total', title='Revenue: Country \u00d7 Payment Method')",
       "output": null,
       "error": null,
       "html": null,
@@ -149,7 +149,7 @@
     },
     {
       "type": "code",
-      "code": "# Save to local file (auto-detects format from extension)\nto_local(summary, '/tmp/sales_summary.csv')\nto_local(summary, '/tmp/sales_summary.parquet')\nprint(\"Saved locally \u2713\")\n\n# Upload to S3\nuri = to_s3_csv(summary, info['bucket'], \"user-data/sales_summary.csv\")\nprint(f\"Uploaded to: {uri}\")",
+      "code": "# Save to local file (auto-detects format from extension)\nto_local(summary, '/tmp/order_summary.csv')\nto_local(summary, '/tmp/order_summary.parquet')\nprint(\"Saved locally \u2713\")\n\n# Upload to S3\nuri = to_s3_csv(summary, info['bucket'], \"user-data/order_summary.csv\")\nprint(f\"Uploaded to: {uri}\")",
       "output": null,
       "error": null,
       "html": null,

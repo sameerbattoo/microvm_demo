@@ -13,7 +13,7 @@
     },
     {
       "type": "code",
-      "code": "# First, load some data to work with\ndf = sample_data('sales')\ndf['revenue'] = df['quantity'] * df['unit_price'] * (1 - df['discount'])\nprint(f\"Loaded {len(df)} rows\")\ndf.head(3)",
+      "code": "# First, load some data to work with\ndf = sample_data('orders')\ndf['total'] = pd.to_numeric(df['total'], errors='coerce')\ndf['quantity'] = pd.to_numeric(df['quantity'], errors='coerce')\nprint(f\"Loaded {len(df)} rows\")\ndf.head(3)",
       "output": null,
       "error": null,
       "html": null,
@@ -37,7 +37,7 @@
     },
     {
       "type": "markdown",
-      "code": "## Dropdown: Filter by product",
+      "code": "## Dropdown: Filter by country",
       "output": null,
       "error": null,
       "html": null,
@@ -45,7 +45,7 @@
     },
     {
       "type": "code",
-      "code": "# @param {\"type\": \"dropdown\", \"options\": [\"All\", \"Laptop\", \"Phone\", \"Tablet\", \"Headphones\", \"Monitor\"], \"default\": \"All\"}\nproduct_filter = \"All\"\n\nif product_filter == \"All\":\n    filtered = df\nelse:\n    filtered = df[df['product'] == product_filter]\n\nprint(f\"Product: {product_filter} \u2014 {len(filtered)} orders\")\nplot_bar(filtered.groupby('region')['revenue'].sum().reset_index(), x='region', y='revenue', title=f'{product_filter} Revenue by Region')",
+      "code": "# @param {\"type\": \"dropdown\", \"options\": [\"All\", \"US\", \"UK\", \"DE\", \"FR\", \"JP\", \"AU\", \"CA\"], \"default\": \"All\"}\ncountry_filter = \"All\"\n\nif country_filter == \"All\":\n    filtered = df\nelse:\n    filtered = df[df['shipping_country'] == country_filter]\n\nprint(f\"Country: {country_filter} \u2014 {len(filtered)} orders\")\nplot_bar(filtered.groupby('payment_method')['total'].sum().reset_index(), x='payment_method', y='total', title=f'{country_filter} Revenue by Payment Method')",
       "output": null,
       "error": null,
       "html": null,
@@ -61,7 +61,7 @@
     },
     {
       "type": "code",
-      "code": "# @param {\"type\": \"number\", \"min\": 0, \"max\": 5000, \"step\": 100, \"default\": 1000}\nmin_revenue = 1000\n# @param {\"type\": \"checkbox\", \"default\": true}\nshow_chart = True\nhigh_value = df[df['revenue'] >= min_revenue]\nprint(f\"Orders with revenue >= ${min_revenue}: {len(high_value)} ({len(high_value)/len(df)*100:.1f}%)\")\nif show_chart:\n    display(plot_histogram(high_value, 'revenue', bins=20, title=f'Revenue Distribution (>= ${min_revenue})'))\nelse:\n    display(high_value.head(10))",
+      "code": "# @param {\"type\": \"number\", \"min\": 0, \"max\": 5000, \"step\": 100, \"default\": 500}\nmin_total = 500\n# @param {\"type\": \"checkbox\", \"default\": true}\nshow_chart = True\nhigh_value = df[df['total'] >= min_total]\nprint(f\"Orders with total >= ${min_total}: {len(high_value)} ({len(high_value)/len(df)*100:.1f}%)\")\nif show_chart:\n    display(plot_histogram(high_value, 'total', bins=20, title=f'Order Total Distribution (>= ${min_total})'))\nelse:\n    display(high_value.head(10))",
       "output": null,
       "error": null,
       "html": null,
@@ -77,7 +77,7 @@
     },
     {
       "type": "code",
-      "code": "# @param {\"type\": \"text\", \"default\": \"revenue\", \"placeholder\": \"column name\"}\ncolumn_name = \"revenue\"\n\nif column_name in df.columns:\n    print(f\"Stats for '{column_name}':\")\n    print(f\"  Mean: {df[column_name].mean():.2f}\")\n    print(f\"  Median: {df[column_name].median():.2f}\")\n    print(f\"  Std: {df[column_name].std():.2f}\")\n    plot_histogram(df, column_name, title=f'Distribution of {column_name}')\nelse:\n    print(f\"Column '{column_name}' not found. Available: {list(df.columns)}\")",
+      "code": "# @param {\"type\": \"text\", \"default\": \"total\", \"placeholder\": \"column name\"}\ncolumn_name = \"total\"\n\nif column_name in df.columns:\n    col = pd.to_numeric(df[column_name], errors='coerce').dropna()\n    print(f\"Stats for '{column_name}':\")\n    print(f\"  Mean: {col.mean():.2f}\")\n    print(f\"  Median: {col.median():.2f}\")\n    print(f\"  Std: {col.std():.2f}\")\n    plot_histogram(df, column_name, title=f'Distribution of {column_name}')\nelse:\n    print(f\"Column '{column_name}' not found. Available: {list(df.columns)}\")",
       "output": null,
       "error": null,
       "html": null,
@@ -93,7 +93,7 @@
     },
     {
       "type": "code",
-      "code": "# @param {\"type\": \"date\", \"default\": \"2025-06-01\"}\nstart_date = \"2025-06-01\"\n\nimport pandas as pd\ndf['date'] = pd.to_datetime(df['date'])\nafter_date = df[df['date'] >= start_date]\nprint(f\"Orders after {start_date}: {len(after_date)}\")\n\nif len(after_date) > 0:\n    daily = after_date.groupby('date')['revenue'].sum().reset_index()\n    plot_line(daily, x='date', y='revenue', title=f'Daily Revenue (from {start_date})')\nelse:\n    print(\"No orders in this date range.\")",
+      "code": "# @param {\"type\": \"date\", \"default\": \"2024-06-01\"}\nstart_date = \"2024-06-01\"\n\nimport pandas as pd\ndf['order_date'] = pd.to_datetime(df['order_date'])\nafter_date = df[df['order_date'] >= start_date]\nprint(f\"Orders after {start_date}: {len(after_date)}\")\n\nif len(after_date) > 0:\n    daily = after_date.groupby('order_date')['total'].sum().reset_index()\n    plot_line(daily, x='order_date', y='total', title=f'Daily Revenue (from {start_date})')\nelse:\n    print(\"No orders in this date range.\")",
       "output": null,
       "error": null,
       "html": null,
@@ -109,7 +109,7 @@
     },
     {
       "type": "code",
-      "code": "# @param {\"type\": \"dropdown\", \"options\": [\"revenue\", \"quantity\", \"unit_price\"], \"default\": \"revenue\"}\nmetric = \"revenue\"\n\n# @param {\"type\": \"slider\", \"min\": 3, \"max\": 20, \"step\": 1, \"default\": 5}\ntop_n = 5\n\n# @param {\"type\": \"dropdown\", \"options\": [\"product\", \"region\"], \"default\": \"product\"}\ngroup_by = \"product\"\n\nresult = df.groupby(group_by)[metric].sum().nlargest(top_n).reset_index()\nprint(f\"Top {top_n} {group_by}s by {metric}:\")\nplot_bar(result, x=group_by, y=metric, title=f'Top {top_n} {group_by}s by {metric}')",
+      "code": "# @param {\"type\": \"dropdown\", \"options\": [\"total\", \"quantity\", \"unit_price\"], \"default\": \"total\"}\nmetric = \"total\"\n\n# @param {\"type\": \"slider\", \"min\": 3, \"max\": 20, \"step\": 1, \"default\": 5}\ntop_n = 5\n\n# @param {\"type\": \"dropdown\", \"options\": [\"shipping_country\", \"payment_method\"], \"default\": \"shipping_country\"}\ngroup_by = \"shipping_country\"\n\ndf[metric] = pd.to_numeric(df[metric], errors='coerce')\nresult = df.groupby(group_by)[metric].sum().nlargest(top_n).reset_index()\nprint(f\"Top {top_n} {group_by}s by {metric}:\")\nplot_bar(result, x=group_by, y=metric, title=f'Top {top_n} {group_by}s by {metric}')",
       "output": null,
       "error": null,
       "html": null,

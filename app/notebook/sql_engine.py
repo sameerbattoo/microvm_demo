@@ -106,16 +106,34 @@ def _classify_sources(sql: str, athena_db: str, athena_tables: set[str], namespa
     """
     sources: list[SourceRef] = []
 
+    # Strip SQL comments before classification to avoid false detections
+    # Remove single-line comments (-- ...)
+    sql_clean = re.sub(r'--[^\n]*', '', sql)
+    # Remove multi-line comments (/* ... */)
+    sql_clean = re.sub(r'/\*.*?\*/', '', sql_clean, flags=re.DOTALL)
+
     # 1. Detect S3 files: read_csv('s3://...'), read_json('s3://...'), read_parquet('s3://...')
     s3_pattern = re.compile(
         r'\bread_(csv|json|parquet)\s*\(\s*[\'"]s3://[^\'"]+[\'"]\s*\)',
         re.IGNORECASE
     )
-    for m in s3_pattern.finditer(sql):
+    for m in s3_pattern.finditer(sql_clean):
         sources.append(SourceRef(
             source_type=SourceType.S3_FILE,
             full_ref=m.group(0),
             table_name=m.group(0),  # DuckDB handles the full expression
+        ))
+
+    # 1b. Detect local files via DuckDB function: read_csv('/tmp/...'), read_json('/tmp/...')
+    local_func_pattern = re.compile(
+        r'\bread_(csv|json|parquet)\s*\(\s*[\'"](/tmp/[^\'"]+)[\'"]\s*\)',
+        re.IGNORECASE
+    )
+    for m in local_func_pattern.finditer(sql_clean):
+        sources.append(SourceRef(
+            source_type=SourceType.LOCAL_FILE,
+            full_ref=m.group(0),
+            table_name=os.path.basename(m.group(2)),
         ))
 
     # 2. Detect local files: '/tmp/file.ext'
@@ -123,7 +141,7 @@ def _classify_sources(sql: str, athena_db: str, athena_tables: set[str], namespa
         r"(?:FROM|JOIN)\s+['\"](/tmp/[^'\"]+)['\"]",
         re.IGNORECASE
     )
-    for m in local_file_pattern.finditer(sql):
+    for m in local_file_pattern.finditer(sql_clean):
         sources.append(SourceRef(
             source_type=SourceType.LOCAL_FILE,
             full_ref=f"'{m.group(1)}'",
@@ -135,7 +153,7 @@ def _classify_sources(sql: str, athena_db: str, athena_tables: set[str], namespa
         r'(?:FROM|JOIN)\s+(dynamodb\.(?:"[^"]+"|[a-zA-Z_][\w\-]*))',
         re.IGNORECASE
     )
-    for m in dynamo_pattern.finditer(sql):
+    for m in dynamo_pattern.finditer(sql_clean):
         full_ref = m.group(1)
         name_part = full_ref.split('.', 1)[1]
         table_name = name_part.strip('"')
@@ -150,7 +168,7 @@ def _classify_sources(sql: str, athena_db: str, athena_tables: set[str], namespa
         r'(?:FROM|JOIN)\s+(' + re.escape(athena_db) + r'\.([a-zA-Z_]\w*))',
         re.IGNORECASE
     )
-    for m in athena_pattern.finditer(sql):
+    for m in athena_pattern.finditer(sql_clean):
         full_ref = m.group(1)   # e.g. "microvm_demo_db.sales_data"
         bare_name = m.group(2)  # e.g. "sales_data"
         if bare_name in athena_tables:
@@ -169,7 +187,7 @@ def _classify_sources(sql: str, athena_db: str, athena_tables: set[str], namespa
         re.IGNORECASE
     )
     already_classified = {s.full_ref.lower() for s in sources}
-    for m in bare_ref_pattern.finditer(sql):
+    for m in bare_ref_pattern.finditer(sql_clean):
         ref = m.group(1)
         # Skip SQL keywords and already-classified refs
         if ref.lower() in ('select', 'from', 'join', 'where', 'group', 'order', 'having',
