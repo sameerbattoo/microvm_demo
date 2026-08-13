@@ -22,7 +22,7 @@
 
 .intel-panel-title { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-secondary); }
 .intel-header-actions { margin-left: auto; display: flex; align-items: center; gap: 4px; }
-.intel-meta { font-size: 10px; color: var(--text-muted); margin-left: auto; }
+.intel-meta { font-size: 10px; color: var(--text-muted); }
 .intel-alert-badge { font-size: 9px; background: var(--accent-danger, #ff5c5c); color: white; border-radius: 8px; padding: 1px 5px; font-weight: 600; }
 .intel-btn-link { font-size: 10px; color: var(--accent-primary); background: none; border: none; cursor: pointer; text-decoration: underline; margin-left: auto; }
 .intel-btn-link:hover { color: var(--text-primary); }

@@ -266,6 +266,30 @@
 
 .ai-msg-md strong { color: var(--text-primary); }
 
+.ai-code-actions {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  display: flex;
+  gap: 4px;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+pre.ai-code-block { position: relative; }
+pre.ai-code-block:hover .ai-code-actions { opacity: 1; }
+.ai-code-copy-btn, .ai-code-insert-btn {
+  font-size: 9px;
+  padding: 2px 8px;
+  border-radius: 3px;
+  border: 1px solid var(--border-subtle);
+  background: var(--surface-2);
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.ai-code-copy-btn:hover, .ai-code-insert-btn:hover { background: var(--surface-3); color: var(--text-primary); }
+.ai-code-insert-btn { border-color: var(--accent-primary-muted); color: var(--accent-primary); }
+.ai-code-insert-btn:hover { background: var(--accent-primary-subtle); }
+
 .ai-msg-md table {
   border-collapse: collapse;
   width: 100%;

@@ -365,6 +365,26 @@
   margin: 0;
 }
 
+.output-error-wrap {
+  position: relative;
+}
+
+.output-error-fix-btn {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  font-size: 10px;
+  padding: 3px 10px;
+  border-radius: 4px;
+  border: 1px solid var(--accent-primary-muted);
+  background: var(--accent-primary-subtle);
+  color: var(--accent-primary);
+  cursor: pointer;
+  font-weight: 500;
+}
+.output-error-fix-btn:hover:not(:disabled) { background: var(--accent-primary-muted); color: var(--text-primary); }
+.output-error-fix-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
 .output-meta {
   margin-top: 6px;
   font-size: var(--font-size-xs);

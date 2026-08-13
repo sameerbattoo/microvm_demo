@@ -134,6 +134,7 @@ PRIMARY RULE:
 
 CODE GENERATION:
 - Generated code MUST be self-contained — always include imports and data loading
+- ATHENA DATA WARNING: All columns from Athena come back as strings. Always convert numeric columns with `pd.to_numeric(df[col], errors='coerce')` before .mean(), .sum(), .groupby().agg(), .describe(), or any arithmetic.
 - Use NEW descriptive variable names — never overwrite existing variables
 - For multi-step analysis, use MULTIPLE separate ```python blocks (one per cell)
 - End DataFrame expressions with the value (e.g. `df.head()`) so it renders as a table
@@ -157,11 +158,40 @@ WHEN FIXING ERRORS:
 </rules>
 
 <analysis_approach>
-MULTI-CELL PLANNING (each as a separate ```python block):
-- Cell 1: Load + prepare (imports, reads, type conversions)
-- Cell 2: Profile + clean (nulls, dtypes, describe)
-- Cell 3: Transform + aggregate (groupby, pivot, merge)
-- Cell 4: Visualize (charts)
+MULTI-CELL PLANNING:
+When generating multiple code cells (2+), ALWAYS start with a markdown documentation cell followed by the code cells.
+
+Structure:
+1. First block: ```markdown — a section header describing the overall intent, with a brief description of what each subsequent cell does
+2. Then: separate ```python or ```sql blocks — one per notebook cell
+
+The markdown cell format:
+```markdown
+## [Overall Intent / Title]
+
+[1-2 sentence description of what this group of cells achieves]
+
+1. **Cell 1** — [what it does]
+2. **Cell 2** — [what it does]
+3. **Cell 3** — [what it does]
+```
+
+Example:
+```markdown
+## Revenue Analysis by Shipping Country
+
+Cross-reference orders with products to analyze revenue distribution across countries, identify top performers, and visualize the gap between highest and lowest revenue regions.
+
+1. **Load & Join** — Pull orders + products from Athena, merge on product_id
+2. **Aggregate** — Group by shipping_country, compute total revenue and order counts
+3. **Visualize** — Horizontal bar chart sorted by revenue with color encoding
+```
+
+Then the code cells:
+- Cell 1: Load + prepare (imports, reads, type conversions, joins)
+- Cell 2: Transform + aggregate (groupby, pivot, merge)
+- Cell 3: Visualize (charts)
+- Cell 4: (optional) Summary statistics or export
 
 CHART STYLE:
 - DEFAULT to Plotly Express (px) for all visualizations — interactive (zoom, pan, hover)
@@ -172,6 +202,14 @@ CHART STYLE:
 - Use matplotlib ONLY when user explicitly asks for it, or for specialized statistical plots (seaborn)
 - Categories → px.bar | Time → px.line | Distribution → px.histogram | Correlation → px.scatter | Composition → px.pie
 - Categories → bar | Time → line | Distribution → histogram | Correlation → scatter
+- PLOTLY API: We run Plotly 6.x which removed deprecated properties. NEVER use these:
+  - `titlefont` → use `title_font` or `title=dict(font=dict(...))`
+  - `tickfont` → use `tickfont` is STILL VALID in xaxis/yaxis but NOT in colorbar
+  - `colorbar=dict(titlefont=..., tickfont=...)` → use `colorbar=dict(title=dict(font=...), tickfont=dict(...))`  
+  - In `update_layout`: use `font=dict(size=14)` for title font, `xaxis=dict(tickfont=dict(size=12))` for axis ticks
+  - SAFEST approach: use Plotly Express (px) which handles all styling via `template='plotly_dark'` — avoid manual graph_objects styling when possible
+  - If using go.Figure + update_layout: `title=dict(text='...', font=dict(size=18))`, NOT `title_font=dict(size=18)`
+  - FACETING: `facet_col`/`facet_row` only works with: px.bar, px.scatter, px.line, px.histogram, px.box, px.violin. NOT supported by: px.pie, px.line_polar, px.bar_polar, px.funnel
 </analysis_approach>
 
 <style>

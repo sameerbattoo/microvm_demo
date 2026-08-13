@@ -65,6 +65,9 @@ export default function Sidebar({
   onScrollToCell,
   onReorderCells,
   onRunFromCell,
+  onDeleteCells,
+  onRunCells,
+  onClearOutputs,
   onAttachInstance,
   onTerminateAndSave,
   onSuspendInstance,
@@ -137,7 +140,7 @@ export default function Sidebar({
     const handleMouseMove = (e) => {
       if (!isResizing.current) return
       const delta = e.clientX - startX
-      const newWidth = Math.min(480, Math.max(180, startWidth + delta))
+      const newWidth = Math.min(720, Math.max(180, startWidth + delta))
       setPanelWidth(newWidth)
     }
 
@@ -425,6 +428,9 @@ export default function Sidebar({
               onScrollToCell={onScrollToCell}
               onReorderCells={onReorderCells}
               onRunFromCell={onRunFromCell}
+              onDeleteCells={onDeleteCells}
+              onRunCells={onRunCells}
+              onClearOutputs={onClearOutputs}
               onClose={() => setActivePanel(null)}
             />
           )}

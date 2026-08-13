@@ -634,7 +634,16 @@ export default function Cell({
                     <SortableTable html={cell.html} sanitizer={sanitizeHtml} />
                   )
                 )}
-                {cell.error && <pre className="output-error">{cell.error}</pre>}
+                {cell.error && (
+                  <div className="output-error-wrap">
+                    <pre className="output-error">{cell.error}</pre>
+                    {isConnected && (
+                      <button className="output-error-fix-btn" onClick={handleAiFix} disabled={aiResult?.loading} title="Fix this error with AI">
+                        {aiResult?.loading && aiResult?.type === 'fix' ? 'Fixing...' : '⚡ Fix'}
+                      </button>
+                    )}
+                  </div>
+                )}
                 {cell.executionTime != null && (
                   <div className="output-meta">
                     Executed in {cell.executionTime.toFixed(1)}ms

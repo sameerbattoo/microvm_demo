@@ -905,6 +905,21 @@ export default function App() {
           onRunFromCell={(cellIdx) => {
             window.dispatchEvent(new CustomEvent('notebook-run-from-cell', { detail: { cellIdx } }))
           }}
+          onDeleteCells={(cellIds) => {
+            const currentCells = tabs.find(t => t.id === activeTabId)?._cells || []
+            const remaining = currentCells.filter(c => !cellIds.includes(c.id))
+            updateTab(activeTabId, { _cells: remaining })
+          }}
+          onRunCells={(cellIndices) => {
+            window.dispatchEvent(new CustomEvent('notebook-run-cells', { detail: { cellIndices } }))
+          }}
+          onClearOutputs={(cellIds) => {
+            const currentCells = tabs.find(t => t.id === activeTabId)?._cells || []
+            const updated = currentCells.map(c =>
+              cellIds.includes(c.id) ? { ...c, output: null, error: null, html: null, image: null, executionTime: null, executionNumber: null } : c
+            )
+            updateTab(activeTabId, { _cells: updated })
+          }}
           showTerminal={bottomPanelTabs.has('terminal')}
           onToggleTerminal={() => toggleBottomTab('terminal')}
           showLogs={bottomPanelTabs.has('logs')}

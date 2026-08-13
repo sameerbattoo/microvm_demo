@@ -6,6 +6,15 @@ import { sanitizeMarkdown } from '../services/sanitize'
 import { useSpeechToText } from '../hooks/useSpeechToText'
 import './AiChatPanel.css'
 
+// Custom marked renderer: wraps code blocks with copy + insert buttons
+const renderer = new marked.Renderer()
+renderer.code = function({ text, lang }) {
+  const escaped = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+  const cellType = (lang === 'sql') ? 'sql' : (lang === 'markdown') ? 'markdown' : 'code'
+  return `<pre class="ai-code-block" data-lang="${cellType}"><div class="ai-code-actions"><button class="ai-code-copy-btn">Copy</button><button class="ai-code-insert-btn">Insert</button></div><code class="language-${lang || ''}">${escaped}</code></pre>`
+}
+marked.setOptions({ renderer })
+
 export default function AiChatPanel({ activeTab, uploadedFiles = [], onClose, onUpdateCell, onInsertCells, onUpdateMessages }) {
   // Messages are stored on the tab so they persist when switching notebooks
   const messages = activeTab?._chatMessages || []
@@ -70,6 +79,44 @@ export default function AiChatPanel({ activeTab, uploadedFiles = [], onClose, on
     return () => window.removeEventListener('ai-chat-send', handler)
   }, [])
 
+  // Listen for individual cell insert from code block buttons
+  useEffect(() => {
+    const handler = (e) => {
+      const { code, type } = e.detail || {}
+      if (code && onInsertCells) {
+        onInsertCells([code], [type || 'code'])
+      }
+    }
+    window.addEventListener('ai-insert-cell', handler)
+    return () => window.removeEventListener('ai-insert-cell', handler)
+  }, [onInsertCells])
+
+  // Event delegation for code block Copy + Insert buttons
+  useEffect(() => {
+    const container = endRef.current?.parentElement
+    if (!container) return
+    const handler = (e) => {
+      const btn = e.target.closest('.ai-code-copy-btn, .ai-code-insert-btn')
+      if (!btn) return
+      const pre = btn.closest('pre.ai-code-block')
+      if (!pre) return
+      const code = pre.querySelector('code')?.textContent || ''
+      const cellType = pre.getAttribute('data-lang') || 'code'
+
+      if (btn.classList.contains('ai-code-copy-btn')) {
+        navigator.clipboard.writeText(code)
+        btn.textContent = 'Copied!'
+        setTimeout(() => { btn.textContent = 'Copy' }, 1500)
+      } else if (btn.classList.contains('ai-code-insert-btn')) {
+        if (onInsertCells) onInsertCells([code], [cellType])
+        btn.textContent = 'Inserted!'
+        setTimeout(() => { btn.textContent = 'Insert' }, 1500)
+      }
+    }
+    container.addEventListener('click', handler)
+    return () => container.removeEventListener('click', handler)
+  }, [onInsertCells])
+
   const handleResizeStart = (e) => {
     e.preventDefault()
     isResizing.current = true
@@ -79,7 +126,7 @@ export default function AiChatPanel({ activeTab, uploadedFiles = [], onClose, on
     const handleMouseMove = (e) => {
       if (!isResizing.current) return
       const delta = startX - e.clientX
-      setWidth(Math.min(600, Math.max(240, startWidth + delta)))
+      setWidth(Math.min(900, Math.max(240, startWidth + delta)))
     }
 
     const handleMouseUp = () => {
@@ -292,7 +339,7 @@ export default function AiChatPanel({ activeTab, uploadedFiles = [], onClose, on
                   <div className="ai-msg-md" dangerouslySetInnerHTML={{ __html: sanitizeMarkdown(marked.parse(msg.content, { breaks: true })) }} />
                   {/* Show Apply button if response contains code blocks */}
                   {msg.content.includes('```') && (onUpdateCell || onInsertCells) && (() => {
-                    const codeBlocks = [...msg.content.matchAll(/```(?:python|sql)?\n([\s\S]*?)```/g)].map(m => ({ code: m[1].trim(), type: m[0].startsWith('```sql') ? 'sql' : 'code' }))
+                    const codeBlocks = [...msg.content.matchAll(/```(?:python|sql|markdown)?\n([\s\S]*?)```/g)].map(m => ({ code: m[1].trim(), type: m[0].startsWith('```sql') ? 'sql' : m[0].startsWith('```markdown') ? 'markdown' : 'code' }))
                     if (codeBlocks.length === 0) return null
                     return (
                       <div className="ai-apply-multi">

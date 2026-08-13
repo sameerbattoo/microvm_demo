@@ -533,6 +533,22 @@ export default function Notebook({ tab, instances = {}, onUpdateTab, onMarkVmRun
     return () => window.removeEventListener('notebook-run-from-cell', handleRunFrom)
   }, [cells, tab.microvmId, executeCell])
 
+  // Listen for "Run selected cells" events from the outline panel
+  useEffect(() => {
+    const handleRunCells = async (e) => {
+      const { cellIndices } = e.detail || {}
+      if (!cellIndices || !tab.microvmId) return
+      for (const idx of cellIndices) {
+        const cell = cells[idx]
+        if (cell && cell.code.trim() && cell.type !== 'markdown') {
+          await executeCell(cell.id)
+        }
+      }
+    }
+    window.addEventListener('notebook-run-cells', handleRunCells)
+    return () => window.removeEventListener('notebook-run-cells', handleRunCells)
+  }, [cells, tab.microvmId, executeCell])
+
   const clearAllOutputs = useCallback(() => {
     setCells(prev => prev.map(c => c.type === 'markdown' ? c : {
       ...c, output: null, error: null, html: null, image: null, executionNumber: null, executionTime: null, status: 'idle'

@@ -45,8 +45,8 @@ export function sanitizeMarkdown(dirty) {
   if (!dirty) return ''
   return DOMPurify.sanitize(dirty, {
     // Allow everything except scripts and event handlers (DOMPurify default)
-    ADD_TAGS: ['input'],
-    ADD_ATTR: ['target', 'class', 'checked', 'disabled', 'type'],
-    ALLOW_DATA_ATTR: false,
+    ADD_TAGS: ['input', 'button'],
+    ADD_ATTR: ['target', 'class', 'checked', 'disabled', 'type', 'data-lang'],
+    ALLOW_DATA_ATTR: true,
   })
 }
