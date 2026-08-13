@@ -32,7 +32,7 @@
     },
     {
       "type": "code",
-      "code": "# Load all 3 Athena tables\norders = read_athena(\"SELECT * FROM microvm_demo_db.orders\")\ncustomers = read_athena(\"SELECT * FROM microvm_demo_db.customers\")\nproducts = read_athena(\"SELECT * FROM microvm_demo_db.products\")\n\nprint(f\"\u2713 Orders:    {orders.shape[0]} rows \u00d7 {orders.shape[1]} cols\")\nprint(f\"\u2713 Customers: {customers.shape[0]} rows \u00d7 {customers.shape[1]} cols\")\nprint(f\"\u2713 Products:  {products.shape[0]} rows \u00d7 {products.shape[1]} cols\")\norders.head()",
+      "code": "# Load all 3 Athena tables\nimport pandas as pd\norders = read_athena(\"SELECT * FROM microvm_demo_db.orders\")\ncustomers = read_athena(\"SELECT * FROM microvm_demo_db.customers\")\nproducts = read_athena(\"SELECT * FROM microvm_demo_db.products\")\n\n# Convert numeric columns (Athena returns strings)\nfor col in ['quantity', 'unit_price', 'total']:\n    orders[col] = pd.to_numeric(orders[col], errors='coerce')\nfor col in ['price', 'cost', 'stock_quantity', 'rating_avg']:\n    products[col] = pd.to_numeric(products[col], errors='coerce')\n\nprint(f\"\u2713 Orders:    {orders.shape[0]} rows \u00d7 {orders.shape[1]} cols\")\nprint(f\"\u2713 Customers: {customers.shape[0]} rows \u00d7 {customers.shape[1]} cols\")\nprint(f\"\u2713 Products:  {products.shape[0]} rows \u00d7 {products.shape[1]} cols\")\norders.head()",
       "output": null,
       "error": null,
       "html": null,
@@ -104,7 +104,7 @@
     },
     {
       "type": "code",
-      "code": "# Revenue by category\norders['total'] = pd.to_numeric(orders['total'], errors='coerce')\ncategory_revenue = order_details.groupby('category').agg(\n    total_revenue=('total', 'sum'),\n    order_count=('order_id', 'count'),\n    avg_order=('total', 'mean')\n).round(2).sort_values('total_revenue', ascending=False)\n\nprint(\"Revenue by Product Category:\")\ncategory_revenue",
+      "code": "# Revenue by category\ncategory_revenue = order_details.groupby('category').agg(\n    total_revenue=('total', 'sum'),\n    order_count=('order_id', 'count'),\n    avg_order=('total', 'mean')\n).round(2).sort_values('total_revenue', ascending=False)\n\nprint(\"Revenue by Product Category:\")\ncategory_revenue",
       "output": null,
       "error": null,
       "html": null,
