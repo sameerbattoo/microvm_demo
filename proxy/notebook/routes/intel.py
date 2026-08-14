@@ -18,6 +18,7 @@ from proxy.storage import storage
 from proxy.notebook.ai.workbook_intel import (
     generate_intel_async,
     load_intel_from_s3,
+    is_generating,
 )
 
 logger = logging.getLogger(__name__)
@@ -43,6 +44,12 @@ async def get_workbook_intel(request: Request):
     session_id = request.headers.get("X-Session-Id", "")
     if not session_id:
         return JSONResponse(status_code=400, content={"error": "X-Session-Id header required"})
+
+    # Report real in-progress state first — this is the key fix for reliable
+    # auto-popup: without it, callers can't tell "hasn't started" apart from
+    # "actively running", and are forced to poll on a blind guessed schedule.
+    if is_generating(session_id):
+        return {"status": "generating", "intel": None, "message": "Workbook intelligence report is being generated..."}
 
     # Check DB for existing intel
     intel_meta = storage.workbook_intel_get(session_id)
@@ -99,7 +106,12 @@ async def generate_workbook_intel(request: Request):
 
     logger.info(f"[intel] Generation triggered: session={session_id[:8]}... trigger={trigger}")
 
-    # Start async generation
-    generate_intel_async(session_id, vm_manager, ARTIFACT_BUCKET, storage)
+    # Start async generation — de-duplicated: if one is already running for this
+    # session (e.g. file-upload auto-trigger and a manual click landed close together),
+    # this returns False and no second agent thread is spawned.
+    started = generate_intel_async(session_id, vm_manager, ARTIFACT_BUCKET, storage)
+
+    if not started:
+        return {"status": "generating", "message": "A workbook intelligence report is already being generated for this session."}
 
     return {"status": "generating", "message": "Workbook intelligence report is being generated..."}

@@ -352,3 +352,48 @@ export function IconChevronUp(props) {
     </svg>
   )
 }
+
+export function IconLogs(props) {
+  return (
+    <svg {...iconProps} {...props}>
+      <path d="M4 6h16" /><path d="M4 10h16" /><path d="M4 14h10" /><path d="M4 18h8" /><circle cx="18" cy="16" r="3" /><path d="M18 14v2l1 1" />
+    </svg>
+  )
+}
+
+export function IconIntel(props) {
+  return (
+    <svg {...iconProps} {...props}>
+      <path d="M12 2a7 7 0 0 0-7 7c0 2.38 1.19 4.47 3 5.74V17a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1v-2.26c1.81-1.27 3-3.36 3-5.74a7 7 0 0 0-7-7z" /><path d="M9 21h6" /><path d="M9 18h6" /><line x1="12" y1="2" x2="12" y2="6" /><line x1="12" y1="9" x2="12" y2="13" />
+    </svg>
+  )
+}
+
+export function IconBarChart(props) {
+  return (
+    <svg {...iconProps} {...props}>
+      <line x1="6" y1="20" x2="6" y2="16" />
+      <line x1="12" y1="20" x2="12" y2="10" />
+      <line x1="18" y1="20" x2="18" y2="4" />
+    </svg>
+  )
+}
+
+export function IconChartLine(props) {
+  return (
+    <svg {...iconProps} {...props}>
+      <path d="M3 3v18h18" />
+      <path d="M18.7 8l-5.1 5.2-2.8-2.7L7 14.3" />
+    </svg>
+  )
+}
+
+export function IconAlertTriangle(props) {
+  return (
+    <svg {...iconProps} {...props}>
+      <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
+      <line x1="12" y1="9" x2="12" y2="13" />
+      <line x1="12" y1="17" x2="12.01" y2="17" />
+    </svg>
+  )
+}

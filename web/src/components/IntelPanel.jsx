@@ -13,7 +13,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { marked } from 'marked'
 import { PROXY_URL } from '../config'
-import { IconX } from './Icons'
+import { IconX, IconBarChart, IconChartLine, IconSearch, IconAlertTriangle } from './Icons'
 import './IntelPanel.css'
 
 const ALERT_ICONS = {
@@ -76,6 +76,11 @@ export default function IntelPanel({ activeTab, onClose, onInsertPrompt }) {
           setStatus('ready')
           regeneratingRef.current = null
           _generatingMap.delete(sessionId)
+        } else if (data.status === 'generating') {
+          // Backend now reports real in-progress state (not just our local guess) —
+          // trust it directly, including for the very first auto-triggered generation
+          // (regeneratingRef is only set for user-initiated regenerate clicks).
+          setStatus('generating')
         } else if (!regeneratingRef.current) {
           setStatus('not_generated')
         }
@@ -181,16 +186,20 @@ export default function IntelPanel({ activeTab, onClose, onInsertPrompt }) {
           {/* Section tabs */}
           <div className="intel-section-tabs">
             <button className={`intel-tab ${activeSection === 'analyses' ? 'active' : ''}`} onClick={() => setActiveSection('analyses')}>
+              <IconBarChart width={13} height={13} />
               Analyses ({analyses.length})
             </button>
             <button className={`intel-tab ${activeSection === 'viz' ? 'active' : ''}`} onClick={() => setActiveSection('viz')}>
+              <IconChartLine width={13} height={13} />
               Visualizations ({visualizations.length})
             </button>
             <button className={`intel-tab ${activeSection === 'investigate' ? 'active' : ''}`} onClick={() => setActiveSection('investigate')}>
+              <IconSearch width={13} height={13} />
               Investigate ({investigations.length})
             </button>
             {alerts.length > 0 && (
               <button className={`intel-tab intel-tab-alert ${activeSection === 'alerts' ? 'active' : ''}`} onClick={() => setActiveSection('alerts')}>
+                <IconAlertTriangle width={13} height={13} />
                 Alerts ({alerts.length})
               </button>
             )}

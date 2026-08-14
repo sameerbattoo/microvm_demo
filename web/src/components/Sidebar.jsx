@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { IconX, IconNotebook, IconDatabase, IconCode, IconPackage, IconServer, IconBraces, IconTerminal } from './Icons'
+import { IconX, IconNotebook, IconDatabase, IconCode, IconPackage, IconServer, IconBraces, IconTerminal, IconLogs, IconIntel } from './Icons'
 import { PROXY_URL, API_TIMEOUT_MS } from '../config'
 import { fetchWithTimeout } from '../services/fetchWithTimeout'
 import './Sidebar.css'
@@ -31,21 +31,6 @@ function IconSamples({ width = 16, height = 16 }) {
     </svg>
   )
 }
-function IconLogs({ width = 16, height = 16 }) {
-  return (
-    <svg width={width} height={height} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M4 6h16" /><path d="M4 10h16" /><path d="M4 14h10" /><path d="M4 18h8" /><circle cx="18" cy="16" r="3" /><path d="M18 14v2l1 1" />
-    </svg>
-  )
-}
-function IconIntel({ width = 16, height = 16 }) {
-  return (
-    <svg width={width} height={height} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M12 2a7 7 0 0 0-7 7c0 2.38 1.19 4.47 3 5.74V17a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1v-2.26c1.81-1.27 3-3.36 3-5.74a7 7 0 0 0-7-7z" /><path d="M9 21h6" /><path d="M9 18h6" /><line x1="12" y1="2" x2="12" y2="6" /><line x1="12" y1="9" x2="12" y2="13" />
-    </svg>
-  )
-}
-
 export default function Sidebar({
   tabs,
   activeTabId,

@@ -13,7 +13,7 @@
     },
     {
       "type": "code",
-      "code": "# First, load some data to work with\ndf = sample_data('orders')\ndf['total'] = pd.to_numeric(df['total'], errors='coerce')\ndf['quantity'] = pd.to_numeric(df['quantity'], errors='coerce')\nprint(f\"Loaded {len(df)} rows\")\ndf.head(3)",
+      "code": "# First, load some data to work with\nimport pandas as pd\ndf = sample_data('orders')\ndf['total'] = pd.to_numeric(df['total'], errors='coerce')\ndf['quantity'] = pd.to_numeric(df['quantity'], errors='coerce')\nprint(f\"Loaded {len(df)} rows\")\ndf.head(3)",
       "output": null,
       "error": null,
       "html": null,
@@ -77,7 +77,7 @@
     },
     {
       "type": "code",
-      "code": "# @param {\"type\": \"text\", \"default\": \"total\", \"placeholder\": \"column name\"}\ncolumn_name = \"total\"\n\nif column_name in df.columns:\n    col = pd.to_numeric(df[column_name], errors='coerce').dropna()\n    print(f\"Stats for '{column_name}':\")\n    print(f\"  Mean: {col.mean():.2f}\")\n    print(f\"  Median: {col.median():.2f}\")\n    print(f\"  Std: {col.std():.2f}\")\n    plot_histogram(df, column_name, title=f'Distribution of {column_name}')\nelse:\n    print(f\"Column '{column_name}' not found. Available: {list(df.columns)}\")",
+      "code": "# @param {\"type\": \"text\", \"default\": \"total\", \"placeholder\": \"column name\"}\ncolumn_name = \"total\"\n\nimport pandas as pd\n\nif column_name in df.columns:\n    col = pd.to_numeric(df[column_name], errors='coerce').dropna()\n    print(f\"Stats for '{column_name}':\")\n    print(f\"  Mean: {col.mean():.2f}\")\n    print(f\"  Median: {col.median():.2f}\")\n    print(f\"  Std: {col.std():.2f}\")\n    plot_histogram(df, column_name, title=f'Distribution of {column_name}')\nelse:\n    print(f\"Column '{column_name}' not found. Available: {list(df.columns)}\")",
       "output": null,
       "error": null,
       "html": null,
@@ -109,7 +109,7 @@
     },
     {
       "type": "code",
-      "code": "# @param {\"type\": \"dropdown\", \"options\": [\"total\", \"quantity\", \"unit_price\"], \"default\": \"total\"}\nmetric = \"total\"\n\n# @param {\"type\": \"slider\", \"min\": 3, \"max\": 20, \"step\": 1, \"default\": 5}\ntop_n = 5\n\n# @param {\"type\": \"dropdown\", \"options\": [\"shipping_country\", \"payment_method\"], \"default\": \"shipping_country\"}\ngroup_by = \"shipping_country\"\n\ndf[metric] = pd.to_numeric(df[metric], errors='coerce')\nresult = df.groupby(group_by)[metric].sum().nlargest(top_n).reset_index()\nprint(f\"Top {top_n} {group_by}s by {metric}:\")\nplot_bar(result, x=group_by, y=metric, title=f'Top {top_n} {group_by}s by {metric}')",
+      "code": "# @param {\"type\": \"dropdown\", \"options\": [\"total\", \"quantity\", \"unit_price\"], \"default\": \"total\"}\nmetric = \"total\"\n\n# @param {\"type\": \"slider\", \"min\": 3, \"max\": 20, \"step\": 1, \"default\": 5}\ntop_n = 5\n\n# @param {\"type\": \"dropdown\", \"options\": [\"shipping_country\", \"payment_method\"], \"default\": \"shipping_country\"}\ngroup_by = \"shipping_country\"\n\nimport pandas as pd\ndf[metric] = pd.to_numeric(df[metric], errors='coerce')\nresult = df.groupby(group_by)[metric].sum().nlargest(top_n).reset_index()\nprint(f\"Top {top_n} {group_by}s by {metric}:\")\nplot_bar(result, x=group_by, y=metric, title=f'Top {top_n} {group_by}s by {metric}')",
       "output": null,
       "error": null,
       "html": null,

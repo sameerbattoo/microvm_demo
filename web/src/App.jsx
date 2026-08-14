@@ -6,7 +6,7 @@ import TerminalPanel from './components/panels/TerminalPanel'
 import LogsPanel from './components/LogsPanel'
 import IntelPanel from './components/IntelPanel'
 import { ConfirmModal, InputModal } from './components/Modal'
-import { IconZap, IconSun, IconMoon, IconFlame } from './components/Icons'
+import { IconZap, IconSun, IconMoon, IconFlame, IconTerminal, IconLogs, IconIntel } from './components/Icons'
 import { PROXY_URL } from './config'
 import { fetchNotebooks, saveNotebook as apiSaveNotebook, createNotebook as apiCreateNotebook, deleteNotebook as apiDeleteNotebook, migrateFromLocalStorage, loadChatMessages, saveChatMessages } from './services/notebooks'
 import './App.css'
@@ -274,45 +274,73 @@ export default function App() {
   const [aiAvailable, setAiAvailable] = useState(false)
   const [intelShownForSession, setIntelShownForSession] = useState(null) // tracks which session we auto-showed intel for
 
-  // Auto-show Intel panel when intel becomes available
+  // Auto-show Intel panel when intel becomes available for the active tab.
+  //
+  // This polls the backend's REAL generation state (see is_generating() in
+  // proxy/notebook/ai/workbook_intel.py) instead of guessing a fixed time
+  // window. The old version waited a blind 30s then polled every 15s for up
+  // to 3 minutes before giving up permanently — since actual generation time
+  // varies (agent tool calls + LLM latency), anything slower than 3 minutes
+  // meant the tab silently never popped up even though generation succeeded
+  // moments later. Now: check immediately, poll fast while status is
+  // genuinely "generating", and only stop when the backend reports ready
+  // (or error) — no arbitrary cutoff for the case we know is still running.
+  const intelPollRef = useRef({ sessionId: null, cancelled: true })
+
   useEffect(() => {
     const activeTab = tabs.find(t => t.id === activeTabId)
     const sessionId = activeTab?.sessionId
     if (!sessionId || sessionId === intelShownForSession) return
     if (activeTab?.status !== 'connected') return
 
-    let cancelled = false
+    // Guard against starting a duplicate poll loop for a session that's already
+    // being watched (e.g. rapid re-renders before the deps below actually change)
+    if (intelPollRef.current.sessionId === sessionId && !intelPollRef.current.cancelled) {
+      return
+    }
 
-    const checkIntel = async () => {
-      if (cancelled) return
+    const pollState = { sessionId, cancelled: false }
+    intelPollRef.current = pollState
+
+    const GENERATING_INTERVAL_MS = 4000  // fast poll — backend confirmed it's actively running
+    const IDLE_INTERVAL_MS = 10000       // slower poll — nothing triggered yet, just watching
+    const MAX_ATTEMPTS = 200             // safety net only, in case a backend thread crashes
+                                          // without ever clearing its "generating" state
+
+    let attempts = 0
+
+    const poll = async () => {
+      if (pollState.cancelled) return
+      attempts++
+
+      let data = null
       try {
         const resp = await fetch(`${PROXY_URL}/workbook-intel`, { headers: { 'X-Session-Id': sessionId } })
-        if (resp.ok && !cancelled) {
-          const data = await resp.json()
-          if (data.status === 'ready' && data.intel) {
-            // Auto-open the intel panel
-            setBottomPanelTabs(prev => new Set([...prev, 'intel']))
-            setBottomPanelActive('intel')
-            setIntelShownForSession(sessionId)
-            return true  // done
-          }
-        }
-      } catch {}
-      return false
+        if (resp.ok) data = await resp.json()
+      } catch {
+        // network hiccup — fall through and retry at the idle interval
+      }
+
+      if (pollState.cancelled) return
+
+      if (data?.status === 'ready' && data.intel) {
+        setBottomPanelTabs(prev => new Set([...prev, 'intel']))
+        setBottomPanelActive('intel')
+        setIntelShownForSession(sessionId)
+        return  // done
+      }
+
+      if (data?.status === 'error') return  // generation failed — nothing to auto-open
+      if (attempts >= MAX_ATTEMPTS) return   // safety net exhausted
+
+      const delay = data?.status === 'generating' ? GENERATING_INTERVAL_MS : IDLE_INTERVAL_MS
+      setTimeout(poll, delay)
     }
 
-    // Poll every 15s starting at 30s, up to 3 minutes
-    let attempts = 0
-    const maxAttempts = 10
-    const poll = async () => {
-      if (cancelled || attempts >= maxAttempts) return
-      attempts++
-      const done = await checkIntel()
-      if (!done && !cancelled) setTimeout(poll, 15000)
-    }
-    const timer = setTimeout(poll, 30000)
-    return () => { cancelled = true; clearTimeout(timer) }
-  }, [activeTabId, tabs.find?.(t => t?.id === activeTabId)?.status])
+    poll()  // check right away — no blind upfront wait
+
+    return () => { pollState.cancelled = true }
+  }, [activeTabId, tabs.find?.(t => t?.id === activeTabId)?.status, intelShownForSession])
   const [newNotebookName, setNewNotebookName] = useState('')
   const [newNotebookDesc, setNewNotebookDesc] = useState('')
 
@@ -1072,6 +1100,7 @@ export default function App() {
                     className={`bottom-panel-tab ${bottomPanelActive === 'terminal' ? 'bottom-panel-tab-active' : ''}`}
                     onClick={() => setBottomPanelActive('terminal')}
                   >
+                    <IconTerminal width={14} height={14} />
                     Terminal
                     {bottomPanelTabs.size > 1 && (
                       <span className="bottom-panel-tab-close" onClick={(e) => { e.stopPropagation(); closeBottomTab('terminal') }}>&times;</span>
@@ -1083,6 +1112,7 @@ export default function App() {
                     className={`bottom-panel-tab ${bottomPanelActive === 'logs' ? 'bottom-panel-tab-active' : ''}`}
                     onClick={() => setBottomPanelActive('logs')}
                   >
+                    <IconLogs width={14} height={14} />
                     Logs
                     {bottomPanelTabs.size > 1 && (
                       <span className="bottom-panel-tab-close" onClick={(e) => { e.stopPropagation(); closeBottomTab('logs') }}>&times;</span>
@@ -1094,6 +1124,7 @@ export default function App() {
                     className={`bottom-panel-tab ${bottomPanelActive === 'intel' ? 'bottom-panel-tab-active' : ''}`}
                     onClick={() => setBottomPanelActive('intel')}
                   >
+                    <IconIntel width={14} height={14} />
                     Intel
                     {bottomPanelTabs.size > 1 && (
                       <span className="bottom-panel-tab-close" onClick={(e) => { e.stopPropagation(); closeBottomTab('intel') }}>&times;</span>

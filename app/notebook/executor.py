@@ -191,7 +191,7 @@ class SandboxExecutor:
             html_output = self._capture_dataframe(code)
             # If no DataFrame/Plotly captured, check for any new Plotly figures in namespace
             if not html_output:
-                html_output = self._capture_plotly_figure(variables_before)
+                html_output = self._capture_plotly_figure(code, variables_before)
             # Check explicit display() calls (works from inside if/else, loops, functions)
             if not html_output and display_outputs:
                 html_output = self._capture_display_outputs(display_outputs)
@@ -406,44 +406,86 @@ class SandboxExecutor:
                 continue
         return ""
 
-    def _capture_plotly_figure(self, variables_before: set) -> str:
-        """Check namespace for any Plotly Figure created during this execution.
-        
+    def _capture_plotly_figure(self, code: str, variables_before: set) -> str:
+        """Check namespace for any Plotly Figure created or reassigned during this execution.
+
         This handles cases where a Plotly figure is created inside an if/else block
         or stored in a variable but not returned as the last expression.
+
+        For well-known names ('fig', 'figure', 'chart'), the namespace persists across
+        cells, so those names are frequently REUSED (e.g. every chart cell writes
+        `fig = px.something(...)`). Checking "is this variable name new?" would skip
+        every figure after the first cell that happens to use one of these names,
+        silently dropping the chart. Instead, we parse the code that just ran (via ast)
+        to see whether it actually assigns one of these names anywhere — including
+        inside if/else/for blocks — and only then treat the current value as this
+        execution's output. This avoids relying on object identity/memory-address
+        comparisons, which are unreliable in CPython due to id() reuse after garbage
+        collection.
         """
         try:
             import plotly.graph_objects as go
 
-            # Look for new variables that are Plotly Figures
+            # Look for entirely new variables that are Plotly Figures
             for var_name in set(self._namespace.keys()) - variables_before - {'__builtins__'}:
                 val = self._namespace.get(var_name)
                 if isinstance(val, go.Figure):
-                    html = val.to_html(
-                        full_html=False,
-                        include_plotlyjs='cdn',
-                        config={'responsive': True, 'displayModeBar': True},
-                    )
-                    return f'<div class="plotly-chart" data-plotly="true">{html}</div>'
-            
-            # Also check well-known figure variable names that may have been overwritten
-            # Only if they weren't in the namespace before (meaning they were re-assigned this execution)
+                    return self._render_plotly_html(val)
+
+            # Also check well-known figure variable names, but only if THIS cell's
+            # code actually assigned to that name (at any nesting level).
+            assigned_names = self._assigned_names(code)
             for var_name in ('fig', 'figure', 'chart'):
-                if var_name in variables_before:
-                    continue  # existed before this execution — don't capture old figures
+                if var_name not in assigned_names:
+                    continue  # this cell didn't touch the name — don't re-show a stale figure
                 val = self._namespace.get(var_name)
                 if isinstance(val, go.Figure):
-                    html = val.to_html(
-                        full_html=False,
-                        include_plotlyjs='cdn',
-                        config={'responsive': True, 'displayModeBar': True},
-                    )
-                    return f'<div class="plotly-chart" data-plotly="true">{html}</div>'
+                    return self._render_plotly_html(val)
         except ImportError:
             pass
         except Exception:
             pass
         return ""
+
+    @staticmethod
+    def _render_plotly_html(fig) -> str:
+        """Render a Plotly Figure to the HTML snippet used for cell output."""
+        html = fig.to_html(
+            full_html=False,
+            include_plotlyjs='cdn',
+            config={'responsive': True, 'displayModeBar': True},
+        )
+        return f'<div class="plotly-chart" data-plotly="true">{html}</div>'
+
+    @staticmethod
+    def _assigned_names(code: str) -> set:
+        """Return every simple name assigned anywhere in the code (any nesting level,
+        including inside if/else/for/while/functions). Used to detect whether a cell
+        writes to a well-known variable name like `fig`, without relying on
+        before/after namespace diffing (which breaks when the same name is reused
+        across cells) or object identity (which is unreliable due to id() reuse).
+        """
+        import ast
+        names = set()
+        try:
+            tree = ast.parse(code)
+        except SyntaxError:
+            return names
+        for node in ast.walk(tree):
+            targets = []
+            if isinstance(node, ast.Assign):
+                targets = node.targets
+            elif isinstance(node, ast.AnnAssign):
+                targets = [node.target]
+            elif isinstance(node, ast.AugAssign):
+                targets = [node.target]
+            elif isinstance(node, ast.NamedExpr):  # walrus operator: fig := ...
+                targets = [node.target]
+            for target in targets:
+                for n in ast.walk(target):
+                    if isinstance(n, ast.Name):
+                        names.add(n.id)
+        return names
 
     def _capture_plot(self) -> str:
         """If matplotlib has an active figure, capture it as base64 PNG and close it."""

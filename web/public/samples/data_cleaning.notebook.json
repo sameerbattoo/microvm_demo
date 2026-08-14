@@ -33,7 +33,7 @@
     },
     {
       "type": "code",
-      "code": "# Step 1: Handle missing values\ndf_clean = df.copy()\ndf_clean['name'] = df_clean['name'].fillna('Unknown')\ndf_clean['age'] = df_clean['age'].fillna(df_clean['age'].median())\ndf_clean['revenue'] = df_clean['revenue'].fillna(0)\ndf_clean['country'] = df_clean['country'].fillna('Unknown')\n\n# Step 2: Fix invalid values\ndf_clean.loc[df_clean['email'] == 'INVALID', 'email'] = None\ndf_clean['email_valid'] = df_clean['email'].notna()\ndf_clean['signup_date'] = pd.to_datetime(df_clean['signup_date'])\ndf_clean['age_group'] = pd.cut(df_clean['age'], bins=[0, 25, 35, 50, 65, 100], labels=['18-25', '26-35', '36-50', '51-65', '65+'])\n\nprint(f\"Clean dataset: {df_clean.shape[0]} rows, {df_clean.shape[1]} columns\")\nprint(f\"Missing values remaining: {df_clean.isnull().sum().sum()}\")\ndf_clean.head()",
+      "code": "import pandas as pd\n\n# Step 1: Handle missing values\ndf_clean = df.copy()\ndf_clean['name'] = df_clean['name'].fillna('Unknown')\ndf_clean['age'] = df_clean['age'].fillna(df_clean['age'].median())\ndf_clean['revenue'] = df_clean['revenue'].fillna(0)\ndf_clean['country'] = df_clean['country'].fillna('Unknown')\n\n# Step 2: Fix invalid values\ndf_clean.loc[df_clean['email'] == 'INVALID', 'email'] = None\ndf_clean['email_valid'] = df_clean['email'].notna()\ndf_clean['signup_date'] = pd.to_datetime(df_clean['signup_date'])\ndf_clean['age_group'] = pd.cut(df_clean['age'], bins=[0, 25, 35, 50, 65, 100], labels=['18-25', '26-35', '36-50', '51-65', '65+'])\n\nprint(f\"Clean dataset: {df_clean.shape[0]} rows, {df_clean.shape[1]} columns\")\nprint(f\"Missing values remaining: {df_clean.isnull().sum().sum()}\")\ndf_clean.head()",
       "output": null,
       "error": null,
       "html": null,

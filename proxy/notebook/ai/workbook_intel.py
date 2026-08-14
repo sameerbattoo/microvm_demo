@@ -35,6 +35,38 @@ logger = logging.getLogger(__name__)
 
 PROXY_PORT = int(os.environ.get("PROXY_PORT", "8081"))
 
+# ---------------------------------------------------------------------------
+# In-memory "is generation actively running" tracking.
+#
+# Without this, GET /workbook-intel could only ever report "not_generated"
+# (no DB row yet) or "ready" (DB row + S3 content found) — there was no way
+# to distinguish "hasn't started" from "is actively running right now".
+# That ambiguity forced clients to poll on a blind fixed schedule and guess
+# when generation was probably done, which is unreliable for a variable-
+# duration AI agent call. Tracking real state here lets callers report
+# status="generating" truthfully, and lets us de-duplicate concurrent
+# generation requests for the same session (e.g. file-upload auto-trigger
+# and a manual "Generate" click firing close together).
+# ---------------------------------------------------------------------------
+_generating_lock = threading.Lock()
+_generating_sessions: dict[str, float] = {}  # session_id -> start timestamp
+
+
+def is_generating(session_id: str) -> bool:
+    """True if a generation is currently in progress for this session."""
+    with _generating_lock:
+        return session_id in _generating_sessions
+
+
+def _mark_generating_start(session_id: str) -> None:
+    with _generating_lock:
+        _generating_sessions[session_id] = time.time()
+
+
+def _mark_generating_done(session_id: str) -> None:
+    with _generating_lock:
+        _generating_sessions.pop(session_id, None)
+
 
 def generate_intel(session_id: str, vm_manager) -> dict | None:
     """
@@ -161,26 +193,41 @@ def load_intel_from_s3(session_id: str, bucket: str) -> dict | None:
         return None
 
 
-def generate_intel_async(session_id: str, vm_manager, bucket: str, storage):
+def generate_intel_async(session_id: str, vm_manager, bucket: str, storage) -> bool:
     """
     Generate intel in a background thread using the AI agent.
     Non-blocking — returns immediately.
+
+    Returns True if a new generation was started, False if one was already
+    in progress for this session (in which case no duplicate thread is spawned —
+    the caller should just let the existing generation finish).
     """
+    if is_generating(session_id):
+        logger.info(f"[intel] Generation already in progress for session {session_id[:8]}... — skipping duplicate request")
+        return False
+
+    _mark_generating_start(session_id)
+
     def _worker():
         logger.info(f"[intel] Starting agent-based generation for session {session_id[:8]}...")
         start = time.time()
-        intel_data = generate_intel(session_id, vm_manager)
-        elapsed = time.time() - start
-        if intel_data:
-            s3_key = save_intel_to_s3(session_id, intel_data, bucket)
-            try:
-                storage.workbook_intel_save(session_id, s3_key)
-            except Exception as e:
-                logger.warning(f"[intel] Failed to save metadata to DB: {e}")
-            logger.info(f"[intel] Complete for session {session_id[:8]}... ({elapsed:.1f}s)")
-        else:
-            logger.warning(f"[intel] No intel generated for session {session_id[:8]}... ({elapsed:.1f}s)")
+        try:
+            intel_data = generate_intel(session_id, vm_manager)
+            elapsed = time.time() - start
+            if intel_data:
+                s3_key = save_intel_to_s3(session_id, intel_data, bucket)
+                try:
+                    storage.workbook_intel_save(session_id, s3_key)
+                except Exception as e:
+                    logger.warning(f"[intel] Failed to save metadata to DB: {e}")
+                logger.info(f"[intel] Complete for session {session_id[:8]}... ({elapsed:.1f}s)")
+            else:
+                logger.warning(f"[intel] No intel generated for session {session_id[:8]}... ({elapsed:.1f}s)")
+        finally:
+            # Always clear the in-progress flag, even on error — otherwise a failed
+            # generation would permanently report status="generating" for this session.
+            _mark_generating_done(session_id)
 
     thread = threading.Thread(target=_worker, daemon=True, name=f"intel-{session_id[:8]}")
     thread.start()
-    return thread
+    return True

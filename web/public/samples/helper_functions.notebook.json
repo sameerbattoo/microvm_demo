@@ -85,7 +85,7 @@
     },
     {
       "type": "code",
-      "code": "# Compare two DataFrames (useful for before/after cleaning)\n# Create a \"cleaned\" version by filtering out empty product_ids\nclickstream_clean = clickstream[clickstream['product_id'] != ''].copy()\nclickstream_clean['duration_bucket'] = pd.cut(clickstream_clean['duration_seconds'].astype(int), bins=[0, 30, 60, 120, 300], labels=['<30s', '30-60s', '1-2min', '2-5min'])\n\ncompare_df(clickstream, clickstream_clean, \"original\", \"cleaned\")",
+      "code": "# Compare two DataFrames (useful for before/after cleaning)\n# Create a \"cleaned\" version by filtering out empty product_ids\nimport pandas as pd\nclickstream_clean = clickstream[clickstream['product_id'] != ''].copy()\nclickstream_clean['duration_bucket'] = pd.cut(clickstream_clean['duration_seconds'].astype(int), bins=[0, 30, 60, 120, 300], labels=['<30s', '30-60s', '1-2min', '2-5min'])\n\ncompare_df(clickstream, clickstream_clean, \"original\", \"cleaned\")",
       "output": null,
       "error": null,
       "html": null,
