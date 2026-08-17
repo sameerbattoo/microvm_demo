@@ -18,6 +18,15 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["code-engine"])
 
 
+def _get_execute_lock(request: Request) -> asyncio.Lock:
+    """Get or create the shared execution lock on app.state.
+    Ensures only one code/SQL execution runs at a time on the single-threaded
+    SandboxExecutor (which redirects sys.stdout — not safe for concurrent use)."""
+    if not hasattr(request.app.state, '_execute_lock'):
+        request.app.state._execute_lock = asyncio.Lock()
+    return request.app.state._execute_lock
+
+
 @router.post("/execute")
 async def execute_code(request: Request):
     """Execute Python code in the persistent sandbox namespace."""
@@ -31,7 +40,9 @@ async def execute_code(request: Request):
         return JSONResponse(status_code=400, content={"error": "No code provided. Send {\"code\": \"...\"}"})
 
     logger.info(f"▶ Executing code (len={len(code)})")
-    result = await asyncio.to_thread(executor.execute, code)
+    lock = _get_execute_lock(request)
+    async with lock:
+        result = await asyncio.to_thread(executor.execute, code)
 
     # Log outcome with context for CloudWatch observability
     # Find the first meaningful line (skip @param annotations and blank lines)

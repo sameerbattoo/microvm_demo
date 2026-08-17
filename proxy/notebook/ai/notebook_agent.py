@@ -31,6 +31,93 @@ logger = logging.getLogger(__name__)
 AI_MODEL_ID = os.environ.get("BEDROCK_MODEL_ID", "us.anthropic.claude-sonnet-4-6")
 AI_REGION = os.environ.get("BEDROCK_REGION", os.environ.get("AWS_REGION", "us-west-2"))
 
+
+class AgentTraceCallbackHandler:
+    """Strands callback handler that logs what the agent is doing, step by step.
+
+    Used for tracing long-running agent runs (e.g. the COMPLETE Workbook Intel flow)
+    so we can see which tools the agent called, with what inputs, and what came back —
+    rather than only the start/end boundaries. Does NOT stream raw text chunks (too
+    noisy); it logs tool invocations, tool inputs, tool results (truncated), and
+    reasoning summaries.
+
+    Pass an instance as `callback_handler=` when creating the Agent.
+    """
+
+    # Keep logged tool inputs/outputs readable in the log
+    _MAX_INPUT_CHARS = 600
+    _MAX_RESULT_CHARS = 500
+
+    def __init__(self, log_prefix: str):
+        self._prefix = log_prefix          # e.g. "[intel] 16666093"
+        self.tool_count = 0
+        self._seen_tool_ids: set[str] = set()
+        self._reasoning_logged = False
+
+    def __call__(self, **kwargs) -> None:
+        try:
+            self._handle(**kwargs)
+        except Exception as e:
+            # Tracing must never break the agent run
+            logger.debug(f"{self._prefix}    → [trace] callback error (ignored): {e}")
+
+    def _handle(self, **kwargs) -> None:
+        # 1) New tool invocation — detected from the raw model stream chunk.
+        event = kwargs.get("event") or {}
+        tool_use_start = (
+            event.get("contentBlockStart", {}).get("start", {}).get("toolUse")
+            if isinstance(event, dict) else None
+        )
+        if tool_use_start:
+            tid = tool_use_start.get("toolUseId", "")
+            if tid and tid not in self._seen_tool_ids:
+                self._seen_tool_ids.add(tid)
+                self.tool_count += 1
+                logger.info(f"{self._prefix}    → [trace] tool #{self.tool_count}: "
+                            f"{tool_use_start.get('name', '?')}")
+
+        # 2) Assistant message committed — log the fully-assembled tool input args,
+        #    and any assistant reasoning/text turn boundaries.
+        message = kwargs.get("message")
+        if isinstance(message, dict):
+            role = message.get("role")
+            for block in message.get("content", []) or []:
+                if not isinstance(block, dict):
+                    continue
+                if role == "assistant" and "toolUse" in block:
+                    tu = block["toolUse"]
+                    self._log_kv(f"tool input [{tu.get('name','?')}]", tu.get("input"))
+                elif role == "user" and "toolResult" in block:
+                    tr = block["toolResult"]
+                    status = tr.get("status", "")
+                    text = self._extract_result_text(tr)
+                    logger.info(f"{self._prefix}    → [trace] tool result "
+                                f"({status}): {self._truncate(text, self._MAX_RESULT_CHARS)}")
+
+    def _log_kv(self, label: str, value) -> None:
+        import json as _json
+        try:
+            s = value if isinstance(value, str) else _json.dumps(value, default=str)
+        except Exception:
+            s = str(value)
+        logger.info(f"{self._prefix}    → [trace] {label}: {self._truncate(s, self._MAX_INPUT_CHARS)}")
+
+    @staticmethod
+    def _extract_result_text(tool_result: dict) -> str:
+        parts = []
+        for c in tool_result.get("content", []) or []:
+            if isinstance(c, dict):
+                if "text" in c:
+                    parts.append(str(c["text"]))
+                elif "json" in c:
+                    parts.append(str(c["json"]))
+        return " ".join(parts).replace("\n", " ")
+
+    @staticmethod
+    def _truncate(s: str, limit: int) -> str:
+        s = s or ""
+        return s if len(s) <= limit else s[:limit] + f"… (+{len(s) - limit} chars)"
+
 _model = None
 _bedrock_direct_client = None
 
@@ -66,10 +153,14 @@ def _get_direct_client():
 AGENT_TOOLS = [execute_code, get_variables, get_notebook_state, install_package, get_available_data_sources]
 
 
-def get_or_create_agent(session_id: str, context: dict = None) -> Agent:
+def get_or_create_agent(session_id: str, context: dict = None, callback_handler=None) -> Agent:
     """
     Get an existing agent for this session or create a new one.
     Uses SlidingWindowConversationManager to limit context to last 10 messages (5 turns).
+
+    callback_handler: optional Strands callback handler for step-by-step tracing.
+        Defaults to None (silent) for the interactive chat agent; the COMPLETE intel
+        flow passes an AgentTraceCallbackHandler to log tool calls/inputs/results.
     """
     from datetime import datetime, timezone
     import os
@@ -100,7 +191,7 @@ def get_or_create_agent(session_id: str, context: dict = None) -> Agent:
             system_prompt=system_prompt,
             tools=AGENT_TOOLS,
             conversation_manager=SlidingWindowConversationManager(window_size=AGENT_CONVERSATION_WINDOW_SIZE),
-            callback_handler=None,
+            callback_handler=callback_handler,
             trace_attributes={"session.id": session_id},
         )
         save_session(session_id, agent)

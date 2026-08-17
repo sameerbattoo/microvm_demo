@@ -11,6 +11,7 @@ Endpoints:
 
 import os
 import json
+import functools
 import logging
 
 import boto3
@@ -204,7 +205,7 @@ async def get_datasource_schema(source_type: str, source_id: str, request: Reque
         S3SchemaProvider,
         LocalFileSchemaProvider,
     )
-    from dataclasses import asdict
+    from dataclasses import asdict  # noqa: F401 — kept for potential downstream use
     import httpx
 
     vm_manager = request.app.state.vm_manager
@@ -225,6 +226,11 @@ async def get_datasource_schema(source_type: str, source_id: str, request: Reque
                         data = resp.json()
                         # Only return if schema has been discovered (not pending)
                         if data.get("status") == "discovered" and data.get("columns"):
+                            # Normalize dtypes at proxy boundary (VM may still
+                            # report raw pandas names until image is rebuilt)
+                            for col in data.get("columns", []):
+                                if "dtype" in col:
+                                    col["dtype"] = _normalize_col_dtype(col["dtype"])
                             return data
             except Exception:
                 pass  # Fall through to direct provider
@@ -289,9 +295,127 @@ async def get_datasource_schema(source_type: str, source_id: str, request: Reque
         "source_type": schema.source_type,
         "source_id": schema.source_id,
         "display_name": schema.display_name,
-        "columns": [asdict(col) for col in schema.columns],
+        "columns": [{"name": c.name, "dtype": _normalize_col_dtype(c.dtype), "sample": c.sample, "nullable": c.nullable} for c in schema.columns],
         "row_count": schema.row_count,
         "size": schema.size,
+    }
+
+
+def _normalize_col_dtype(raw: str) -> str:
+    """Normalize dtype at the API boundary — ensures consistent labels even if
+    the upstream provider (VM catalog, fallback provider) hasn't been updated yet."""
+    from app.notebook.dtypes import normalize_dtype
+    return normalize_dtype(raw)
+
+
+def _enrich_catalog_entries(entries: list[dict], session_id: str = None) -> None:
+    """
+    In-place enrichment: for each catalog entry, check if a pre-computed entity
+    doc exists (from batch/entity_discovery.py for global sources, or from the
+    per-session local_file_entities table for local /tmp files) and if so, attach
+    lightweight metadata (business_description, quality_flags summary) so the
+    frontend can show an indicator and popover without fetching the full doc.
+    """
+    from proxy.storage import storage
+
+    for entry in entries:
+        source_id = entry.get("source_id", "")
+        source_type = entry.get("source_type", "")
+        if not source_id:
+            entry["has_entity_doc"] = False
+            continue
+
+        meta = None
+        if source_type == "local" and session_id:
+            # Local files are session-scoped — check the local_file_entities table
+            meta = storage.local_entity_get(session_id, source_id)
+        else:
+            # Global entities (S3, DynamoDB, Athena) — check data_source_entities table
+            meta = storage.entity_get(source_id)
+
+        if meta and meta.get("status") == "ready" and meta.get("doc_s3_key"):
+            entry["has_entity_doc"] = True
+            doc = _load_entity_doc_json_cached(meta["doc_s3_key"])
+            if doc:
+                entry["business_description"] = doc.get("business_description", "")
+                entry["quality_flags"] = doc.get("quality_flags", [])
+            else:
+                entry["business_description"] = ""
+                entry["quality_flags"] = []
+        else:
+            entry["has_entity_doc"] = False
+
+        # Also normalize column dtypes at this enrichment boundary
+        for col in entry.get("columns", []):
+            if "dtype" in col:
+                col["dtype"] = _normalize_col_dtype(col["dtype"])
+
+
+def _load_entity_doc_json(s3_key: str) -> dict | None:
+    """Load the full entity doc JSON from S3. Returns None on any failure."""
+    import boto3
+    region = os.environ.get("AWS_REGION", "us-west-2")
+    bucket = os.environ.get(
+        "ARTIFACT_BUCKET",
+        f"microvm-sandbox-artifacts-{os.environ.get('ACCOUNT_ID', 'unknown')}-{region}"
+    )
+    try:
+        s3 = boto3.client("s3", region_name=region)
+        resp = s3.get_object(Bucket=bucket, Key=s3_key)
+        return json.loads(resp["Body"].read().decode("utf-8"))
+    except Exception:
+        return None
+
+
+# Cached wrapper — entity docs change rarely (only when batch/entity_discovery reruns).
+# Avoids hitting S3 on every panel open (~12 calls per render otherwise).
+@functools.lru_cache(maxsize=64)
+def _load_entity_doc_json_cached(s3_key: str) -> dict | None:
+    return _load_entity_doc_json(s3_key)
+
+
+@router.get("/datasources/entity-doc")
+async def get_entity_doc(source_id: str, request: Request):
+    """
+    Get the full entity profile document (markdown + metadata) for a data source.
+    
+    Returns the complete discovery result including business_description,
+    quality_flags, and the full markdown profile. Called on-demand when the
+    user clicks "View Full Profile" — NOT on every panel render.
+    
+    Works for both global entities (S3/Athena/DynamoDB) and local files
+    (session-scoped /tmp files) — checks both tables.
+    """
+    from proxy.storage import storage
+
+    session_id = request.headers.get("X-Session-Id", "")
+
+    # Try global entity first
+    meta = storage.entity_get(source_id)
+    # If not found globally and we have a session_id, try local file entity
+    if (not meta or meta.get("status") != "ready") and session_id:
+        meta = storage.local_entity_get(session_id, source_id)
+
+    if not meta or meta.get("status") != "ready" or not meta.get("doc_s3_key"):
+        return Response(
+            content=f'{{"error": "No entity doc found for source_id: {source_id}"}}',
+            status_code=404,
+            media_type="application/json",
+        )
+
+    doc = _load_entity_doc_json(meta["doc_s3_key"])
+    if not doc:
+        return Response(
+            content='{"error": "Entity doc exists in DB but failed to load from S3"}',
+            status_code=502,
+            media_type="application/json",
+        )
+
+    return {
+        "source_id": source_id,
+        "business_description": doc.get("business_description", ""),
+        "quality_flags": doc.get("quality_flags", []),
+        "markdown": doc.get("markdown", ""),
     }
 
 
@@ -302,6 +426,7 @@ async def get_full_catalog(request: Request):
     Proxies GET /data-catalog from the active VM for the given session.
     Returns the progressive catalog — entries may still be "pending" if discovery is in progress.
     """
+    import asyncio
     import httpx
 
     session_id = request.headers.get("X-Session-Id", "")
@@ -313,18 +438,44 @@ async def get_full_catalog(request: Request):
     if not session_vm:
         return Response(content='{"error": "No active VM for this session"}', status_code=404, media_type="application/json")
 
-    try:
-        token = vm_manager.get_auth_token(session_vm["vm_id"])
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.get(
-                f"https://{session_vm['endpoint']}/data-catalog",
-                headers={"X-aws-proxy-auth": token},
-            )
+    # The VM's Lambda endpoint can return a transient 502/503 while the MicroVM is
+    # still cold-starting or being rotated. If we returned that straight through,
+    # enrichment (has_entity_doc → entity intel icons) would be silently skipped and
+    # the frontend would show no icons until a manual refresh. Retry a few times with
+    # a short backoff so a warming VM resolves without user intervention.
+    RETRY_STATUSES = {502, 503, 504}
+    MAX_ATTEMPTS = 4
+    BACKOFF_SECONDS = 1.0
+
+    last_resp = None
+    last_error = None
+    for attempt in range(MAX_ATTEMPTS):
+        try:
+            token = vm_manager.get_auth_token(session_vm["vm_id"])
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.get(
+                    f"https://{session_vm['endpoint']}/data-catalog",
+                    headers={"X-aws-proxy-auth": token},
+                )
             if resp.status_code == 200:
-                return resp.json()
-            return Response(content=resp.text, status_code=resp.status_code, media_type="application/json")
-    except Exception as e:
-        return Response(content=f'{{"error": "Failed to reach VM: {str(e)}"}}', status_code=502, media_type="application/json")
+                catalog = resp.json()
+                # Enrich entries with entity doc metadata where available
+                _enrich_catalog_entries(catalog.get("entries", []), session_id=session_id)
+                return catalog
+
+            last_resp = resp
+            if resp.status_code not in RETRY_STATUSES:
+                # Non-transient (e.g. 404/400) — no point retrying.
+                return Response(content=resp.text, status_code=resp.status_code, media_type="application/json")
+        except Exception as e:
+            last_error = e
+
+        if attempt < MAX_ATTEMPTS - 1:
+            await asyncio.sleep(BACKOFF_SECONDS)
+
+    if last_resp is not None:
+        return Response(content=last_resp.text, status_code=last_resp.status_code, media_type="application/json")
+    return Response(content=f'{{"error": "Failed to reach VM: {str(last_error)}"}}', status_code=502, media_type="application/json")
 
 
 @router.get("/datasources/snippet")

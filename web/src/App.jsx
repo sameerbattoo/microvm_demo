@@ -8,6 +8,9 @@ import IntelPanel from './components/IntelPanel'
 import { ConfirmModal, InputModal } from './components/Modal'
 import { IconZap, IconSun, IconMoon, IconFlame, IconTerminal, IconLogs, IconIntel } from './components/Icons'
 import { PROXY_URL } from './config'
+import { logError } from './services/logger'
+import { showDragOverlay, hideDragOverlay } from './utils/dragOverlay'
+import { INTEL_GENERATING_POLL_MS, INTEL_IDLE_POLL_MS, INTEL_MAX_POLL_ATTEMPTS, DEFAULT_POLL_INTERVAL_MS } from './constants'
 import { fetchNotebooks, saveNotebook as apiSaveNotebook, createNotebook as apiCreateNotebook, deleteNotebook as apiDeleteNotebook, migrateFromLocalStorage, loadChatMessages, saveChatMessages } from './services/notebooks'
 import './App.css'
 
@@ -64,7 +67,7 @@ export default function App() {
   })
   const [instances, setInstances] = useState({})
   const [vmMetrics, setVmMetrics] = useState({})  // microvm_id -> latest metrics
-  const [pollIntervalMs, setPollIntervalMs] = useState(10000)
+  const [pollIntervalMs, setPollIntervalMs] = useState(DEFAULT_POLL_INTERVAL_MS)
   const saveTimerRef = useRef(null)
 
   // Fetch metrics for a specific VM (called after cell execution, not on a timer)
@@ -76,7 +79,7 @@ export default function App() {
         const data = await resp.json()
         if (data.metrics) setVmMetrics(prev => ({ ...prev, ...data.metrics }))
       }
-    } catch {}
+    } catch (e) { logError('fetchInstances', e) }
   }, [])
 
   // Persist tabs to localStorage (debounced 1.5s to avoid thrashing during typing)
@@ -302,23 +305,25 @@ export default function App() {
     const pollState = { sessionId, cancelled: false }
     intelPollRef.current = pollState
 
-    const GENERATING_INTERVAL_MS = 4000  // fast poll — backend confirmed it's actively running
-    const IDLE_INTERVAL_MS = 10000       // slower poll — nothing triggered yet, just watching
-    const MAX_ATTEMPTS = 200             // safety net only, in case a backend thread crashes
-                                          // without ever clearing its "generating" state
+    const GENERATING_INTERVAL_MS = INTEL_GENERATING_POLL_MS
+    const IDLE_INTERVAL_MS = INTEL_IDLE_POLL_MS
+    const MAX_ATTEMPTS = INTEL_MAX_POLL_ATTEMPTS
 
     let attempts = 0
 
     const poll = async () => {
-      if (pollState.cancelled) return
+      if (pollState.cancelled || pollState.fetching) return
       attempts++
 
+      pollState.fetching = true
       let data = null
       try {
         const resp = await fetch(`${PROXY_URL}/workbook-intel`, { headers: { 'X-Session-Id': sessionId } })
         if (resp.ok) data = await resp.json()
       } catch {
         // network hiccup — fall through and retry at the idle interval
+      } finally {
+        pollState.fetching = false
       }
 
       if (pollState.cancelled) return
@@ -327,6 +332,9 @@ export default function App() {
         setBottomPanelTabs(prev => new Set([...prev, 'intel']))
         setBottomPanelActive('intel')
         setIntelShownForSession(sessionId)
+        // Intel generation also creates local file entity docs — refresh the
+        // data sources panel so sparkle icons appear for local files too
+        window.dispatchEvent(new CustomEvent('refresh-datasources'))
         return  // done
       }
 
@@ -360,21 +368,22 @@ export default function App() {
         e.preventDefault()
         toggleBottomTab('logs')
       }
-      // Option+1 through Option+6 — toggle sidebar panels
-      // Option+7 — toggle terminal, Option+8 — toggle logs, Option+9 — toggle intel
+      // Shortcuts follow the activity-bar's visual top-to-bottom order:
+      // ⌥1 notebooks, ⌥2 outline, ⌥3 data, ⌥4 variables, ⌥5 packages (sidebar panels),
+      // ⌥6 terminal, ⌥7 logs, ⌥8 intel (bottom tabs), ⌥9 snippets (sidebar panel).
       if (e.altKey && !e.ctrlKey && !e.metaKey) {
         const digitMatch = e.code?.match(/^Digit([1-9])$/)
         if (digitMatch) {
           e.preventDefault()
           const idx = parseInt(digitMatch[1])
-          if (idx <= 6) {
-            const panels = ['notebooks', 'outline', 'data', 'snippets', 'variables', 'packages']
-            window.dispatchEvent(new CustomEvent('toggle-sidebar-panel', { detail: panels[idx - 1] }))
-          } else if (idx === 7) {
+          const sidebarPanels = { 1: 'notebooks', 2: 'outline', 3: 'data', 4: 'variables', 5: 'packages', 9: 'snippets' }
+          if (sidebarPanels[idx]) {
+            window.dispatchEvent(new CustomEvent('toggle-sidebar-panel', { detail: sidebarPanels[idx] }))
+          } else if (idx === 6) {
             toggleBottomTab('terminal')
-          } else if (idx === 8) {
+          } else if (idx === 7) {
             toggleBottomTab('logs')
-          } else if (idx === 9) {
+          } else if (idx === 8) {
             toggleBottomTab('intel')
           }
         }
@@ -643,7 +652,7 @@ export default function App() {
     try {
       await fetch(`${PROXY_URL}/resume`, { method: 'POST', headers: { 'X-Session-Id': sessionId } })
       fetchInstances()
-    } catch {}
+    } catch (e) { logError('resumeVM', e) }
   }, [fetchInstances, instances])
 
   const terminateInstance = useCallback(async (microvmId) => {
@@ -666,7 +675,7 @@ export default function App() {
       const sid = instances[microvmId]?.session_id
       if (sid) await fetch(`${PROXY_URL}/terminate`, { method: 'POST', headers: { 'X-Session-Id': sid } })
       fetchInstances()
-    } catch {}
+    } catch (e) { logError('terminateVM', e) }
   }, [fetchInstances, instances])
 
   // Terminate & Save: terminates attached VM, detaches from notebook but preserves sessionId for restore
@@ -705,6 +714,43 @@ export default function App() {
   }, [instances, tabs])
 
   const intelTriggerTimer = useRef(null)
+  const intelDeleteTimer = useRef(null)
+
+  // After a file upload triggers an intel (re)generation — full OR delta — watch for
+  // that run to finish, then refresh the Data Sources panel so the newly-uploaded
+  // local file's entity-doc (sparkle) icon appears without a manual refresh.
+  // This is needed in addition to the one-time auto-open poll, which is gated by
+  // intelShownForSession and therefore does NOT re-fire for deltas on the same session.
+  const watchIntelThenRefreshDataSources = useCallback((sessionId) => {
+    if (!sessionId) return
+    let attempts = 0
+    let sawGenerating = false
+    const poll = async () => {
+      attempts++
+      let data = null
+      try {
+        const resp = await fetch(`${PROXY_URL}/workbook-intel`, { headers: { 'X-Session-Id': sessionId } })
+        if (resp.ok) data = await resp.json()
+      } catch { /* transient — retry below */ }
+
+      const status = data?.status
+      if (status === 'generating') {
+        sawGenerating = true
+      }
+      // Done once the run we triggered has produced a ready report. Requiring that we
+      // first observed "generating" avoids refreshing on the pre-existing report before
+      // the delta has actually started.
+      if (status === 'ready' && (sawGenerating || attempts > 2)) {
+        window.dispatchEvent(new CustomEvent('refresh-datasources'))
+        return
+      }
+      if (status === 'error') return
+      if (attempts >= INTEL_MAX_POLL_ATTEMPTS) return
+      const delay = status === 'generating' ? INTEL_GENERATING_POLL_MS : INTEL_IDLE_POLL_MS
+      setTimeout(poll, delay)
+    }
+    poll()
+  }, [])
 
   const uploadFile = useCallback(async (file) => {
     // Find the active tab's connection to upload to
@@ -754,12 +800,15 @@ export default function App() {
         // Debounced intel trigger: fires 2s after the last successful upload
         if (result.success && activeTab.sessionId) {
           clearTimeout(intelTriggerTimer.current)
+          const triggerSessionId = activeTab.sessionId
           intelTriggerTimer.current = setTimeout(() => {
             fetch(`${PROXY_URL}/workbook-intel/generate`, {
               method: 'POST',
-              headers: { 'Content-Type': 'application/json', 'X-Session-Id': activeTab.sessionId },
+              headers: { 'Content-Type': 'application/json', 'X-Session-Id': triggerSessionId },
               body: JSON.stringify({ trigger: 'file_upload' }),
-            }).catch(() => {})
+            })
+              .then(() => watchIntelThenRefreshDataSources(triggerSessionId))
+              .catch(() => {})
           }, 2000)
         }
       } catch {
@@ -772,14 +821,41 @@ export default function App() {
       }
     }
     reader.readAsDataURL(file)
-  }, [tabs, activeTabId])
+  }, [tabs, activeTabId, watchIntelThenRefreshDataSources])
 
-  const deleteFile = useCallback((filename) => {
+  const deleteFile = useCallback(async (filename) => {
+    // Remove from frontend state immediately (optimistic)
     setTabs(prev => prev.map(t => t.id === activeTabId
       ? { ...t, _localFiles: (t._localFiles || []).filter(f => f.name !== filename) }
       : t
     ))
-  }, [activeTabId])
+    // Also delete from the VM's /tmp so it doesn't reappear on next refresh
+    const activeTab = tabs.find(t => t.id === activeTabId)
+    if (activeTab?.sessionId) {
+      try {
+        await fetch(`${PROXY_URL}/proxy/execute`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-Session-Id': activeTab.sessionId },
+          body: JSON.stringify({ code: `import os\ntry:\n    os.remove('/tmp/${filename}')\nexcept FileNotFoundError:\n    pass` }),
+        })
+      } catch (e) { logError('deleteFile', e) }
+
+      // Deletion intel: prune insights tied to the removed file. Mirrors the upload
+      // flow — debounced 2s (batches rapid deletes), then trigger + watch-and-refresh.
+      // The backend no-ops if there's no existing report to prune.
+      clearTimeout(intelDeleteTimer.current)
+      const triggerSessionId = activeTab.sessionId
+      intelDeleteTimer.current = setTimeout(() => {
+        fetch(`${PROXY_URL}/workbook-intel/generate`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-Session-Id': triggerSessionId },
+          body: JSON.stringify({ trigger: 'file_delete', deleted_source: `/tmp/${filename}` }),
+        })
+          .then(() => watchIntelThenRefreshDataSources(triggerSessionId))
+          .catch(() => {})
+      }, 2000)
+    }
+  }, [activeTabId, tabs, watchIntelThenRefreshDataSources])
 
 
 
@@ -1082,6 +1158,9 @@ export default function App() {
                   e.preventDefault()
                   const startY = e.clientY
                   const startHeight = bottomPanelHeight
+                  // Overlay so dragging over an embedded Plotly iframe doesn't steal the
+                  // mouse events and break the resize.
+                  showDragOverlay('row-resize')
                   const handleMove = (moveEvent) => {
                     const delta = startY - moveEvent.clientY
                     setBottomPanelHeight(Math.max(100, Math.min(window.innerHeight * 0.7, startHeight + delta)))
@@ -1089,6 +1168,7 @@ export default function App() {
                   const handleUp = () => {
                     document.removeEventListener('mousemove', handleMove)
                     document.removeEventListener('mouseup', handleUp)
+                    hideDragOverlay()
                   }
                   document.addEventListener('mousemove', handleMove)
                   document.addEventListener('mouseup', handleUp)

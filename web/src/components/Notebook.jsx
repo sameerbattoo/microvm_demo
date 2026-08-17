@@ -332,7 +332,7 @@ export default function Notebook({ tab, instances = {}, onUpdateTab, onMarkVmRun
 
     if (!endpoint || (tab.status !== 'connected' && tab.status !== 'launching')) {
       // Auto-restore: if VM was terminated but has a checkpoint, auto-launch + restore
-      if (tab.sessionSaved && tab.sessionId) {
+      if (tab.sessionSaved && tab.sessionId && !tab._autoRestoreFailed) {
         // Set a guard state to prevent polling from interfering
         onUpdateTab({ status: 'launching' })
         setCells(prev => prev.map(c =>
@@ -368,13 +368,13 @@ export default function Notebook({ tab, instances = {}, onUpdateTab, onMarkVmRun
               c.id === cellId ? { ...c, status: 'idle', output: '♻️ Session restored — re-run this cell.', error: null } : c
             ))
           } else {
-            onUpdateTab({ status: 'disconnected' })
+            onUpdateTab({ status: 'disconnected', _autoRestoreFailed: true })
             setCells(prev => prev.map(c =>
               c.id === cellId ? { ...c, status: 'error', error: '⚠️ Failed to auto-restore session. Use the connection panel to restore manually.' } : c
             ))
           }
         } catch (err) {
-          onUpdateTab({ status: 'disconnected' })
+          onUpdateTab({ status: 'disconnected', _autoRestoreFailed: true })
           setCells(prev => prev.map(c =>
             c.id === cellId ? { ...c, status: 'error', error: `⚠️ Auto-restore failed: ${err.message}` } : c
           ))
@@ -510,11 +510,27 @@ export default function Notebook({ tab, instances = {}, onUpdateTab, onMarkVmRun
     const runnableCells = cells.filter(c => c.code.trim() && c.type !== 'markdown')
     const total = runnableCells.length
 
+    // Signal the Outline activity-bar icon: open the panel + pulse green while running.
+    window.dispatchEvent(new CustomEvent('outline-run-status', { detail: 'running' }))
+
+    const ranIds = []
     for (let i = 0; i < runnableCells.length; i++) {
       setRunProgress({ current: i + 1, total })
       await executeCell(runnableCells[i].id)
+      ranIds.push(runnableCells[i].id)
     }
     setRunProgress(null)
+
+    // After the run, check the latest cell statuses for any error. Let React flush the
+    // last executeCell's setCells into prevCellsRef first (short yield), then read the
+    // freshest snapshot so we see the statuses set during the run, not this closure's
+    // stale `cells`.
+    setTimeout(() => {
+      const latest = prevCellsRef.current || cells
+      const anyError = latest.some(c => ranIds.includes(c.id) && c.status === 'error')
+      // Red persists so the user can spot the failed cell in the Outline; green clears.
+      window.dispatchEvent(new CustomEvent('outline-run-status', { detail: anyError ? 'error' : 'clear' }))
+    }, 120)
   }, [cells, tab.microvmEndpoint, tab.status, executeCell])
 
   // Listen for "Run from cell" events from the outline panel

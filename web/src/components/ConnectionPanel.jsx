@@ -419,7 +419,7 @@ export default function ConnectionPanel({ tab, onConnect, onUpdateTab, onDismiss
                 </div>
               </div>
               <div className="launch-config-note">
-                Auto-scales up to <strong>4× baseline</strong> during peak load. Burst resources billed only when active. Auto-resumes on traffic (~1s). Session persists indefinitely (VMs rotate automatically).
+                Auto-scales up to <strong>4× baseline</strong> during peak load. Burst resources billed only when active. Auto-resumes on traffic (~1s).
               </div>
               </>
               )}

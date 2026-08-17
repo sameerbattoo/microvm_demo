@@ -13,7 +13,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { marked } from 'marked'
 import { PROXY_URL } from '../config'
-import { IconX, IconBarChart, IconChartLine, IconSearch, IconAlertTriangle } from './Icons'
+import { IconX, IconBarChart, IconChartLine, IconSearch, IconAlertTriangle, IconPlay } from './Icons'
 import './IntelPanel.css'
 
 const ALERT_ICONS = {
@@ -39,6 +39,13 @@ export default function IntelPanel({ activeTab, onClose, onInsertPrompt }) {
   const [generatedAt, setGeneratedAt] = useState(null)
   const [activeSection, setActiveSection] = useState('analyses')
   const [showFullReport, setShowFullReport] = useState(false)
+  // True while an incremental UPDATE (delta) is running on top of an existing report.
+  // In that case we keep the current report visible and show an "updating" strip
+  // instead of blanking to a spinner.
+  const [isUpdating, setIsUpdating] = useState(false)
+  // Why we're updating: "addition" (file uploaded) or "deletion" (file removed) —
+  // drives the wording of the updating strip.
+  const [updateReason, setUpdateReason] = useState('addition')
 
   const sessionId = activeTab?.sessionId
   const regeneratingRef = useRef(null)  // timestamp when regeneration was triggered
@@ -74,6 +81,7 @@ export default function IntelPanel({ activeTab, onClose, onInsertPrompt }) {
           setIntel(data.intel)
           setGeneratedAt(data.generated_at)
           setStatus('ready')
+          setIsUpdating(false)
           regeneratingRef.current = null
           _generatingMap.delete(sessionId)
         } else if (data.status === 'generating') {
@@ -81,6 +89,19 @@ export default function IntelPanel({ activeTab, onClose, onInsertPrompt }) {
           // trust it directly, including for the very first auto-triggered generation
           // (regeneratingRef is only set for user-initiated regenerate clicks).
           setStatus('generating')
+          // An incremental update (delta) extends OR prunes an existing report. Keep the
+          // current report on screen and flag "updating" so changes appear when it lands.
+          setIsUpdating(data.mode === 'update' || !!data.has_existing)
+          if (data.reason) setUpdateReason(data.reason)
+          // The backend includes the CURRENT (pre-update) report during an update so a
+          // fresh mount (navigated away & back mid-update) can render it under the
+          // "updating" strip instead of a bare spinner. Adopt it only if we don't already
+          // have content (functional updater avoids clobbering a newer local report and
+          // keeps fetchIntel free of an `intel` dependency).
+          if (data.intel) {
+            setIntel(prev => prev || data.intel)
+            if (data.generated_at) setGeneratedAt(prev => prev || data.generated_at)
+          }
         } else if (!regeneratingRef.current) {
           setStatus('not_generated')
         }
@@ -158,10 +179,14 @@ export default function IntelPanel({ activeTab, onClose, onInsertPrompt }) {
           )}
         </div>
       )}
-      {status === 'generating' && (
+      {/* Blank spinner ONLY when generating a fresh report with nothing to show yet.
+          During an incremental update we keep the existing report visible (below). */}
+      {status === 'generating' && !hasContent && (
         <div className="intel-empty">
           <div className="intel-spinner" />
-          <p>Analyzing data sources...</p>
+          <p>{isUpdating
+            ? (updateReason === 'deletion' ? 'Updating the report after the file was removed...' : 'Updating the report with the new data...')
+            : 'Analyzing data sources...'}</p>
           <p className="intel-empty-hint">10-20 seconds</p>
         </div>
       )}
@@ -181,8 +206,19 @@ export default function IntelPanel({ activeTab, onClose, onInsertPrompt }) {
         </div>
       )}
 
-      {status === 'ready' && hasContent && (
+      {/* Content block: render whenever we have content — whether the report is
+          fully ready OR an incremental update is in flight (keep it visible, show a
+          thin "updating" strip so the user knows new items are on the way). */}
+      {hasContent && (
         <div className="intel-panel-body">
+          {status === 'generating' && isUpdating && (
+            <div className="intel-updating-strip">
+              <div className="intel-spinner intel-spinner-sm" />
+              <span>{updateReason === 'deletion'
+                ? 'Updating after a data source was removed — related insights will be pruned shortly…'
+                : 'Updating with newly uploaded data — new insights will appear shortly…'}</span>
+            </div>
+          )}
           {/* Section tabs */}
           <div className="intel-section-tabs">
             <button className={`intel-tab ${activeSection === 'analyses' ? 'active' : ''}`} onClick={() => setActiveSection('analyses')}>
@@ -211,7 +247,7 @@ export default function IntelPanel({ activeTab, onClose, onInsertPrompt }) {
               <div key={i} className="intel-card">
                 <span className="intel-card-icon">{CATEGORY_ICONS[item.category] || '\ud83d\udcca'}</span>
                 <span className="intel-card-title">{item.title}</span>
-                <button className="intel-card-run" onClick={() => handleRunPrompt(item.prompt)}>Run</button>
+                <button className="intel-card-run" onClick={() => handleRunPrompt(item.prompt)}><IconPlay width={10} height={10} /> Run</button>
               </div>
             ))}
             {activeSection === 'viz' && visualizations.map((item, i) => (
@@ -219,7 +255,7 @@ export default function IntelPanel({ activeTab, onClose, onInsertPrompt }) {
                 <span className="intel-card-icon">📉</span>
                 <span className="intel-card-title">{item.title}</span>
                 <span className="intel-card-badge">{item.chart_type}</span>
-                <button className="intel-card-run" onClick={() => handleRunPrompt(item.prompt)}>Run</button>
+                <button className="intel-card-run" onClick={() => handleRunPrompt(item.prompt)}><IconPlay width={10} height={10} /> Run</button>
               </div>
             ))}
             {activeSection === 'investigate' && investigations.map((item, i) => (
@@ -229,7 +265,7 @@ export default function IntelPanel({ activeTab, onClose, onInsertPrompt }) {
                   <span className="intel-card-title">{item.title}</span>
                   {item.reason && <span className="intel-card-reason">{item.reason}</span>}
                 </div>
-                <button className="intel-card-run" onClick={() => handleRunPrompt(item.prompt)}>Run</button>
+                <button className="intel-card-run" onClick={() => handleRunPrompt(item.prompt)}><IconPlay width={10} height={10} /> Run</button>
               </div>
             ))}
             {activeSection === 'alerts' && alerts.map((item, i) => (
@@ -240,7 +276,7 @@ export default function IntelPanel({ activeTab, onClose, onInsertPrompt }) {
                   {item.action && <span className="intel-card-action">{item.action}</span>}
                 </div>
                 {item.action && (
-                  <button className="intel-card-run" onClick={() => handleRunPrompt(item.action)}>Run</button>
+                  <button className="intel-card-run" onClick={() => handleRunPrompt(item.action)}><IconPlay width={10} height={10} /> Run</button>
                 )}
               </div>
             ))}

@@ -9,6 +9,7 @@ AI-generated code runs here, accumulating state like a notebook kernel.
 """
 
 import io
+import os
 import sys
 import ctypes
 import threading
@@ -17,6 +18,10 @@ import subprocess
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
+
+# Maximum time (seconds) a single cell execution is allowed to run before
+# being forcefully interrupted. Configurable via environment variable.
+EXECUTION_TIMEOUT_SECONDS = int(os.environ.get("EXECUTION_TIMEOUT_SECONDS", "60"))
 
 
 @dataclass
@@ -147,6 +152,22 @@ class SandboxExecutor:
         except (ImportError, Exception):
             pass
 
+        # Execution timeout — prevents infinite loops from hanging the VM
+        timed_out = threading.Event()
+
+        def _timeout_trigger():
+            timed_out.set()
+            # Raise KeyboardInterrupt in the executing thread to break out
+            tid = self._exec_thread_id
+            if tid:
+                ctypes.pythonapi.PyThreadState_SetAsyncExc(
+                    ctypes.c_ulong(tid),
+                    ctypes.py_object(KeyboardInterrupt)
+                )
+
+        timer = threading.Timer(EXECUTION_TIMEOUT_SECONDS, _timeout_trigger)
+        timer.start()
+
         try:
             # Try exec first (statements), fall back to eval (expressions)
             # If the last line is an expression, capture its value
@@ -156,7 +177,10 @@ class SandboxExecutor:
             error = ""
         except KeyboardInterrupt:
             success = False
-            error = "Execution interrupted by user"
+            if timed_out.is_set():
+                error = f"Execution timed out after {EXECUTION_TIMEOUT_SECONDS}s — possible infinite loop or long-running computation"
+            else:
+                error = "Execution interrupted by user"
         except Exception as e:
             success = False
             # Show only the user-friendly error, not internal traceback
@@ -171,6 +195,7 @@ class SandboxExecutor:
             else:
                 error = f"{error_type}: {error_msg}"
         finally:
+            timer.cancel()
             self._exec_thread_id = None
             sys.stdout = old_stdout
             sys.stderr = old_stderr

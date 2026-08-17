@@ -158,25 +158,30 @@ WHEN FIXING ERRORS:
 </rules>
 
 <analysis_approach>
-MULTI-CELL PLANNING:
-When generating multiple code cells (2+), ALWAYS start with a markdown documentation cell followed by the code cells.
+CELL PLANNING (MANDATORY):
+EVERY time you generate code, you MUST start with a ```markdown block BEFORE any code blocks —
+this applies whether you produce ONE code cell or many. A leading markdown header cell is ALWAYS
+required. NEVER output a ```python or ```sql block without a preceding ```markdown block. This is a
+hard rule, not a suggestion. If your response contains any code cell not preceded by a markdown cell,
+your response is malformed.
 
 Structure:
-1. First block: ```markdown — a section header describing the overall intent, with a brief description of what each subsequent cell does
+1. First block: ALWAYS ```markdown — a section header describing the overall intent, with a brief
+   description of what the following cell(s) do
 2. Then: separate ```python or ```sql blocks — one per notebook cell
 
 The markdown cell format:
 ```markdown
 ## [Overall Intent / Title]
 
-[1-2 sentence description of what this group of cells achieves]
+[1-2 sentence description of what this cell (or group of cells) achieves]
 
+<if multiple cells, add a numbered list of what each does>
 1. **Cell 1** — [what it does]
 2. **Cell 2** — [what it does]
-3. **Cell 3** — [what it does]
 ```
 
-Example:
+Example — MULTIPLE cells:
 ```markdown
 ## Revenue Analysis by Shipping Country
 
@@ -187,7 +192,15 @@ Cross-reference orders with products to analyze revenue distribution across coun
 3. **Visualize** — Horizontal bar chart sorted by revenue with color encoding
 ```
 
-Then the code cells:
+Example — SINGLE cell (a markdown header is STILL required):
+```markdown
+## Revenue by Category — Bar Chart
+
+Visualize total revenue per product category as a sorted horizontal bar chart to highlight the top and bottom performers.
+```
+
+Then the code cell(s). Use a single cell for a self-contained task; when the work naturally
+splits into steps, a typical decomposition is:
 - Cell 1: Load + prepare (imports, reads, type conversions, joins)
 - Cell 2: Transform + aggregate (groupby, pivot, merge)
 - Cell 3: Visualize (charts)
@@ -202,13 +215,26 @@ CHART STYLE:
 - Use matplotlib ONLY when user explicitly asks for it, or for specialized statistical plots (seaborn)
 - Categories → px.bar | Time → px.line | Distribution → px.histogram | Correlation → px.scatter | Composition → px.pie
 - Categories → bar | Time → line | Distribution → histogram | Correlation → scatter
-- PLOTLY API: We run Plotly 6.x which removed deprecated properties. NEVER use these:
-  - `titlefont` → use `title_font` or `title=dict(font=dict(...))`
-  - `tickfont` → use `tickfont` is STILL VALID in xaxis/yaxis but NOT in colorbar
-  - `colorbar=dict(titlefont=..., tickfont=...)` → use `colorbar=dict(title=dict(font=...), tickfont=dict(...))`  
-  - In `update_layout`: use `font=dict(size=14)` for title font, `xaxis=dict(tickfont=dict(size=12))` for axis ticks
-  - SAFEST approach: use Plotly Express (px) which handles all styling via `template='plotly_dark'` — avoid manual graph_objects styling when possible
-  - If using go.Figure + update_layout: `title=dict(text='...', font=dict(size=18))`, NOT `title_font=dict(size=18)`
+- PLOTLY API: We run Plotly 6.x which removed deprecated properties.
+  `titlefont` is NEVER valid ANYWHERE in Plotly 6 — not in layout, not in xaxis/yaxis/yaxis2,
+  not in colorbar. If you write the literal string `titlefont`, the cell WILL raise
+  "ValueError: Invalid property ... 'titlefont'". Always give an axis/colorbar title its font
+  via a nested `title=dict(text=..., font=dict(...))`, never a sibling `titlefont=`.
+  Wrong vs right (this is the exact mistake to avoid on dual-axis charts):
+  - WRONG: `yaxis2=dict(title="Conversion Rate (%)", titlefont=dict(color="#00c9a7"))`
+  - RIGHT: `yaxis2=dict(title=dict(text="Conversion Rate (%)", font=dict(color="#00c9a7")))`
+  - WRONG: `xaxis=dict(title="Step", titlefont=dict(size=14))`
+  - RIGHT: `xaxis=dict(title=dict(text="Step", font=dict(size=14)))`
+  Other rules:
+  - `tickfont` IS still valid inside xaxis/yaxis (e.g. `xaxis=dict(tickfont=dict(size=12))`) but NOT in colorbar.
+  - `colorbar=dict(titlefont=..., tickfont=...)` → use `colorbar=dict(title=dict(font=...), tickfont=dict(...))`
+  - Layout/figure title: `title=dict(text='...', font=dict(size=18))`, NOT `title_font=` and NOT `titlefont=`.
+  - DUAL-AXIS charts (bar + overlaid line, like a funnel with a conversion-rate line): prefer
+    `from plotly.subplots import make_subplots; fig = make_subplots(specs=[[{{"secondary_y": True}}]])`,
+    add each trace with `secondary_y=True/False`, and set axis titles with
+    `fig.update_yaxes(title_text="...", secondary_y=True)`. This avoids manual yaxis2/titlefont entirely.
+  - SAFEST approach overall: use Plotly Express (px) with `template='plotly_dark'` and avoid manual
+    graph_objects layout styling whenever the chart allows it.
   - FACETING: `facet_col`/`facet_row` only works with: px.bar, px.scatter, px.line, px.histogram, px.box, px.violin. NOT supported by: px.pie, px.line_polar, px.bar_polar, px.funnel
 </analysis_approach>
 
@@ -418,20 +444,35 @@ Rules:
 # ============================================================
 INTEL_PROMPT = """You are a data intelligence analyst generating a Workbook Intelligence Report for THIS specific notebook session.
 
+MOST OF THE PROFILING WORK IS ALREADY DONE FOR YOU. Every known data source (S3/Athena/
+DynamoDB, plus any local files already profiled in this session) already has a pre-computed
+profile below — business description, schema, describe()-style stats, and data quality flags.
+Read these FIRST. Do not re-run basic profiling (df.shape, df.isnull().sum(), df.describe()) for
+anything already covered below — that would waste your limited execute_code budget re-deriving
+facts you already have.
+
+<precomputed_entity_profiles>
+{entity_docs}
+</precomputed_entity_profiles>
+
 APPROACH:
-1. Call get_available_data_sources to get the full data catalog with column schemas
-2. Call get_variables to understand what the user has already done in this notebook
-3. Use execute_code to run TARGETED profiling (focus on what matters for this workbook):
-   - Profile local files (unique to this workbook): df.shape, df.isnull().sum(), df.describe()
-   - For shared sources (S3/Athena/DynamoDB): run quick checks relevant to THIS workbook's context
-   - Check for PII patterns in actual sample values
-   - Verify cross-source relationships (do column values match?)
-   - Look for data quality issues (nulls, zeros, outliers)
-4. Consider what the user's notebook cells are doing — tailor suggestions to their workflow
+1. Read the precomputed_entity_profiles above — this covers business meaning, schema, and quality
+   flags for every known source. Treat it as ground truth.
+2. Call get_variables to understand what the user has already done in this notebook.
+3. Use execute_code SPARINGLY (a handful of calls, not a full profiling pass) — focused ONLY on
+   what the precomputed profiles can't tell you:
+   - Verify cross-source relationships: do column values actually overlap between two tables
+     (e.g. does orders.customer_id really match customers.customer_id, and at what %)?
+   - Any data source NOT covered by precomputed_entity_profiles (newly added, not yet discovered)
+   - Deeper statistics the profiles don't include: correlations between numeric columns,
+     temporal patterns (seasonality, trends, gaps) if there's a date column
+4. Consider what the user's notebook cells are doing — tailor suggestions to their workflow.
 
 CONTEXT-AWARENESS:
 - This intel is for ONE specific workbook session
-- Shared data sources (S3, DynamoDB, Athena) are available to all workbooks
+- Shared data sources (S3, DynamoDB, Athena) are available to all workbooks — their profiles
+  below were computed once and are shared; don't assume they're stale just because you didn't
+  compute them yourself
 - Local /tmp files and notebook variables are UNIQUE to this workbook
 - Your "Suggested Analyses" should build on what the user is ALREADY doing
 - If the user has loaded sales data, suggest deeper sales analysis — not unrelated topics
@@ -440,7 +481,8 @@ CONTEXT-AWARENESS:
 {notebook_state}
 {variables}
 
-After profiling, return ONLY a JSON object (no markdown fences, no preamble):
+After reading the profiles and doing any targeted verification, return ONLY a JSON object
+(no markdown fences, no preamble):
 
 {{
   "suggested_analyses": [
@@ -464,16 +506,242 @@ After profiling, return ONLY a JSON object (no markdown fences, no preamble):
   "relationships": [
     {{"from_source": "table1", "from_column": "col", "to_source": "table2", "to_column": "col", "confidence": "high|medium", "join_suggestion": "actual JOIN code"}}
   ],
-  "full_report": "Markdown report tailored to this workbook. Include: data overview, findings from profiling (with real numbers), relationships verified, quality issues found, and contextual next steps based on what the user has done so far. Under 1500 words."
+  "full_report": "A comprehensive markdown report — see full_report structure below. Under 2500 words."
 }}
 
 REQUIREMENTS:
 - suggested_analyses: 5-7 items contextual to this workbook. If user has sales data loaded, suggest sales-related analysis.
 - visualizations: 3-5 items matched to data types you confirmed via profiling
 - investigations: 3-4 items. MUST NOT duplicate alerts — focus on deeper patterns, correlations, positive findings, or "why" questions that go beyond surface-level issues. Good investigations: "Clothing outperforms in 3 regions — what's driving it?", "Orders spike on weekends — segment by device type", "High-LTV customers cluster in 2 segments — profile their behavior". Bad investigations (duplicates alerts): "Data is stale", "Prices are too high" (those belong in alerts).
-- alerts: Only report issues you VERIFIED with code. Include real counts/percentages. Alerts are problems/warnings. Keep them factual and brief. The "action" field must be an INVESTIGATIVE prompt that helps the user understand the impact — NOT an operational fix or remediation step. Good actions: "Show the date range distribution of scraped_date and identify which product categories have the oldest data", "List the 9 overpriced products with their price_diff_pct and cross-reference order volumes". Bad actions: "Re-scrape competitor prices", "Update the database", "Fix the null values".
+- alerts: Only report issues you VERIFIED with code or that are already flagged in precomputed_entity_profiles. Include real counts/percentages. Alerts are problems/warnings. Keep them factual and brief. The "action" field must be an INVESTIGATIVE prompt that helps the user understand the impact — NOT an operational fix or remediation step. Good actions: "Show the date range distribution of scraped_date and identify which product categories have the oldest data", "List the 9 overpriced products with their price_diff_pct and cross-reference order volumes". Bad actions: "Re-scrape competitor prices", "Update the database", "Fix the null values".
+- DATE/TIMESTAMP COLUMNS STORED AS STRINGS — DO NOT flag these as a quality problem when the source is DynamoDB or a CSV/local file. DynamoDB has NO native date/timestamp type (only String, Number, Binary, Bool, Null), so ISO-8601 dates stored as strings is the EXPECTED, AWS-recommended pattern — not a defect. CSV files are likewise untyped text. If a date/timestamp column is string-typed in a DynamoDB table (e.g. clickstream.timestamp, reviews.review_date, marketing.start_date/end_date) or a CSV, do NOT emit a "quality" alert about it. At most, mention it once in the full_report as an expected characteristic with a brief note to cast (pd.to_datetime) before time-series grouping. ONLY flag string-typed dates as a genuine quality mismatch when the source is Athena/Parquet (which DOES have a native DATE type) and the column is still a string.
 - relationships: Only report relationships where you confirmed column values overlap
-- full_report: Tailored to this workbook's context — not generic
+
+FULL_REPORT STRUCTURE (use these sections, in this order, as markdown headers — omit a section
+entirely if there's genuinely nothing to say, rather than padding it):
+
+1. **Data Landscape Overview** — total sources (X: Y S3 files, Z Athena tables, W DynamoDB
+   tables, V local files), combined row counts, total columns, data freshness/date range if
+   any source has a date column.
+2. **Source Profiles** — one entry per source, drawing DIRECTLY from precomputed_entity_profiles
+   (business description, shape/size, key columns, quality flags) — you already have this, just
+   summarize it here rather than re-deriving it.
+3. **Duplicate / Overlapping Data** — sources that appear to hold the same or overlapping data
+   (e.g. a local CSV and an Athena table with matching column names/shapes). State which to
+   prefer and why (freshness, completeness, access speed).
+4. **Relationships & Join Paths** — FK-style relationships you found or verified (matching
+   column names + confirmed value overlap where you checked), and whether the schema looks
+   like a star/snowflake (fact vs. dimension tables).
+5. **Data Quality Alerts** — pull from precomputed_entity_profiles' quality_flags plus anything
+   you verified yourself: high null-rate columns, constant columns, type mismatches (numeric
+   stored as string), outliers, suspiciously high/low cardinality (e.g. "customer_id has 200
+   unique values across 500 rows vs. region has 4 — expected for an ID vs. a category").
+   NOTE: date/timestamp columns stored as strings in DynamoDB tables or CSV/local files are
+   EXPECTED (DynamoDB has no native date type; CSV is untyped) — describe them as an expected
+   characteristic with a one-line "cast with pd.to_datetime before time-series ops" note, NOT
+   as a quality defect. Only treat a string-typed date as a real mismatch when it comes from
+   Athena/Parquet, which supports a native DATE type.
+6. **Statistical Highlights** — notable distributions, correlations between numeric columns,
+   temporal patterns (seasonality, trends, gaps) — only if you actually checked these.
+7. **Suggested Analyses** — mirror the suggested_analyses array as a short numbered list.
+8. **Current Notebook Progress** — what the user has done so far (cells executed, variables
+   created) and a natural next step given that state.
+9. **Further Investigation Ideas** — mirror the investigations array, plus (only if genuinely
+   applicable): schema evolution hints (a source has columns another related source lacks —
+   possibly a newer version), performance tips (e.g. a large DynamoDB table should be queried
+   with a key condition or Limit rather than a full scan), and PII considerations (columns whose
+   name/samples look like email/phone/address — flag for masking in shared notebooks, don't
+   assume malicious intent).
+
+Return ONLY the JSON object.
+"""
+
+
+# ============================================================
+# GLOBAL ENTITY DISCOVERY PROMPT
+#
+# Used by proxy/notebook/ai/entity_discovery.py — one-shot call (no tools,
+# no agent loop) that turns pre-computed profiling stats for ONE data source
+# (S3 file / Athena table / DynamoDB table) into a business-readable profile
+# document. This runs independently of any user session.
+# ============================================================
+ENTITY_DISCOVERY_PROMPT = """<role>
+You are a data cataloging analyst. You are given pre-computed profiling statistics for ONE
+data source (a single S3 file, Athena table, or DynamoDB table) and must turn them into a
+concise, business-readable profile document. You do NOT have tool access and cannot run
+any code — all facts you need are already computed and provided below. Do not invent
+numbers that aren't in the provided stats.
+</role>
+
+<entity>
+source_id: {source_id}
+source_type: {source_type}
+</entity>
+
+<computed_stats>
+{stats_json}
+</computed_stats>
+
+<task>
+Using ONLY the stats provided above, produce:
+1. A one-sentence AI-inferred business description of what this data represents
+   (e.g. "Transactional sales orders with customer and product references").
+2. A list of concrete data quality flags — ONLY report things actually visible in the
+   stats (null_pct > 10, duplicate_row_pct > 0, constant columns, suspiciously
+   high/low cardinality, columns that look numeric but have dtype object/string,
+   columns that look like PII based on name/sample values e.g. email, phone, ssn, address).
+   DATE/TIMESTAMP-AS-STRING EXCEPTION: Do NOT emit a type_mismatch flag for a date or
+   timestamp column that is string-typed when source_type is DynamoDB or a CSV/local file.
+   DynamoDB has no native date/timestamp type (only String, Number, Binary, Bool, Null), so
+   ISO-8601 dates stored as strings is the EXPECTED, AWS-recommended pattern — not a defect.
+   CSV files are untyped text and are likewise expected to hold dates as strings. Only flag a
+   string-typed date as a type_mismatch when source_type is Athena (which has a native DATE
+   type). A numeric column stored as a string is still worth flagging regardless of source.
+3. A complete markdown profile document for this one entity.
+</task>
+
+Return ONLY a JSON object (no markdown fences, no preamble):
+
+{{
+  "business_description": "one sentence",
+  "quality_flags": [
+    {{"type": "null_rate|duplicate|type_mismatch|outlier|constant_column|high_cardinality|low_cardinality|pii_suspected", "column": "column_name or null", "severity": "high|medium|low", "detail": "specific finding with the actual numbers from the stats"}}
+  ],
+  "markdown": "# <source_id>\\n\\n**Type:** ... | **Business meaning:** ...\\n\\n## Shape & Size\\n...\\n\\n## Schema\\n| Column | Type | Null % | Unique | Sample Values |\\n|---|---|---|---|---|\\n...\\n\\n## Data Quality\\n... (list the quality_flags in prose, or state the data looks clean)\\n"
+}}
+
+REQUIREMENTS:
+- Every number in your output must come directly from computed_stats — no guessing row counts, percentages, or column names not present in the data.
+- If computed_stats has a "sample_note" field, include it verbatim near the top of the markdown so readers know this profile is based on a sample, not necessarily the full dataset.
+- quality_flags: only include real findings. An empty list is fine if the data looks clean.
+- markdown: self-contained — a reader should understand this ONE entity without needing any other document. Keep it under 500 words.
+
+Return ONLY the JSON object.
+"""
+
+
+# ============================================================
+# INCREMENTAL INTEL UPDATE PROMPT
+#
+# Used when a new file is uploaded to a workbook that ALREADY has an intel
+# report. Instead of re-running the full discovery + profiling pipeline from
+# scratch, this prompt gives the agent the existing report + the new file's
+# entity profile and asks it to produce an UPDATED report that incorporates
+# the new file's data.
+#
+# This is much faster (~30-40s vs 2-3 min for full) because:
+# - No tool calls needed (all facts are pre-computed and injected)
+# - Single LLM call, no agent loop
+# - Existing findings are preserved, not rediscovered
+# ============================================================
+INTEL_INCREMENTAL_PROMPT = """You are extending an existing Workbook Intelligence Report because the user just uploaded a NEW file.
+
+Your job is NOT to rewrite the whole report. It is to identify ONLY the brand-new findings that the
+new file makes possible, as a small delta. The system will merge your delta into the existing report.
+
+<existing_report_summary>
+{existing_report_json}
+</existing_report_summary>
+
+<new_file_profile>
+{new_file_doc}
+</new_file_profile>
+
+<all_entity_summaries>
+{entity_summaries}
+</all_entity_summaries>
+
+TASK:
+The user just uploaded a new file — its profile is in <new_file_profile>. The <existing_report_summary>
+lists what the report ALREADY covers (so you don't repeat it). <all_entity_summaries> describes the other
+data sources so you can find join opportunities.
+
+Return ONLY the NEW items the new file unlocks. Focus on cross-source value:
+- New suggested_analyses that USE the new file (ideally joined to an existing source)
+- New visualizations of the new file's data (or a joined view)
+- New investigations: interesting patterns/anomalies combining the new file with existing data
+- New alerts: real data-quality issues found in the new file's profile (null rates, duplicates, type mismatches, PII) — use its quality_flags. Do NOT flag date/timestamp columns stored as strings when the new file is a CSV/local file or the source is DynamoDB — that is expected (untyped/no native date type), not a defect.
+- New relationships: join paths between the new file and existing sources (match column names/patterns like product_id, user_id, order_id)
+
+STRICT RULES:
+- Do NOT restate or re-emit any finding already present in <existing_report_summary>. Only genuinely NEW items.
+- Every item you return MUST reference the new file (by column names or a join to it). If an item does not involve the new file, do not include it.
+- COLUMN GROUNDING (critical): Only reference column names that ACTUALLY appear in the schema tables of <new_file_profile> or <all_entity_summaries>. Do NOT invent, guess, or infer column names on any source. The profiles contain a "## Schema" table listing every real column per source — use those exact names only.
+  * For join_suggestion SQL and analysis prompts: project only columns you can find in a provided schema. If you need a column from a source whose schema is NOT in the profiles, do NOT name a specific column — instead write "verify column names" in place of the guessed column (e.g. `SELECT r.*, o.<verify column names> FROM ...`).
+  * The join KEYS (ON clause) must be columns present in BOTH sides' schemas. If you cannot confirm a matching key column on both sides from the profiles, set that relationship's confidence to "medium" and note "verify column names" in the join_suggestion.
+  * Never assume a column exists just because it is common (e.g. do not assume "total_amount", "our_price", "email" exist — check the schema first and use the real name, or say "verify column names").
+- Use ACTUAL column names from <new_file_profile> in every prompt/message — no placeholders for the NEW file (its full schema is always provided).
+- Keep it tight: 2-4 new analyses, 1-3 new visualizations, 1-3 new investigations, 1-4 new alerts, 1-4 new relationships. Fewer high-quality items beat many generic ones.
+- "delta_summary" must be a SHORT markdown paragraph (2-4 sentences) describing what the new file adds and the best join opportunity. Do NOT reproduce the whole report.
+
+Item shapes (match EXACTLY):
+- suggested_analyses: {{"title": "...", "prompt": "...", "category": "aggregation|join|trend|correlation"}}
+- visualizations:      {{"title": "...", "prompt": "...", "chart_type": "bar|line|scatter|heatmap|histogram"}}
+- investigations:      {{"title": "...", "prompt": "...", "reason": "data-backed finding with actual numbers"}}
+- alerts:              {{"type": "pii|quality|duplicate|performance", "severity": "high|medium|low", "message": "specific finding with numbers", "action": "investigative prompt"}}
+- relationships:       {{"from_source": "...", "from_column": "...", "to_source": "...", "to_column": "...", "confidence": "high|medium", "join_suggestion": "actual JOIN code"}}
+
+Return ONLY a JSON object (no markdown fences, no preamble) in EXACTLY this shape — arrays contain ONLY new items:
+
+{{
+  "new_source_label": "the new file name (e.g. product_returns.csv)",
+  "delta_summary": "2-4 sentence markdown describing what the new file adds and the key join opportunity",
+  "suggested_analyses": [...],
+  "visualizations": [...],
+  "investigations": [...],
+  "alerts": [...],
+  "relationships": [...]
+}}
+
+Return ONLY the JSON object.
+"""
+
+
+# ============================================================
+# WORKBOOK INTEL — FILE DELETION PROMPT
+# The user DELETED a data source. We give the model the FULL existing report and the
+# deleted file's name, and ask it to identify every item that is DIRECTLY or INDIRECTLY
+# dependent on that file so the system can prune them. The model returns ONLY the
+# identifying keys of items to REMOVE (small output) — Python does the actual removal.
+# ============================================================
+INTEL_DELETION_PROMPT = """You are updating an existing Workbook Intelligence Report because the user DELETED a data source.
+
+The deleted data source is: "{deleted_source_label}"
+
+<existing_report>
+{existing_report_json}
+</existing_report>
+
+TASK:
+The user removed "{deleted_source_label}" from their workbook, so any insight that depends on it is now
+invalid and must be removed. Go through the existing report and identify EVERY item that is DIRECTLY or
+INDIRECTLY dependent on the deleted source:
+- DIRECT: the item names the deleted file, or analyzes/visualizes/alerts on its columns.
+- INDIRECT: the item joins the deleted file to another source, or its finding only holds because of the
+  deleted file (e.g. a relationship whose from_source or to_source is the deleted file, an analysis that
+  aggregates the deleted file against another table, an investigation whose reasoning relies on it).
+
+Items that do NOT depend on the deleted source at all must be KEPT (do not list them).
+
+Return ONLY the identifying keys of the items to REMOVE. Use the EXACT text from the existing report so the
+system can match them:
+- For analyses / visualizations / investigations: the item's exact "title" string.
+- For alerts: an object {{"type": "...", "message": "..."}} copied exactly from the alert.
+- For relationships: an object {{"from_source": "...", "from_column": "...", "to_source": "...", "to_column": "..."}} copied exactly.
+
+Also write a SHORT markdown "deletion_summary" (1-3 sentences) noting the source was removed and what was pruned.
+
+Return ONLY a JSON object (no markdown fences, no preamble) in EXACTLY this shape:
+
+{{
+  "deleted_source_label": "{deleted_source_label}",
+  "deletion_summary": "1-3 sentence markdown noting the removed source and what was pruned",
+  "remove_analyses": ["exact title", ...],
+  "remove_visualizations": ["exact title", ...],
+  "remove_investigations": ["exact title", ...],
+  "remove_alerts": [{{"type": "...", "message": "..."}}, ...],
+  "remove_relationships": [{{"from_source": "...", "from_column": "...", "to_source": "...", "to_column": "..."}}, ...]
+}}
 
 Return ONLY the JSON object.
 """

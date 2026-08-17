@@ -1,5 +1,6 @@
-import { useState, useRef, useEffect, useCallback } from 'react'
-import { IconUpload, IconFile, IconDatabase, IconBucket, IconRefresh, IconX, IconNotebook, IconTable, IconCode } from '../Icons'
+import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
+import { IconUpload, IconFile, IconDatabase, IconBucket, IconRefresh, IconX, IconNotebook, IconTable, IconCode, IconSparkles } from '../Icons'
+import { marked } from 'marked'
 import { PROXY_URL } from '../../config'
 
 // File type icon with color based on extension
@@ -150,6 +151,124 @@ function InsertChoicePopover({ sourceType, sourceId, onInsert, onClose }) {
   )
 }
 
+/**
+ * Strip the title heading (# entity_name) and "Data Quality" section from entity
+ * markdown — title is already in the modal header, and quality flags are rendered
+ * separately with colored indicators below the schema.
+ */
+function _stripTitleAndDataQuality(md) {
+  if (!md) return ''
+  // Remove the first # heading (entity name — already in modal header)
+  let result = md.replace(/^#[^#\n].*\n+/, '')
+  // Remove "## Data Quality" section (rendered separately with colored dots)
+  result = result.replace(/## Data Quality[\s\S]*?(?=\n## |\n# |$)/, '')
+  return result.trim()
+}
+
+/**
+ * EntityDocBadge — shows a sparkle icon for entities that have AI-generated profiles.
+ * Clicking shows a popover with business description and quality flags.
+ * "View Full Profile" opens a modal with the full markdown.
+ */
+function EntityDocBadge({ sourceId, businessDescription, qualityFlags, sessionId }) {
+  const [showPopover, setShowPopover] = useState(false)
+  const [showModal, setShowModal] = useState(false)
+  const [fullDoc, setFullDoc] = useState(null)
+  const [loadingFull, setLoadingFull] = useState(false)
+  const popRef = useRef(null)
+
+  useEffect(() => {
+    if (!showPopover) return
+    const handleClick = (e) => {
+      if (popRef.current && !popRef.current.contains(e.target)) setShowPopover(false)
+    }
+    document.addEventListener('mousedown', handleClick)
+    return () => document.removeEventListener('mousedown', handleClick)
+  }, [showPopover])
+
+  const loadFullDoc = async () => {
+    setLoadingFull(true)
+    try {
+      const resp = await fetch(`${PROXY_URL}/datasources/entity-doc?source_id=${encodeURIComponent(sourceId)}`, {
+        headers: sessionId ? { 'X-Session-Id': sessionId } : {},
+      })
+      if (resp.ok) {
+        const data = await resp.json()
+        setFullDoc(data)
+      }
+    } catch (e) {
+      console.warn('Failed to load entity doc:', e)
+    }
+    setLoadingFull(false)
+    setShowModal(true)
+    setShowPopover(false)
+  }
+
+  const severityColor = (sev) => {
+    if (sev === 'high') return 'var(--accent-danger, #ff5c5c)'
+    if (sev === 'medium') return 'var(--accent-warning, #f9a825)'
+    return 'var(--text-muted)'
+  }
+
+  return (
+    <>
+      <button
+        className="ds-entity-doc-badge"
+        onClick={(e) => { e.stopPropagation(); setShowPopover(!showPopover) }}
+        title="AI-profiled entity — click for details"
+      >
+        <IconSparkles width={12} height={12} />
+      </button>
+      {showPopover && (
+        <div className="ds-entity-popover" ref={popRef} onClick={(e) => e.stopPropagation()}>
+          <div className="ds-entity-popover-header">{sourceId.split('/').pop() || sourceId}</div>
+          <div className="ds-entity-popover-desc">{businessDescription || 'No description available.'}</div>
+          {qualityFlags && qualityFlags.length > 0 && (
+            <div className="ds-entity-popover-flags">
+              {qualityFlags.slice(0, 4).map((flag, i) => (
+                <div key={i} className="ds-entity-flag">
+                  <span className="ds-entity-flag-dot" style={{ background: severityColor(flag.severity) }} />
+                  <span className="ds-entity-flag-text">{flag.detail || flag.type}</span>
+                </div>
+              ))}
+              {qualityFlags.length > 4 && <div className="ds-entity-flag-more">+{qualityFlags.length - 4} more</div>}
+            </div>
+          )}
+          <button className="ds-entity-popover-full" onClick={loadFullDoc} disabled={loadingFull}>
+            {loadingFull ? 'Loading...' : 'View Full Profile'}
+          </button>
+        </div>
+      )}
+      {showModal && (
+        <div className="ds-entity-modal-overlay" onClick={() => setShowModal(false)}>
+          <div className="ds-entity-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="ds-entity-modal-header">
+              <span>{sourceId.split('/').pop() || sourceId}</span>
+              <button onClick={() => setShowModal(false)}><IconX width={14} height={14} /></button>
+            </div>
+            <div className="ds-entity-modal-body">
+              <div dangerouslySetInnerHTML={{ __html: marked(_stripTitleAndDataQuality(fullDoc?.markdown || '')) }} />
+              {fullDoc?.quality_flags && fullDoc.quality_flags.length > 0 && (
+                <div className="ds-entity-modal-flags">
+                  <div className="ds-entity-modal-flags-title">Data Quality</div>
+                  {fullDoc.quality_flags.map((flag, i) => (
+                    <div key={i} className="ds-entity-modal-flag">
+                      <span className="ds-entity-flag-dot" style={{ background: severityColor(flag.severity) }} />
+                      <span className="ds-entity-modal-flag-text">
+                        <strong>{flag.column ? `${flag.column}` : flag.type}</strong> — {flag.detail}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+    </>
+  )
+}
+
 const PUBLIC_APIS = [
   { id: 'worldbank', name: 'World Bank', icon: '🌍', desc: 'Country indicators & economics', code: `import pandas as pd, requests\n\n# Indicators: NY.GDP.MKTP.CD=GDP($), SP.POP.TOTL=Population, EN.ATM.CO2E.KT=CO2 emissions\ndef world_bank(indicator='NY.GDP.MKTP.CD', country='all', date='2018:2023'):\n    url = f'https://api.worldbank.org/v2/country/{country}/indicator/{indicator}?date={date}&format=json&per_page=300'\n    resp = requests.get(url, timeout=60).json()\n    df = pd.DataFrame(resp[1])[['country','date','value']]\n    df['country'] = df['country'].apply(lambda x: x['value'])\n    return df.dropna(subset=['value'])\n\ndf = world_bank()  # GDP in current US$ for all countries\ndf.head(20)` },
   { id: 'countries', name: 'World Countries', icon: '🗺️', desc: '200+ countries with region, income, capital', code: `import pandas as pd, requests\n\nresp = requests.get('https://api.worldbank.org/v2/country/all?format=json&per_page=300', timeout=60).json()\ndf = pd.DataFrame(resp[1])[['name','region','capitalCity','incomeLevel','longitude','latitude']]\ndf['region'] = df['region'].apply(lambda x: x['value'])\ndf['incomeLevel'] = df['incomeLevel'].apply(lambda x: x['value'])\ndf = df[df['capitalCity'] != '']  # Filter out aggregates\ndf.head(20)` },
@@ -174,6 +293,7 @@ export default function DataSourcesPanel({
   athenaTables,
   athenaWorkgroup,
   dsLoading,
+  catalogEntries = [],
   fetchDataSources,
   onClose,
 }) {
@@ -183,6 +303,20 @@ export default function DataSourcesPanel({
   const [athenaExpanded, setAthenaExpanded] = useState(true)
   const [publicApisExpanded, setPublicApisExpanded] = useState(true)
   const [activePopover, setActivePopover] = useState(null) // key of item with open popover
+
+  // Build a lookup map from source_id → entity doc metadata (from the enriched catalog)
+  const entityDocMap = useMemo(() => {
+    const map = {}
+    for (const entry of catalogEntries) {
+      if (entry.has_entity_doc) {
+        map[entry.source_id] = {
+          business_description: entry.business_description || '',
+          quality_flags: entry.quality_flags || [],
+        }
+      }
+    }
+    return map
+  }, [catalogEntries])
 
   const handleFileUpload = () => {
     const input = document.createElement('input')
@@ -242,6 +376,14 @@ export default function DataSourcesPanel({
                 </button>
                 {activeTab?.sessionId && (
                   <SchemaExpander sourceType="local" sourceId={`/tmp/${file.name}`} onInsertCode={onInsertCode} sessionId={activeTab.sessionId} />
+                )}
+                {entityDocMap[`/tmp/${file.name}`] && (
+                  <EntityDocBadge
+                    sourceId={`/tmp/${file.name}`}
+                    businessDescription={entityDocMap[`/tmp/${file.name}`].business_description}
+                    qualityFlags={entityDocMap[`/tmp/${file.name}`].quality_flags}
+                    sessionId={activeTab?.sessionId}
+                  />
                 )}
                 {activePopover === `file-${file.name}` && (
                   <InsertChoicePopover
@@ -308,6 +450,14 @@ export default function DataSourcesPanel({
                   <span className="sidebar-file-meta">{file.size}</span>
                 </div>
                 <SchemaExpander sourceType="s3" sourceId={file.uri} onInsertCode={onInsertCode} />
+                {entityDocMap[file.uri] && (
+                  <EntityDocBadge
+                    sourceId={file.uri}
+                    businessDescription={entityDocMap[file.uri].business_description}
+                    qualityFlags={entityDocMap[file.uri].quality_flags}
+                    sessionId={activeTab?.sessionId}
+                  />
+                )}
                 {activePopover === `s3-${file.key}` && (
                   <InsertChoicePopover
                     sourceType="s3"
@@ -344,6 +494,14 @@ export default function DataSourcesPanel({
                   <span className="sidebar-file-meta">{table.item_count} items · {table.region}</span>
                 </div>
                 <SchemaExpander sourceType="dynamodb" sourceId={table.name} onInsertCode={onInsertCode} />
+                {entityDocMap[`dynamodb.${table.name}`] && (
+                  <EntityDocBadge
+                    sourceId={`dynamodb.${table.name}`}
+                    businessDescription={entityDocMap[`dynamodb.${table.name}`].business_description}
+                    qualityFlags={entityDocMap[`dynamodb.${table.name}`].quality_flags}
+                    sessionId={activeTab?.sessionId}
+                  />
+                )}
                 {activePopover === `dynamo-${table.name}` && (
                   <InsertChoicePopover
                     sourceType="dynamodb"
@@ -380,6 +538,14 @@ export default function DataSourcesPanel({
                   <span className="sidebar-file-meta">{table.column_count} cols · {table.database}</span>
                 </div>
                 <SchemaExpander sourceType="athena" sourceId={`${table.database}.${table.name}`} onInsertCode={onInsertCode} />
+                {entityDocMap[`${table.database}.${table.name}`] && (
+                  <EntityDocBadge
+                    sourceId={`${table.database}.${table.name}`}
+                    businessDescription={entityDocMap[`${table.database}.${table.name}`].business_description}
+                    qualityFlags={entityDocMap[`${table.database}.${table.name}`].quality_flags}
+                    sessionId={activeTab?.sessionId}
+                  />
+                )}
                 {activePopover === `athena-${table.database}.${table.name}` && (
                   <InsertChoicePopover
                     sourceType="athena"

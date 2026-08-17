@@ -105,6 +105,29 @@ CREATE TABLE IF NOT EXISTS workbook_intel (
     version INTEGER NOT NULL DEFAULT 1
 );
 
+-- Global data-source entities: S3 files, Athena tables, DynamoDB tables.
+-- Shared across all sessions/users — NOT session-scoped like workbook_intel.
+CREATE TABLE IF NOT EXISTS data_source_entities (
+    source_id TEXT PRIMARY KEY,
+    source_type TEXT NOT NULL,
+    doc_s3_key TEXT,
+    change_signal TEXT,
+    status TEXT DEFAULT 'pending',
+    last_discovered_at TEXT
+);
+
+-- Local file entities: uploaded /tmp files, unique per session (NOT shared
+-- like data_source_entities). Same shape/purpose, scoped by session_id.
+CREATE TABLE IF NOT EXISTS local_file_entities (
+    session_id TEXT NOT NULL,
+    filepath TEXT NOT NULL,
+    doc_s3_key TEXT,
+    change_signal TEXT,
+    status TEXT DEFAULT 'pending',
+    last_discovered_at TEXT,
+    PRIMARY KEY (session_id, filepath)
+);
+
 CREATE INDEX IF NOT EXISTS idx_vm_metrics_lookup
     ON vm_metrics(microvm_id, timestamp DESC);
 
@@ -367,3 +390,132 @@ class SqliteStorage(StorageBackend):
             if row:
                 return {"session_id": row[0], "s3_key": row[1], "generated_at": row[2], "version": row[3]}
             return None
+
+    # ============================================================
+    # GLOBAL DATA SOURCE ENTITIES
+    # ============================================================
+
+    def entity_upsert(self, source_id: str, source_type: str, doc_s3_key: str = None,
+                      change_signal: dict = None, status: str = None) -> None:
+        """Create or partially update a global entity's discovery metadata.
+        Only fields explicitly passed (non-None) are changed on an existing row —
+        this lets callers mark status='discovering' without clobbering a
+        previously-saved doc_s3_key/change_signal if that attempt later fails."""
+        now = datetime.now(timezone.utc).isoformat()
+        with self._db() as conn:
+            existing = conn.execute(
+                "SELECT 1 FROM data_source_entities WHERE source_id = ?", (source_id,)
+            ).fetchone()
+
+            if existing:
+                updates = {"source_type": source_type, "last_discovered_at": now}
+                if doc_s3_key is not None:
+                    updates["doc_s3_key"] = doc_s3_key
+                if change_signal is not None:
+                    updates["change_signal"] = json.dumps(change_signal)
+                if status is not None:
+                    updates["status"] = status
+                set_clause = ", ".join(f"{k} = ?" for k in updates)
+                conn.execute(
+                    f"UPDATE data_source_entities SET {set_clause} WHERE source_id = ?",
+                    list(updates.values()) + [source_id]
+                )
+            else:
+                conn.execute(
+                    """INSERT INTO data_source_entities
+                       (source_id, source_type, doc_s3_key, change_signal, status, last_discovered_at)
+                       VALUES (?, ?, ?, ?, ?, ?)""",
+                    (source_id, source_type, doc_s3_key,
+                     json.dumps(change_signal) if change_signal is not None else None,
+                     status or "pending", now)
+                )
+
+    def entity_get(self, source_id: str) -> Optional[dict]:
+        with self._db() as conn:
+            row = conn.execute(
+                "SELECT * FROM data_source_entities WHERE source_id = ?", (source_id,)
+            ).fetchone()
+        if not row:
+            return None
+        d = dict(row)
+        d["change_signal"] = json.loads(d["change_signal"]) if d.get("change_signal") else None
+        return d
+
+    def entity_list(self, source_type: str = None) -> list[dict]:
+        with self._db() as conn:
+            if source_type:
+                rows = conn.execute(
+                    "SELECT * FROM data_source_entities WHERE source_type = ? ORDER BY source_id",
+                    (source_type,)
+                ).fetchall()
+            else:
+                rows = conn.execute("SELECT * FROM data_source_entities ORDER BY source_id").fetchall()
+        result = []
+        for row in rows:
+            d = dict(row)
+            d["change_signal"] = json.loads(d["change_signal"]) if d.get("change_signal") else None
+            result.append(d)
+        return result
+
+    # ============================================================
+    # LOCAL FILE ENTITIES (session-scoped — uploaded /tmp files)
+    # ============================================================
+
+    def local_entity_upsert(self, session_id: str, filepath: str, doc_s3_key: str = None,
+                            change_signal: dict = None, status: str = None) -> None:
+        """Create or partially update a local file's discovery metadata for one session.
+        Same partial-update semantics as entity_upsert."""
+        now = datetime.now(timezone.utc).isoformat()
+        with self._db() as conn:
+            existing = conn.execute(
+                "SELECT 1 FROM local_file_entities WHERE session_id = ? AND filepath = ?",
+                (session_id, filepath)
+            ).fetchone()
+
+            if existing:
+                updates = {"last_discovered_at": now}
+                if doc_s3_key is not None:
+                    updates["doc_s3_key"] = doc_s3_key
+                if change_signal is not None:
+                    updates["change_signal"] = json.dumps(change_signal)
+                if status is not None:
+                    updates["status"] = status
+                set_clause = ", ".join(f"{k} = ?" for k in updates)
+                conn.execute(
+                    f"UPDATE local_file_entities SET {set_clause} WHERE session_id = ? AND filepath = ?",
+                    list(updates.values()) + [session_id, filepath]
+                )
+            else:
+                conn.execute(
+                    """INSERT INTO local_file_entities
+                       (session_id, filepath, doc_s3_key, change_signal, status, last_discovered_at)
+                       VALUES (?, ?, ?, ?, ?, ?)""",
+                    (session_id, filepath, doc_s3_key,
+                     json.dumps(change_signal) if change_signal is not None else None,
+                     status or "pending", now)
+                )
+
+    def local_entity_get(self, session_id: str, filepath: str) -> Optional[dict]:
+        with self._db() as conn:
+            row = conn.execute(
+                "SELECT * FROM local_file_entities WHERE session_id = ? AND filepath = ?",
+                (session_id, filepath)
+            ).fetchone()
+        if not row:
+            return None
+        d = dict(row)
+        d["change_signal"] = json.loads(d["change_signal"]) if d.get("change_signal") else None
+        return d
+
+    def local_entity_list(self, session_id: str) -> list[dict]:
+        with self._db() as conn:
+            rows = conn.execute(
+                "SELECT * FROM local_file_entities WHERE session_id = ? ORDER BY filepath",
+                (session_id,)
+            ).fetchall()
+        result = []
+        for row in rows:
+            d = dict(row)
+            d["change_signal"] = json.loads(d["change_signal"]) if d.get("change_signal") else None
+            result.append(d)
+        return result

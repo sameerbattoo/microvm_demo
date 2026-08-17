@@ -1,5 +1,5 @@
 import { useState, useMemo, useCallback } from 'react'
-import { IconX, IconNotebook } from '../Icons'
+import { IconX, IconNotebook, IconEraser } from '../Icons'
 
 export default function OutlinePanel({
   cells,
@@ -302,7 +302,7 @@ export default function OutlinePanel({
             <button className="outline-bulk-btn" onClick={() => {
               onClearOutputs([...selectedCells])
             }} title="Clear outputs of selected cells">
-              <svg width={10} height={10} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/></svg> Clear
+              <IconEraser width={10} height={10} /> Clear
             </button>
           )}
           <button className="outline-bulk-btn outline-bulk-delete" onClick={handleBulkDelete} title="Delete selected">

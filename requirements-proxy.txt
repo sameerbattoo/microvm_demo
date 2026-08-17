@@ -15,3 +15,9 @@ strands-agents>=1.48.0
 
 # WebSocket relay for terminal access
 websockets>=13.0
+
+# Lightweight sample profiling for global data-source entity discovery
+# (proxy.notebook.ai.entity_discovery) — profiles small samples of S3/Athena/
+# DynamoDB sources directly in the proxy process, no MicroVM required.
+pandas>=2.0.0
+pyarrow>=14.0.0

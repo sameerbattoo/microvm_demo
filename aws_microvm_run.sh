@@ -166,6 +166,21 @@ aws iam put-role-policy \
 # --- Setup sample data (DynamoDB + S3) ---
 bash "$ROOT_DIR/scripts/setup_sample_data.sh"
 
+# --- Refresh entity intel docs (profiles for the Workbook Intel) ---
+# Runs right after seeding so the pre-computed per-entity profiles stay in lockstep with
+# the data. Change-signal aware: unchanged entities are skipped, so this is cheap on
+# restarts where data didn't change. NON-BLOCKING: discovery hitting Bedrock (throttle,
+# creds) must never prevent the proxy/UI from starting — log a warning and continue.
+echo ">> Refreshing entity intel docs (batch/entity_discovery)..."
+if (cd "$ROOT_DIR" && \
+    AWS_REGION="$AWS_REGION" ACCOUNT_ID="$ACCOUNT_ID" ARTIFACT_BUCKET="$ARTIFACT_BUCKET" \
+    ATHENA_DB="$ATHENA_DB" ATHENA_WORKGROUP="$ATHENA_WORKGROUP" \
+    $PYTHON -m batch.entity_discovery); then
+  echo "   Entity intel docs refreshed ✓"
+else
+  echo "   ⚠ Entity discovery failed (non-fatal) — Workbook Intel may use stale/absent profiles until it is re-run."
+fi
+
 # --- Ensure MicroVM images exist (all size tiers) ---
 echo ">> Checking MicroVM images..."
 NEEDS_BUILD=false

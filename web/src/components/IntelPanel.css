@@ -42,7 +42,11 @@
 .intel-generate-btn-large { margin-top: 12px; padding: 8px 20px; font-size: 12px; font-weight: 500; border: 1px solid var(--accent-primary-muted); border-radius: var(--radius-md); background: var(--accent-primary-subtle); color: var(--accent-primary); cursor: pointer; }
 .intel-generate-btn-large:hover:not(:disabled) { background: var(--accent-primary-muted); color: var(--text-primary); }
 .intel-spinner { width: 20px; height: 20px; border: 2px solid var(--border-default); border-top-color: var(--accent-primary); border-radius: 50%; animation: intel-spin 0.8s linear infinite; margin: 0 auto 10px; }
+.intel-spinner-sm { width: 12px; height: 12px; border-width: 2px; margin: 0; flex-shrink: 0; }
 @keyframes intel-spin { to { transform: rotate(360deg); } }
+
+/* Thin banner shown at the top of the report while an incremental update (delta) runs */
+.intel-updating-strip { display: flex; align-items: center; gap: 8px; padding: 7px 12px; margin: 0; font-size: 11px; color: var(--accent-primary); background: var(--accent-primary-subtle); border-bottom: 1px solid var(--accent-primary-muted); }
 
 /* Body */
 .intel-panel-body { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; }
@@ -67,7 +71,7 @@
 .intel-card-icon { font-size: 14px; flex-shrink: 0; margin-top: 2px; }
 .intel-card-title { font-size: 12px; color: var(--text-secondary); flex: 1; min-width: 0; word-wrap: break-word; overflow-wrap: break-word; }
 .intel-card-badge { font-size: 9px; padding: 1px 5px; border-radius: 3px; background: var(--surface-3); color: var(--text-muted); flex-shrink: 0; }
-.intel-card-run { font-size: 10px; padding: 3px 10px; border-radius: 4px; border: 1px solid var(--accent-primary-muted); background: var(--accent-primary-subtle); color: var(--accent-primary); cursor: pointer; flex-shrink: 0; font-weight: 500; white-space: nowrap; }
+.intel-card-run { display: inline-flex; align-items: center; gap: 4px; font-size: 10px; padding: 3px 10px; border-radius: 4px; border: 1px solid var(--accent-primary-muted); background: var(--accent-primary-subtle); color: var(--accent-primary); cursor: pointer; flex-shrink: 0; font-weight: 500; white-space: nowrap; }
 .intel-card-run:hover { background: var(--accent-primary-muted); color: var(--text-primary); }
 
 /* Card with body (investigate, alerts) */

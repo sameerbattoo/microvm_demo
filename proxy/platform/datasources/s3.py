@@ -210,28 +210,11 @@ class S3SchemaProvider(DataSourceProvider):
     @staticmethod
     def _pandas_dtype_to_simple(dtype) -> str:
         """Map pandas dtype to simple display type."""
-        s = str(dtype)
-        if "int" in s:
-            return "int"
-        if "float" in s:
-            return "float"
-        if "datetime" in s:
-            return "datetime"
-        if "bool" in s:
-            return "boolean"
-        return "string"
+        from app.notebook.dtypes import normalize_dtype
+        return normalize_dtype(str(dtype))
 
     @staticmethod
     def _arrow_dtype_to_simple(dtype: str) -> str:
         """Map Arrow dtype string to simple display type."""
-        if "int" in dtype:
-            return "int"
-        if "float" in dtype or "double" in dtype:
-            return "float"
-        if "timestamp" in dtype or "date" in dtype:
-            return "datetime"
-        if "bool" in dtype:
-            return "boolean"
-        if "string" in dtype or "utf8" in dtype:
-            return "string"
-        return dtype
+        from app.notebook.dtypes import normalize_dtype
+        return normalize_dtype(dtype)

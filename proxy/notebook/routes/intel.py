@@ -19,6 +19,7 @@ from proxy.notebook.ai.workbook_intel import (
     generate_intel_async,
     load_intel_from_s3,
     is_generating,
+    get_generating_trigger,
 )
 
 logger = logging.getLogger(__name__)
@@ -49,7 +50,33 @@ async def get_workbook_intel(request: Request):
     # auto-popup: without it, callers can't tell "hasn't started" apart from
     # "actively running", and are forced to poll on a blind guessed schedule.
     if is_generating(session_id):
-        return {"status": "generating", "intel": None, "message": "Workbook intelligence report is being generated..."}
+        # If a report already exists, this run is an incremental UPDATE (delta) that
+        # extends/prunes it — signal that so the UI keeps the current report visible with
+        # an "updating" indicator instead of blanking it and showing a bare spinner.
+        existing_meta = storage.workbook_intel_get(session_id)
+        has_existing = existing_meta is not None
+        gen_trigger = get_generating_trigger(session_id)
+        is_deletion = gen_trigger == "file_delete"
+        if not has_existing:
+            message = "Workbook intelligence report is being generated..."
+        elif is_deletion:
+            message = "Updating the report — removing insights tied to the deleted file..."
+        else:
+            message = "Updating the report with the newly uploaded data..."
+        # Include the CURRENT (pre-update) report so a fresh panel mount (e.g. user
+        # navigated away to Logs and back mid-update) can still render it under the
+        # "updating" strip instead of showing a bare spinner. The report is replaced
+        # once the update finishes and status flips to "ready".
+        current_intel = load_intel_from_s3(session_id, ARTIFACT_BUCKET) if has_existing else None
+        return {
+            "status": "generating",
+            "intel": current_intel,
+            "generated_at": existing_meta.get("generated_at") if has_existing else None,
+            "mode": "update" if has_existing else "full",
+            "reason": "deletion" if is_deletion else ("addition" if has_existing else "full"),
+            "has_existing": has_existing,
+            "message": message,
+        }
 
     # Check DB for existing intel
     intel_meta = storage.workbook_intel_get(session_id)
@@ -97,6 +124,7 @@ async def generate_workbook_intel(request: Request):
         pass
 
     trigger = body.get("trigger", "manual")
+    deleted_source = body.get("deleted_source")  # required for trigger="file_delete"
     vm_manager = request.app.state.vm_manager
 
     # Verify session has an active VM
@@ -104,12 +132,16 @@ async def generate_workbook_intel(request: Request):
     if not session_vm:
         return JSONResponse(status_code=404, content={"error": "No active VM for this session"})
 
-    logger.info(f"[intel] Generation triggered: session={session_id[:8]}... trigger={trigger}")
+    logger.info(f"[intel] Generation triggered: session={session_id[:8]}... trigger={trigger}"
+                + (f" deleted_source={deleted_source}" if deleted_source else ""))
 
     # Start async generation — de-duplicated: if one is already running for this
     # session (e.g. file-upload auto-trigger and a manual click landed close together),
     # this returns False and no second agent thread is spawned.
-    started = generate_intel_async(session_id, vm_manager, ARTIFACT_BUCKET, storage)
+    started = generate_intel_async(
+        session_id, vm_manager, ARTIFACT_BUCKET, storage,
+        trigger=trigger, deleted_source=deleted_source,
+    )
 
     if not started:
         return {"status": "generating", "message": "A workbook intelligence report is already being generated for this session."}

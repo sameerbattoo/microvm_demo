@@ -6,6 +6,7 @@ import { SearchAddon } from '@xterm/addon-search'
 import '@xterm/xterm/css/xterm.css'
 import { IconX, IconRefresh } from '../Icons'
 import { PROXY_URL } from '../../config'
+import { showDragOverlay, hideDragOverlay } from '../../utils/dragOverlay'
 
 const IDLE_TIMEOUT = 60000 // 60s — matches VM idle suspend, disconnect terminal WS to allow suspend
 
@@ -258,6 +259,8 @@ export default function TerminalPanel({ activeTab, onClose, theme = 'dark' }) {
     isResizing.current = true
     const startY = e.clientY
     const startHeight = panelHeight
+    // Overlay prevents an embedded Plotly iframe from stealing the drag's mouse events.
+    showDragOverlay('row-resize')
 
     const handleMouseMove = (e) => {
       const delta = startY - e.clientY
@@ -271,6 +274,7 @@ export default function TerminalPanel({ activeTab, onClose, theme = 'dark' }) {
       document.removeEventListener('mouseup', handleMouseUp)
       document.body.style.cursor = ''
       document.body.style.userSelect = ''
+      hideDragOverlay()
       if (fitAddonRef.current) {
         setTimeout(() => { try { fitAddonRef.current?.fit() } catch {} }, 50)
       }

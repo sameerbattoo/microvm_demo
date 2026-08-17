@@ -363,6 +363,10 @@
   white-space: pre-wrap;
   word-break: break-word;
   margin: 0;
+  /* Long tracebacks stay contained in a scrollable box instead of growing the whole
+     cell and forcing the user to scroll the notebook. ~16 lines then scroll-within. */
+  max-height: 16em;
+  overflow-y: auto;
 }
 
 .output-error-wrap {

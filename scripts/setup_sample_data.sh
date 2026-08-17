@@ -66,27 +66,58 @@ import csv, random
 random.seed(99)
 
 # --- clickstream_events.csv (10000 rows) ---
-actions = ['page_view', 'add_to_cart', 'purchase', 'search', 'wishlist', 'remove_from_cart', 'review']
-devices = ['desktop', 'mobile', 'tablet']
+# Realistic: actions weighted by frequency (page_view most common, purchase rarest),
+# product_id null for non-product actions (search, account), timestamps follow
+# a realistic daily pattern (more traffic during business hours)
+actions_weighted = ['page_view'] * 40 + ['search'] * 20 + ['add_to_cart'] * 15 + ['wishlist'] * 8 + ['remove_from_cart'] * 7 + ['purchase'] * 7 + ['review'] * 3
+devices_weighted = ['mobile'] * 50 + ['desktop'] * 35 + ['tablet'] * 15
 pages = ['/home', '/products', '/cart', '/checkout', '/search', '/account', '/deals']
 with open('/tmp/_s3_clickstream_events.csv', 'w', newline='') as f:
     w = csv.writer(f)
     w.writerow(['event_id','user_id','session_id','action','page','product_id','device','timestamp','duration_seconds'])
     for i in range(1, 10001):
-        w.writerow([f'EVT-{i:06d}', f'USR-{random.randint(1,500):04d}', f'SESS-{random.randint(1,2000):05d}', random.choice(actions), random.choice(pages), f'PROD-{random.randint(1,100):04d}' if random.random()>0.3 else '', random.choice(devices), f'2024-{random.randint(1,12):02d}-{random.randint(1,28):02d}T{random.randint(0,23):02d}:{random.randint(0,59):02d}:{random.randint(0,59):02d}Z', random.randint(1,300)])
+        action = random.choice(actions_weighted)
+        # product_id is null for non-product-specific actions
+        has_product = action in ('add_to_cart', 'purchase', 'wishlist', 'remove_from_cart', 'review') or (action == 'page_view' and random.random() > 0.4)
+        product_id = f'PROD-{random.randint(1,100):04d}' if has_product else ''
+        # Realistic hour distribution (peak 9am-9pm)
+        hour = random.choices(range(24), weights=[1,1,1,1,1,2,3,5,8,10,10,9,8,9,10,10,9,8,7,6,4,3,2,1])[0]
+        month = random.randint(1,12)
+        day = random.randint(1,28)
+        w.writerow([f'EVT-{i:06d}', f'USR-{random.randint(1,500):04d}', f'SESS-{random.randint(1,2000):05d}',
+                    action, random.choice(pages), product_id, random.choice(devices_weighted),
+                    f'2024-{month:02d}-{day:02d}T{hour:02d}:{random.randint(0,59):02d}:{random.randint(0,59):02d}Z',
+                    random.randint(1,300)])
 
 # --- marketing_campaigns.csv (20 rows) ---
+# Realistic campaign names, seasonal patterns, and budget/performance correlation
 channels = ['email', 'social_media', 'search_ads', 'display', 'influencer', 'affiliate']
+campaign_themes = ['Summer Sale', 'Back to School', 'Black Friday', 'Holiday Gift Guide',
+                   'New Year Clearance', 'Spring Collection', 'Flash Deal Weekend', 'Loyalty Rewards',
+                   'Product Launch', 'Brand Awareness', 'Retargeting', 'Win-Back',
+                   'Free Shipping Promo', 'Bundle Deals', 'VIP Early Access', 'Seasonal Markdown',
+                   'Category Spotlight', 'Influencer Collab', 'Referral Bonus', 'Anniversary Sale']
 with open('/tmp/_s3_marketing_campaigns.csv', 'w', newline='') as f:
     w = csv.writer(f)
     w.writerow(['campaign_id','name','channel','start_date','end_date','budget','spend','impressions','clicks','conversions','revenue'])
     for i in range(1, 21):
+        channel = random.choice(channels)
         budget = random.randint(5000, 50000)
-        spend = round(budget * random.uniform(0.6, 1.0))
-        impressions = random.randint(50000, 500000)
-        clicks = int(impressions * random.uniform(0.01, 0.05))
-        conversions = int(clicks * random.uniform(0.02, 0.15))
-        w.writerow([f'CMP-{i:03d}', f'Campaign {i}', random.choice(channels), f'2024-{random.randint(1,6):02d}-01', f'2024-{random.randint(7,12):02d}-30', budget, spend, impressions, clicks, conversions, round(conversions*random.uniform(30,150),2)])
+        # Spend correlates with budget (80-100% utilization is realistic)
+        spend = round(budget * random.uniform(0.75, 0.99))
+        # Impressions scale with spend: roughly 5-20 CPM
+        impressions = int(spend / random.uniform(5, 20) * 1000)
+        # Clicks: 1-4% CTR
+        clicks = int(impressions * random.uniform(0.01, 0.04))
+        # Conversions: 2-10% of clicks
+        conversions = max(1, int(clicks * random.uniform(0.02, 0.10)))
+        # Revenue: 40-120 average order value per conversion
+        revenue = round(conversions * random.uniform(40, 120), 2)
+        start_month = random.randint(1, 6)
+        w.writerow([f'CMP-{i:03d}', campaign_themes[i-1], channel,
+                    f'2024-{start_month:02d}-{random.randint(1,15):02d}',
+                    f'2024-{start_month + random.randint(1,3):02d}-{random.randint(15,28):02d}',
+                    budget, spend, impressions, clicks, conversions, revenue])
 
 # --- inventory_daily.csv (500 rows) ---
 warehouses = ['WH-EAST', 'WH-WEST', 'WH-CENTRAL', 'WH-EU']
@@ -143,9 +174,15 @@ with open('/tmp/_athena_orders.csv', 'w', newline='') as f:
 # Schema: user_id, name, email, phone, signup_date, signup_channel, segment, lifetime_value
 # ============================================================
 first_names = ['James','Mary','John','Patricia','Robert','Jennifer','Michael','Linda','David','Elizabeth',
-               'William','Barbara','Richard','Susan','Joseph','Jessica','Thomas','Sarah','Charles','Karen']
+               'William','Barbara','Richard','Susan','Joseph','Jessica','Thomas','Sarah','Charles','Karen',
+               'Christopher','Nancy','Daniel','Lisa','Matthew','Betty','Anthony','Margaret','Mark','Sandra',
+               'Donald','Ashley','Steven','Kimberly','Paul','Emily','Andrew','Donna','Joshua','Michelle',
+               'Kenneth','Carol','Kevin','Amanda','Brian','Dorothy','George','Melissa','Timothy','Deborah',
+               'Ronald','Stephanie','Edward','Rebecca','Jason','Sharon','Jeffrey','Laura','Ryan','Cynthia']
 last_names = ['Smith','Johnson','Williams','Brown','Jones','Garcia','Miller','Davis','Rodriguez','Martinez',
-              'Hernandez','Lopez','Gonzalez','Wilson','Anderson','Thomas','Taylor','Moore','Jackson','Martin']
+              'Hernandez','Lopez','Gonzalez','Wilson','Anderson','Thomas','Taylor','Moore','Jackson','Martin',
+              'Lee','Perez','Thompson','White','Harris','Sanchez','Clark','Ramirez','Lewis','Robinson',
+              'Walker','Young','Allen','King','Wright','Scott','Torres','Nguyen','Hill','Flores']
 with open('/tmp/_athena_customers.csv', 'w', newline='') as f:
     w = csv.writer(f)
     w.writerow(['user_id','name','email','phone','signup_date','signup_channel','segment','lifetime_value'])
@@ -212,36 +249,141 @@ if [ "$TABLE_STATUS" = "NOT_FOUND" ]; then
     --profile "$AWS_CLI_PROFILE" --region "$AWS_REGION" >/dev/null
   aws dynamodb wait table-exists --table-name "$REVIEWS_TABLE" \
     --profile "$AWS_CLI_PROFILE" --region "$AWS_REGION"
-  echo "   Populating reviews..."
-  # Generate 25 reviews via batch-write (DynamoDB limit: 25 per batch)
-  python3 -c "
+  echo "   $REVIEWS_TABLE created ✓"
+else
+  echo "   $REVIEWS_TABLE exists ($TABLE_STATUS) ✓"
+fi
+
+# Always (re)populate reviews so the LATEST generation logic applies on every run
+# Purge-then-write so the table always ends with exactly the latest generated rows.
+# (We can't rely on put_item overwriting in place: the composite key includes a random
+# productId, and changes to the generation logic shift the RNG stream, producing new
+# keys that would accumulate alongside old rows. So we delete everything first.)
+echo "   (Re)populating reviews in $REVIEWS_TABLE..."
+python3 -c "
 import boto3, json, random, time
 from decimal import Decimal
 session = boto3.Session(profile_name='$AWS_CLI_PROFILE', region_name='$AWS_REGION')
 ddb = session.resource('dynamodb')
 table = ddb.Table('$REVIEWS_TABLE')
-titles = ['Great product!', 'Not bad', 'Amazing quality', 'Disappointed', 'Exceeded expectations', 'Good value', 'Poor packaging', 'Fast delivery', 'Worth every penny', 'Average']
-texts = ['Really love this product. Would buy again.', 'It works but could be better.', 'Top notch quality and design.', 'Broke after 2 weeks of use.', 'Better than expected for the price.', 'Good for the price point.', 'Arrived damaged, returned.', 'Quick shipping, product as described.', 'Best purchase this year.', 'Does the job, nothing special.']
+
+# --- Purge existing rows first (clean slate) ---
+_key_names = [k['AttributeName'] for k in table.key_schema]
+_deleted = 0
+_resp = table.scan(ProjectionExpression=', '.join(_key_names))
+_existing = _resp['Items']
+while 'LastEvaluatedKey' in _resp:
+    _resp = table.scan(ProjectionExpression=', '.join(_key_names), ExclusiveStartKey=_resp['LastEvaluatedKey'])
+    _existing += _resp['Items']
+with table.batch_writer() as _b:
+    for _it in _existing:
+        _b.delete_item(Key={k: _it[k] for k in _key_names})
+        _deleted += 1
+print(f'   Purged {_deleted} existing rows from $REVIEWS_TABLE')
+
+# Reviews are COMPOSED from sentence fragments (opener + detail + closer) rather than
+# picked from a fixed list of full sentences. This makes review text genuinely
+# high-cardinality — ~unique per row — so profilers don't (correctly) flag it as
+# templated/synthetic. Fragments are rating-correlated so sentiment still matches the score.
+#
+# Titles are likewise composed from an adjective + noun-phrase template.
+review_openers = {
+    'positive': [
+        'Really impressed with this', 'Absolutely thrilled with the purchase', 'Genuinely happy with it',
+        'Exceeded my expectations', 'Could not be happier', 'Blown away by the quality',
+        'So glad I finally bought this', 'This has been a fantastic buy', 'Delighted with how it turned out',
+        'A wonderful addition to my setup', 'Honestly one of my better purchases',
+    ],
+    'neutral': [
+        'It is a reasonable product', 'Does roughly what I expected', 'A fairly average experience overall',
+        'Not bad for the money', 'Somewhere in the middle for me', 'It gets the basic job done',
+        'A perfectly okay option', 'Middling but functional', 'Neither impressed nor disappointed',
+    ],
+    'negative': [
+        'Pretty disappointed with this', 'Regret buying this one', 'Frustrated with the whole experience',
+        'This did not work out for me', 'A letdown from the start', 'Would not recommend it',
+        'Unhappy with the purchase', 'Expected much more than this', 'A frustrating waste of money',
+    ],
+}
+review_details = {
+    'positive': [
+        'the build quality feels premium and solid', 'it arrived quickly and exactly as described',
+        'setup took only a few minutes', 'it has held up well after months of daily use',
+        'the design is sleek and genuinely functional', 'it outperforms options that cost twice as much',
+        'the materials feel durable and well made', 'every detail seems carefully thought through',
+        'it fits perfectly into my daily routine', 'the value for the price is hard to beat',
+    ],
+    'neutral': [
+        'it does the basics but lacks premium features', 'the finish is okay but nothing special',
+        'shipping was slower than I would have liked', 'it works, though the instructions were sparse',
+        'some parts feel sturdier than others', 'it is fine for light, occasional use',
+        'the size is smaller than I pictured', 'performance is acceptable for the price',
+    ],
+    'negative': [
+        'it stopped working after a couple of weeks', 'the material feels flimsy and cheap',
+        'it arrived with visible scratches and dents', 'it overheats after a short period of use',
+        'the photos make it look far better than it is', 'it was incompatible with my setup despite the listing',
+        'customer support was unhelpful when I reached out', 'parts started falling apart almost immediately',
+        'it makes an odd noise that no review mentioned',
+    ],
+}
+review_closers = {
+    'positive': [
+        'Would absolutely buy again.', 'Highly recommend it to anyone.', 'Five stars, no complaints.',
+        'My whole family loves it now.', 'Worth every penny.', 'Could not ask for more.', '',
+    ],
+    'neutral': [
+        'Might try a different brand next time.', 'Fine for what it is.', 'No strong feelings either way.',
+        'Take that for what it is worth.', 'Would consider it again on sale.', '',
+    ],
+    'negative': [
+        'Returned it within days.', 'Save your money.', 'Would not buy again.',
+        'Definitely not worth the price.', 'Look elsewhere.', 'Very frustrating overall.', '',
+    ],
+}
+title_adjectives = {
+    'positive': ['Excellent', 'Fantastic', 'Outstanding', 'Impressive', 'Superb', 'Great', 'Love this'],
+    'neutral': ['Decent', 'Average', 'Okay', 'Fair', 'Reasonable', 'Middling'],
+    'negative': ['Disappointing', 'Poor', 'Frustrating', 'Underwhelming', 'Regrettable', 'Cheap'],
+}
+title_nouns = ['quality', 'value', 'purchase', 'product', 'buy', 'experience', 'build', 'choice']
+
+def compose_review(sentiment):
+    opener = random.choice(review_openers[sentiment])
+    detail = random.choice(review_details[sentiment])
+    closer = random.choice(review_closers[sentiment])
+    # NOTE: single-quoted f-strings only — this whole block is inside a double-quoted
+    # python3 -c \"...\" heredoc, so any inner double quote would close it and break the shell.
+    text = f'{opener} \u2014 {detail}.'
+    if closer:
+        text += f' {closer}'
+    title = f'{random.choice(title_adjectives[sentiment])} {random.choice(title_nouns)}'
+    return title, text
+
 random.seed(42)
 with table.batch_writer() as batch:
     for i in range(200):
+        rating = random.randint(1, 5)
+        if rating >= 4:
+            sentiment = 'positive'
+        elif rating == 3:
+            sentiment = 'neutral'
+        else:
+            sentiment = 'negative'
+        title, text = compose_review(sentiment)
         batch.put_item(Item={
             'productId': f'PROD-{random.randint(1,100):04d}',
             'reviewId': f'REV-{i+1:05d}',
             'userId': f'USR-{random.randint(1,500):04d}',
-            'rating': Decimal(str(random.randint(1,5))),
-            'title': random.choice(titles),
-            'text': random.choice(texts),
+            'rating': Decimal(str(rating)),
+            'title': title,
+            'text': text,
             'helpful_votes': Decimal(str(random.randint(0,50))),
             'verified_purchase': random.choice([True, False]),
             'review_date': f'2024-{random.randint(1,12):02d}-{random.randint(1,28):02d}',
         })
 print(f'   Inserted 200 reviews into $REVIEWS_TABLE')
 "
-  echo "   $REVIEWS_TABLE created ✓"
-else
-  echo "   $REVIEWS_TABLE exists ($TABLE_STATUS) ✓"
-fi
 
 # ============================================================
 # DynamoDB: Product Recommendations Table
@@ -280,12 +422,15 @@ with table.batch_writer() as batch:
         num_recs = random.randint(3, 8)
         product_ids = random.sample(range(1, 101), num_recs)
         for pid in product_ids:
+            # Spread generated_at across a 6-month range (realistic model retraining cadence)
+            month = random.randint(1, 6)
+            day = random.randint(1, 28)
             batch.put_item(Item={
                 'userId': user_id,
                 'productId': f'PROD-{pid:04d}',
                 'score': Decimal(str(round(random.uniform(0.3, 0.99), 3))),
                 'algorithm': random.choice(algorithms),
-                'generated_at': '2025-07-01',
+                'generated_at': f'2025-{month:02d}-{day:02d}',
             })
 print(f'   Inserted ~500 recommendations into $RECOMMENDATIONS_TABLE')
 "
@@ -389,7 +534,7 @@ CREATE EXTERNAL TABLE IF NOT EXISTS ${ATHENA_DB}.orders (
   quantity INT,
   unit_price DOUBLE,
   total DOUBLE,
-  order_date STRING,
+  order_date DATE,
   shipping_country STRING,
   payment_method STRING
 )
@@ -407,7 +552,7 @@ CREATE EXTERNAL TABLE IF NOT EXISTS ${ATHENA_DB}.customers (
   name STRING,
   email STRING,
   phone STRING,
-  signup_date STRING,
+  signup_date DATE,
   signup_channel STRING,
   segment STRING,
   lifetime_value DOUBLE

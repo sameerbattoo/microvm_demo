@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback, useRef, Fragment } from 'react'
 import { IconX, IconNotebook, IconDatabase, IconCode, IconPackage, IconServer, IconBraces, IconTerminal, IconLogs, IconIntel } from './Icons'
 import { PROXY_URL, API_TIMEOUT_MS } from '../config'
 import { fetchWithTimeout } from '../services/fetchWithTimeout'
@@ -91,9 +91,15 @@ export default function Sidebar({
   const [s3Files, setS3Files] = useState([])
   const [dynamoTables, setDynamoTables] = useState([])
   const [athenaTables, setAthenaTables] = useState([])
+  const [catalogEntries, setCatalogEntries] = useState([])  // enriched entries from /datasources/catalog
   const [athenaWorkgroup, setAthenaWorkgroup] = useState('microvm-demo')
   const [dsLoading, setDsLoading] = useState(false)
   const [dsFetched, setDsFetched] = useState(false)
+  // True once the enriched /datasources/catalog (has_entity_doc + schemas) has
+  // been successfully loaded for the current session. Distinct from dsFetched,
+  // which only tracks the plain source list. Drives the connect re-fetch so the
+  // entity intel icons appear without a manual refresh.
+  const [catalogLoaded, setCatalogLoaded] = useState(false)
 
   // VM badge state — use instances prop directly (synced with parent polling)
   // Only use local poll as fallback when instances prop is empty
@@ -147,6 +153,27 @@ export default function Sidebar({
     setActivePanel(prev => prev === panel ? null : panel)
   }
 
+  // Run All status for the Outline activity-bar icon: null | 'running' | 'error'.
+  // Driven by the 'outline-run-status' window event dispatched from Notebook.jsx.
+  // 'running' pulses green while Run All executes; 'error' turns the icon red and
+  // PERSISTS after the run so the user knows to open Outline and find the failed cell.
+  const [outlineRunStatus, setOutlineRunStatus] = useState(null)
+  useEffect(() => {
+    const handler = (e) => {
+      const status = e.detail  // 'running' | 'error' | 'clear'
+      if (status === 'running') {
+        setOutlineRunStatus('running')
+        setActivePanel('outline')  // auto-open the Outline panel on Run All
+      } else if (status === 'error') {
+        setOutlineRunStatus('error')
+      } else {
+        setOutlineRunStatus(null)  // 'clear' / anything else
+      }
+    }
+    window.addEventListener('outline-run-status', handler)
+    return () => window.removeEventListener('outline-run-status', handler)
+  }, [])
+
   // Listen for keyboard shortcut events from App
   useEffect(() => {
     const handler = (e) => togglePanel(e.detail)
@@ -155,10 +182,21 @@ export default function Sidebar({
   }, [])
 
   // --- Data Sources fetching ---
+  // NOTE: this callback MUST depend on activeTab.sessionId. The enriched catalog
+  // (which carries has_entity_doc → the entity intel icons) is only fetched when
+  // a sessionId is present. If this closed over a stale activeTab, the catalog
+  // fetch would be skipped on the first connect, dsFetched would latch true, and
+  // the icons would never appear until a manual refresh.
+  const sessionId = activeTab?.sessionId
   const fetchDataSources = useCallback(async () => {
     setDsLoading(true)
     // Also refresh local VM files
     if (onRefreshFiles) onRefreshFiles()
+    // Track whether we got everything we need. We only "latch" dsFetched=true once
+    // the enriched catalog has actually been retrieved (or there is genuinely no
+    // session to enrich against). Otherwise we leave it false so the connect
+    // effect retries once the session id lands / the VM stops returning 502.
+    let catalogResolved = false
     try {
       const resp = await fetchWithTimeout(`${PROXY_URL}/datasources`)
       if (resp.ok) {
@@ -168,15 +206,19 @@ export default function Sidebar({
         setAthenaTables(data.athena || [])
         setAthenaWorkgroup(data.athena_workgroup || 'microvm-demo')
 
-        // Fetch full catalog (with column schemas) if session is active
-        if (activeTab?.sessionId) {
+        // Fetch full catalog (with column schemas + entity-doc enrichment) when a
+        // session is active. The proxy retries the VM internally on transient 502s.
+        if (sessionId) {
           try {
             const catalogResp = await fetch(`${PROXY_URL}/datasources/catalog`, {
-              headers: { 'X-Session-Id': activeTab.sessionId },
+              headers: { 'X-Session-Id': sessionId },
             })
             if (catalogResp.ok) {
               const catalog = await catalogResp.json()
               data._catalog = catalog  // Attach catalog entries with column info
+              setCatalogEntries(catalog.entries || [])
+              catalogResolved = true
+              setCatalogLoaded(true)
             }
           } catch {}
         }
@@ -189,8 +231,13 @@ export default function Sidebar({
       }
     }
     setDsLoading(false)
-    setDsFetched(true)
-  }, [onRefreshFiles])
+    // Only mark as fetched once the enriched catalog resolved. When there is no
+    // session yet, mark fetched so the panel isn't stuck in a loading state — the
+    // connect effect will re-run and re-fetch once a sessionId is available.
+    if (catalogResolved || !sessionId) {
+      setDsFetched(true)
+    }
+  }, [onRefreshFiles, onSyncDataSources, sessionId])
 
   // Lazy-load data sources when panel is active
   useEffect(() => {
@@ -199,12 +246,31 @@ export default function Sidebar({
     }
   }, [activePanel, dsFetched, fetchDataSources])
 
-  // Also fetch data sources on connect (so AI chat always has the info)
+  // Also fetch data sources on connect (so AI chat always has the info).
+  // This re-fires when the sessionId lands (not just on the status flip), and
+  // keeps trying until the enriched catalog has actually loaded — so a transient
+  // VM 502 or a status-before-sessionId race can't leave the icons missing.
   useEffect(() => {
-    if (!dsFetched && activeTab?.status === 'connected') {
+    if (activeTab?.status === 'connected' && sessionId && !catalogLoaded) {
       fetchDataSources()
     }
-  }, [activeTab?.status, dsFetched, fetchDataSources])
+  }, [activeTab?.status, sessionId, catalogLoaded, fetchDataSources])
+
+  // Reset the catalog-loaded flag whenever the active session changes, so a newly
+  // linked VM re-fetches its enriched catalog (entity docs are session-scoped for
+  // local files and VM-catalog-scoped for schemas).
+  useEffect(() => {
+    setCatalogLoaded(false)
+  }, [sessionId])
+
+  // Re-fetch data sources when intel generation completes (local file entity
+  // docs are created during intel generation — this ensures sparkle icons
+  // appear for local files without requiring the user to manually refresh)
+  useEffect(() => {
+    const handler = () => fetchDataSources()
+    window.addEventListener('refresh-datasources', handler)
+    return () => window.removeEventListener('refresh-datasources', handler)
+  }, [fetchDataSources])
 
   // --- Package fetching ---
   const fetchPackages = useCallback(async () => {
@@ -304,26 +370,32 @@ export default function Sidebar({
   }
 
   // Activity bar items
+  // Grouped for visual separation in the activity bar (a divider is rendered whenever
+  // the group changes). Group 1: workspace nav. Group 2: inspect the notebook + its env.
+  // Group 3: runtime/interaction. Group 4: reusable content/templates.
   const activityItems = [
-    { id: 'notebooks', icon: <IconNotebook width={18} height={18} />, title: 'Notebooks (⌥1)', color: 'var(--accent-primary)' },
-    { id: 'outline', icon: <IconOutline width={18} height={18} />, title: 'Cell Outline (⌥2)', color: '#cba6f7' },
-    { id: 'data', icon: <IconDatabase width={18} height={18} />, title: 'Data Sources (⌥3)', color: '#7ec89f' },
-    { id: 'snippets', icon: <IconCode width={18} height={18} />, title: 'Snippets (⌥4)', color: '#f9e2af' },
-    { id: 'variables', icon: <IconBraces width={18} height={18} />, title: 'Variables (⌥5)', color: '#f9e2af' },
-    { id: 'packages', icon: <IconPackage width={18} height={18} />, title: 'Packages (⌥6)', color: '#f38ba8' },
-    { id: 'terminal', icon: <IconTerminal width={18} height={18} />, title: 'Terminal (⌥7)', color: '#5cc2d4' },
-    { id: 'logs', icon: <IconLogs width={18} height={18} />, title: 'MicroVM Logs (⌥8)', color: '#89b4fa' },
-    { id: 'intel', icon: <IconIntel width={18} height={18} />, title: 'Workbook Intel (⌥9)', color: '#f9e2af' },
-    { id: 'samples', icon: <IconSamples width={18} height={18} />, title: 'Sample Notebooks', color: '#e2b86b' },
+    { id: 'notebooks', group: 1, icon: <IconNotebook width={18} height={18} />, title: 'Notebooks (⌥1)', color: 'var(--accent-primary)' },
+    { id: 'outline', group: 2, icon: <IconOutline width={18} height={18} />, title: 'Cell Outline (⌥2)', color: '#cba6f7' },
+    { id: 'data', group: 2, icon: <IconDatabase width={18} height={18} />, title: 'Data Sources (⌥3)', color: '#7ec89f' },
+    { id: 'variables', group: 2, icon: <IconBraces width={18} height={18} />, title: 'Variables (⌥4)', color: '#f9e2af' },
+    { id: 'packages', group: 2, icon: <IconPackage width={18} height={18} />, title: 'Packages (⌥5)', color: '#f38ba8' },
+    { id: 'terminal', group: 3, icon: <IconTerminal width={18} height={18} />, title: 'Terminal (⌥6)', color: '#5cc2d4' },
+    { id: 'logs', group: 3, icon: <IconLogs width={18} height={18} />, title: 'MicroVM Logs (⌥7)', color: '#89b4fa' },
+    { id: 'intel', group: 3, icon: <IconIntel width={18} height={18} />, title: 'Workbook Intel (⌥8)', color: '#f9e2af' },
+    { id: 'snippets', group: 4, icon: <IconCode width={18} height={18} />, title: 'Snippets (⌥9)', color: '#f9e2af' },
+    { id: 'samples', group: 4, icon: <IconSamples width={18} height={18} />, title: 'Sample Notebooks', color: '#e2b86b' },
   ]
 
   return (
     <aside className={`sidebar ${activePanel ? '' : 'sidebar-collapsed'}`}>
       {/* Activity Bar — always visible thin icon strip */}
       <div className="activity-bar">
-        {activityItems.map(item => (
+        {activityItems.map((item, idx) => (
+          <Fragment key={item.id}>
+            {idx > 0 && activityItems[idx - 1].group !== item.group && (
+              <div className="activity-bar-divider" aria-hidden="true" />
+            )}
           <button
-            key={item.id}
             className={`activity-bar-item ${
               item.id === 'terminal'
                 ? (showTerminal ? 'activity-bar-item-active' : '')
@@ -332,6 +404,12 @@ export default function Sidebar({
                   : item.id === 'intel'
                     ? (showIntel ? 'activity-bar-item-active' : '')
                     : (activePanel === item.id ? 'activity-bar-item-active' : '')
+            } ${
+              item.id === 'outline' && outlineRunStatus === 'running'
+                ? 'activity-bar-item-run-active'
+                : item.id === 'outline' && outlineRunStatus === 'error'
+                  ? 'activity-bar-item-run-error'
+                  : ''
             }`}
             onClick={() => {
               if (item.id === 'terminal') {
@@ -341,6 +419,9 @@ export default function Sidebar({
               } else if (item.id === 'intel') {
                 onToggleIntel?.()
               } else {
+                if (item.id === 'outline' && outlineRunStatus === 'error') {
+                  setOutlineRunStatus(null)  // user is opening Outline to inspect — clear the red flag
+                }
                 togglePanel(item.id)
               }
             }}
@@ -353,6 +434,7 @@ export default function Sidebar({
           >
             {item.icon}
           </button>
+          </Fragment>
         ))}
         {/* MicroVMs at bottom */}
         <div className="activity-bar-spacer" />
@@ -432,6 +514,7 @@ export default function Sidebar({
               athenaTables={athenaTables}
               athenaWorkgroup={athenaWorkgroup}
               dsLoading={dsLoading}
+              catalogEntries={catalogEntries}
               fetchDataSources={fetchDataSources}
               onClose={() => setActivePanel(null)}
             />

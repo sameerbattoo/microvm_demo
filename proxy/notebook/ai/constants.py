@@ -64,6 +64,18 @@ BEDROCK_READ_TIMEOUT = 120       # 2 min read timeout for model responses
 BEDROCK_CONNECT_TIMEOUT = 10     # 10s connection timeout
 
 # ============================================================
+# WORKBOOK INTEL — INCREMENTAL (DELTA) PROMPT INPUT BUDGET
+# ============================================================
+# The model supports a very large context (~1M input tokens), so we do NOT tightly
+# truncate the delta prompt inputs — truncating the entity schemas is what caused the
+# model to guess/hallucinate join column names. These are generous SAFETY caps (in
+# characters) to bound a pathological runaway prompt, not functional limits. Realistic
+# content is ~60K chars total, far below these. ~4 chars/token, so 800K chars ≈ 200K tokens.
+INTEL_DELTA_ENTITY_SUMMARIES_MAX_CHARS = 800_000  # all other sources' schemas (join grounding)
+INTEL_DELTA_NEW_FILE_DOC_MAX_CHARS = 200_000      # the newly-uploaded file's profile
+INTEL_DELTA_EXISTING_SUMMARY_MAX_CHARS = 200_000  # compact summary of existing report
+
+# ============================================================
 # SESSION CONFIGURATION
 # ============================================================
 

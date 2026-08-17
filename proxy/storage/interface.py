@@ -148,3 +148,51 @@ class StorageBackend(ABC):
     def ai_session_delete(self, session_id: str) -> None:
         """Clear AI chat for a session."""
         ...
+
+    # ============================================================
+    # GLOBAL DATA SOURCE ENTITIES
+    #
+    # Discovery metadata for user-non-specific data sources (S3 files, Athena
+    # tables, DynamoDB tables) — see proxy/notebook/ai/entity_discovery.py.
+    # Keyed by source_id, not session_id: this is shared across all sessions.
+    # ============================================================
+
+    @abstractmethod
+    def entity_upsert(self, source_id: str, source_type: str, doc_s3_key: str = None,
+                      change_signal: dict = None, status: str = None) -> None:
+        """Create or partially update a global entity's discovery metadata.
+        Only fields explicitly passed (non-None) are changed on an existing row."""
+        ...
+
+    @abstractmethod
+    def entity_get(self, source_id: str) -> Optional[dict]:
+        """Get discovery metadata for one entity. Returns None if never seen."""
+        ...
+
+    @abstractmethod
+    def entity_list(self, source_type: str = None) -> list[dict]:
+        """List all known entities, optionally filtered by source_type."""
+        ...
+
+    # ============================================================
+    # LOCAL FILE ENTITIES
+    #
+    # Same purpose as the global entities above, but for uploaded /tmp files
+    # — unique to one session, not shared across workbooks.
+    # ============================================================
+
+    @abstractmethod
+    def local_entity_upsert(self, session_id: str, filepath: str, doc_s3_key: str = None,
+                            change_signal: dict = None, status: str = None) -> None:
+        """Create or partially update a local file's discovery metadata for one session."""
+        ...
+
+    @abstractmethod
+    def local_entity_get(self, session_id: str, filepath: str) -> Optional[dict]:
+        """Get discovery metadata for one local file in one session. Returns None if never seen."""
+        ...
+
+    @abstractmethod
+    def local_entity_list(self, session_id: str) -> list[dict]:
+        """List all known local file entities for one session."""
+        ...

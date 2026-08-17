@@ -1,9 +1,9 @@
-import { useState, useRef, useEffect, useMemo } from 'react'
+import { useState, useRef, useEffect, useMemo, memo } from 'react'
 import { marked } from 'marked'
-import { sanitizeHtml, sanitizeMarkdown } from '../services/sanitize'
+import { sanitizeHtml } from '../services/sanitize'
 import MarkdownCell from './MarkdownCell'
 import CellEditor from './CellEditor'
-import { IconPlay, IconPlus, IconTrash, IconX, IconStop, IconChevronDown, IconChevronRight, IconGripVertical, IconEraser, IconCode, IconDatabase, IconZap } from './Icons'
+import { IconPlay, IconPlus, IconTrash, IconX, IconStop, IconChevronDown, IconChevronRight, IconGripVertical, IconEraser, IconCode, IconDatabase, IconZap, IconPencil } from './Icons'
 import ParamWidgets from './ParamWidgets'
 import { PROXY_URL, AI_TIMEOUT_MS } from '../config'
 import { fetchWithTimeout } from '../services/fetchWithTimeout'
@@ -42,7 +42,7 @@ function ElapsedTimer() {
   return <span className="cell-timer">{elapsed}s</span>
 }
 
-export default function Cell({
+export default memo(function Cell({
   cell,
   index,
   isConnected,
@@ -286,6 +286,9 @@ export default function Cell({
       onCodeChange(aiResult.content)
       setEditorVersion(v => v + 1)
       setAiResult(null)
+      // The old error/output belonged to the previous (broken) code — clear it so the
+      // cell no longer shows a stale error after the fix is applied.
+      if (onClearOutput) onClearOutput()
     }
   }
 
@@ -411,8 +414,8 @@ export default function Cell({
           {cell.type === 'sql'
             ? <><IconDatabase width={10} height={10} /><span className="cell-type-label">SQL</span></>
             : cell.type === 'markdown'
-              ? <span className="cell-type-label">M</span>
-              : <><IconCode width={10} height={10} /><span className="cell-type-label">Py</span></>
+              ? <><IconPencil width={10} height={10} /><span className="cell-type-label">MD</span></>
+              : <><IconCode width={10} height={10} /><span className="cell-type-label">PY</span></>
           }
         </span>
         {cell.status === 'running' && <ElapsedTimer />}
@@ -687,4 +690,4 @@ export default function Cell({
       </div>
     </div>
   )
-}
+})

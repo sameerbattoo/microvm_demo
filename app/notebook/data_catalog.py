@@ -397,6 +397,8 @@ class DataCatalog:
 
     def get_all(self) -> dict:
         """Return the full catalog as a serializable dict."""
+        from app.notebook.dtypes import normalize_dtype
+
         with self._lock:
             entries = []
             for entry in self._entries.values():
@@ -404,7 +406,7 @@ class DataCatalog:
                     "source_type": entry.source_type,
                     "source_id": entry.source_id,
                     "display_name": entry.display_name,
-                    "columns": [{"name": c.name, "dtype": c.dtype, "sample": c.sample, "nullable": c.nullable} for c in entry.columns],
+                    "columns": [{"name": c.name, "dtype": normalize_dtype(c.dtype), "sample": c.sample, "nullable": c.nullable} for c in entry.columns],
                     "row_count": entry.row_count,
                     "size": entry.size,
                     "status": entry.status,
@@ -423,6 +425,8 @@ class DataCatalog:
 
     def get_schema(self, source_id: str) -> dict | None:
         """Return schema for a specific source, or None if not found."""
+        from app.notebook.dtypes import normalize_dtype
+
         with self._lock:
             entry = self._entries.get(source_id)
             if not entry:
@@ -431,7 +435,7 @@ class DataCatalog:
                 "source_type": entry.source_type,
                 "source_id": entry.source_id,
                 "display_name": entry.display_name,
-                "columns": [{"name": c.name, "dtype": c.dtype, "sample": c.sample, "nullable": c.nullable} for c in entry.columns],
+                "columns": [{"name": c.name, "dtype": normalize_dtype(c.dtype), "sample": c.sample, "nullable": c.nullable} for c in entry.columns],
                 "row_count": entry.row_count,
                 "size": entry.size,
                 "status": entry.status,

@@ -7,7 +7,8 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { PROXY_URL } from '../config'
-import { IconX } from './Icons'
+import { IconX, IconEraser } from './Icons'
+import { showDragOverlay, hideDragOverlay } from '../utils/dragOverlay'
 import './LogsPanel.css'
 
 const LOG_LEVEL_COLORS = {
@@ -133,6 +134,8 @@ export default function LogsPanel({ activeTab, onClose, embedded = false }) {
     resizing.current = true
     const startY = e.clientY
     const startHeight = panelHeight
+    // Overlay prevents an embedded Plotly iframe from stealing the drag's mouse events.
+    showDragOverlay('row-resize')
 
     const handleMove = (moveEvent) => {
       if (!resizing.current) return
@@ -144,6 +147,7 @@ export default function LogsPanel({ activeTab, onClose, embedded = false }) {
       resizing.current = false
       document.removeEventListener('mousemove', handleMove)
       document.removeEventListener('mouseup', handleUp)
+      hideDragOverlay()
     }
 
     document.addEventListener('mousemove', handleMove)
@@ -186,7 +190,7 @@ export default function LogsPanel({ activeTab, onClose, embedded = false }) {
         <span className="logs-count">{filteredLogs.length} lines</span>
 
         <button className="logs-panel-btn" onClick={clearLogs} title="Clear logs">
-          <svg width={12} height={12} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></svg>
+          <IconEraser width={12} height={12} />
         </button>
         <button className="logs-panel-btn" onClick={onClose} title="Close logs panel">
           <IconX width={12} height={12} />
