@@ -548,6 +548,15 @@ def main():
         json.dump(save, f, indent=2, default=str)
     print(f"\nSaved: {out_path}")
 
+    # Cleanup: terminate the benchmark VM
+    if not args.session:
+        print("  Terminating benchmark VM...")
+        try:
+            httpx.post(f"{PROXY_URL}/terminate", json={"session_id": session_id}, timeout=15)
+            print("  VM terminated.")
+        except Exception as e:
+            print(f"  VM terminate failed (non-critical): {e}")
+
 
 if __name__ == "__main__":
     main()

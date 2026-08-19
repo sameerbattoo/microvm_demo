@@ -538,6 +538,11 @@ INTEL_REPORT_PROMPT = """You are a data intelligence analyst writing a comprehen
 You have already completed the analysis phase. Below are your structured findings and the
 data source profiles. Write the full_report and identify data relationships.
 
+IMPORTANT: The structured_findings below (analyses, visualizations, investigations, alerts)
+are ALREADY shown to the user in separate tabs. Do NOT repeat them in the report. The report
+should provide CONTEXT and DEPTH that the tab cards cannot — source profiles, relationships,
+statistical highlights, and prose narrative.
+
 <precomputed_entity_profiles>
 {entity_docs}
 </precomputed_entity_profiles>
@@ -556,22 +561,39 @@ Return ONLY a JSON object (no markdown fences, no preamble):
 }}
 
 RELATIONSHIPS:
-- Identify cross-source join paths from the structured_findings data
+- Identify cross-source join paths from the entity profiles
 - Include actual SQL/pandas JOIN code in join_suggestion
 - Only include relationships where column names clearly match across sources
 
-FULL_REPORT STRUCTURE (markdown headers, omit empty sections):
+FULL_REPORT STRUCTURE (markdown headers — these are the ONLY sections allowed):
 
-1. **Data Landscape Overview** — total sources, combined row counts, columns, data freshness
-2. **Source Profiles** — one entry per source from precomputed_entity_profiles (concise)
-3. **Relationships & Join Paths** — verified FK relationships, star/snowflake schema
-4. **Data Quality Alerts** — from alerts in structured_findings. DynamoDB/CSV string-typed
-   dates are EXPECTED — mention as characteristic, not defect.
-5. **Statistical Highlights** — distributions, correlations, temporal patterns
-6. **Suggested Analyses** — numbered list from the analyses
-7. **Further Investigation Ideas** — from investigations
+1. **Data Landscape Overview** — total sources, combined row counts, columns, data freshness,
+   storage backends breakdown (X S3, Y DynamoDB, Z Athena, W local). One paragraph.
 
-Keep under 2000 words. Be specific with numbers from structured_findings.
+2. **Source Profiles** — one concise entry per source (business description, shape, key columns,
+   notable stats). This is the MAIN value of the report — detailed per-source context that
+   the tab cards don't provide. Use a table or compact list format.
+
+3. **Relationships & Join Paths** — the star/snowflake schema, FK-style relationships with
+   JOIN coverage percentages (e.g., "orders.user_id → customers.user_id: 314/500 customers
+   have orders"). Include actual code snippets for the most useful joins.
+
+4. **Statistical Highlights** — notable distributions, correlations, temporal patterns, outliers
+   discovered during profiling. Focus on ACTIONABLE observations with real numbers. Do not
+   restate alert messages from the tabs.
+
+5. **Data Quality Notes** — brief prose context around quality observations. Reference the
+   alerts tab for specifics. Only add context the alerts don't cover (e.g., "DynamoDB string
+   dates are expected — cast with pd.to_datetime before time-series operations").
+
+DO NOT INCLUDE these sections (they are already in the user's tabs):
+- Suggested Analyses (already in Analyses tab)
+- Visualizations / Recommended Charts (already in Visualizations tab)
+- Further Investigation Ideas (already in Investigations tab)
+- Alerts list (already in Alerts tab)
+- Recommended Next Steps (redundant)
+
+Keep under 1500 words. Be specific with numbers. No filler.
 Return ONLY the JSON object.
 """
 
