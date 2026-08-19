@@ -459,14 +459,19 @@ APPROACH:
 1. Read the precomputed_entity_profiles above — this covers business meaning, schema, and quality
    flags for every known source. Treat it as ground truth.
 2. Call get_variables to understand what the user has already done in this notebook.
-3. Use execute_code SPARINGLY (a handful of calls, not a full profiling pass) — focused ONLY on
-   what the precomputed profiles can't tell you:
+3. Use execute_code SPARINGLY — focused ONLY on:
    - Verify cross-source relationships: do column values actually overlap between two tables
      (e.g. does orders.customer_id really match customers.customer_id, and at what %)?
    - Any data source NOT covered by precomputed_entity_profiles (newly added, not yet discovered)
    - Deeper statistics the profiles don't include: correlations between numeric columns,
      temporal patterns (seasonality, trends, gaps) if there's a date column
 4. Consider what the user's notebook cells are doing — tailor suggestions to their workflow.
+
+PARALLEL TOOL USE:
+- When you need multiple pieces of information that are INDEPENDENT of each other, call
+  multiple tools in the SAME response rather than one at a time. For example, get_variables
+  and a first execute_code call can run in the same turn if neither depends on the other's
+  result. This reduces latency significantly.
 
 CONTEXT-AWARENESS:
 - This intel is for ONE specific workbook session
@@ -481,8 +486,11 @@ CONTEXT-AWARENESS:
 {notebook_state}
 {variables}
 
-After reading the profiles and doing any targeted verification, return ONLY a JSON object
-(no markdown fences, no preamble):
+CRITICAL: Once you have gathered enough information (from the profiles above + at most 5 tool
+calls), STOP and return the JSON immediately. Do not keep exploring or verifying.
+
+Return ONLY a JSON object (no markdown fences, no preamble). Keep the ENTIRE response under
+1000 words. Do NOT include "full_report" or "relationships" — those are generated in Phase 2.
 
 {{
   "suggested_analyses": [
@@ -492,67 +500,78 @@ After reading the profiles and doing any targeted verification, return ONLY a JS
     {{"title": "visualization relevant to this workbook's data", "prompt": "specific chart prompt with column names", "chart_type": "bar|line|scatter|heatmap|histogram"}}
   ],
   "investigations": [
-    {{"title": "anomaly or pattern discovered through profiling", "prompt": "investigation prompt", "reason": "data-backed finding with actual numbers from your profiling"}}
+    {{"title": "anomaly or pattern discovered through profiling", "prompt": "investigation prompt", "reason": "data-backed finding with actual numbers"}}
   ],
   "alerts": [
-    {{"type": "pii|quality|duplicate|performance", "severity": "high|medium|low", "message": "specific finding with actual numbers from profiling", "action": "specific remediation step"}}
+    {{"type": "pii|quality|duplicate|performance", "severity": "high|medium|low", "message": "specific finding with actual numbers", "action": "investigative prompt to understand impact"}}
   ],
   "data_landscape": {{
     "total_sources": 0,
     "total_rows": 0,
     "total_columns": 0,
     "source_summary": "one-line summary"
-  }},
-  "relationships": [
-    {{"from_source": "table1", "from_column": "col", "to_source": "table2", "to_column": "col", "confidence": "high|medium", "join_suggestion": "actual JOIN code"}}
-  ],
-  "full_report": "A comprehensive markdown report — see full_report structure below. Under 2500 words."
+  }}
 }}
 
 REQUIREMENTS:
-- suggested_analyses: 5-7 items contextual to this workbook. If user has sales data loaded, suggest sales-related analysis.
-- visualizations: 3-5 items matched to data types you confirmed via profiling
-- investigations: 3-4 items. MUST NOT duplicate alerts — focus on deeper patterns, correlations, positive findings, or "why" questions that go beyond surface-level issues. Good investigations: "Clothing outperforms in 3 regions — what's driving it?", "Orders spike on weekends — segment by device type", "High-LTV customers cluster in 2 segments — profile their behavior". Bad investigations (duplicates alerts): "Data is stale", "Prices are too high" (those belong in alerts).
-- alerts: Only report issues you VERIFIED with code or that are already flagged in precomputed_entity_profiles. Include real counts/percentages. Alerts are problems/warnings. Keep them factual and brief. The "action" field must be an INVESTIGATIVE prompt that helps the user understand the impact — NOT an operational fix or remediation step. Good actions: "Show the date range distribution of scraped_date and identify which product categories have the oldest data", "List the 9 overpriced products with their price_diff_pct and cross-reference order volumes". Bad actions: "Re-scrape competitor prices", "Update the database", "Fix the null values".
-- DATE/TIMESTAMP COLUMNS STORED AS STRINGS — DO NOT flag these as a quality problem when the source is DynamoDB or a CSV/local file. DynamoDB has NO native date/timestamp type (only String, Number, Binary, Bool, Null), so ISO-8601 dates stored as strings is the EXPECTED, AWS-recommended pattern — not a defect. CSV files are likewise untyped text. If a date/timestamp column is string-typed in a DynamoDB table (e.g. clickstream.timestamp, reviews.review_date, marketing.start_date/end_date) or a CSV, do NOT emit a "quality" alert about it. At most, mention it once in the full_report as an expected characteristic with a brief note to cast (pd.to_datetime) before time-series grouping. ONLY flag string-typed dates as a genuine quality mismatch when the source is Athena/Parquet (which DOES have a native DATE type) and the column is still a string.
-- relationships: Only report relationships where you confirmed column values overlap
+- suggested_analyses: 5-7 items contextual to this workbook.
+- visualizations: 3-5 items matched to data types you confirmed via profiling.
+- investigations: 3-4 items. MUST NOT duplicate alerts — focus on deeper patterns, correlations, or "why" questions.
+- alerts: Only issues VERIFIED with code or from quality_flags. Real counts/percentages. Keep factual and brief.
+- DATE/TIMESTAMP AS STRING: Do NOT flag for DynamoDB or CSV sources (expected — no native date type). Only flag for Athena/Parquet where a native DATE type exists.
+- TOTAL RESPONSE UNDER 1000 WORDS. Be concise in prompts and messages.
 
-FULL_REPORT STRUCTURE (use these sections, in this order, as markdown headers — omit a section
-entirely if there's genuinely nothing to say, rather than padding it):
+Return ONLY the JSON object.
+"""
 
-1. **Data Landscape Overview** — total sources (X: Y S3 files, Z Athena tables, W DynamoDB
-   tables, V local files), combined row counts, total columns, data freshness/date range if
-   any source has a date column.
-2. **Source Profiles** — one entry per source, drawing DIRECTLY from precomputed_entity_profiles
-   (business description, shape/size, key columns, quality flags) — you already have this, just
-   summarize it here rather than re-deriving it.
-3. **Duplicate / Overlapping Data** — sources that appear to hold the same or overlapping data
-   (e.g. a local CSV and an Athena table with matching column names/shapes). State which to
-   prefer and why (freshness, completeness, access speed).
-4. **Relationships & Join Paths** — FK-style relationships you found or verified (matching
-   column names + confirmed value overlap where you checked), and whether the schema looks
-   like a star/snowflake (fact vs. dimension tables).
-5. **Data Quality Alerts** — pull from precomputed_entity_profiles' quality_flags plus anything
-   you verified yourself: high null-rate columns, constant columns, type mismatches (numeric
-   stored as string), outliers, suspiciously high/low cardinality (e.g. "customer_id has 200
-   unique values across 500 rows vs. region has 4 — expected for an ID vs. a category").
-   NOTE: date/timestamp columns stored as strings in DynamoDB tables or CSV/local files are
-   EXPECTED (DynamoDB has no native date type; CSV is untyped) — describe them as an expected
-   characteristic with a one-line "cast with pd.to_datetime before time-series ops" note, NOT
-   as a quality defect. Only treat a string-typed date as a real mismatch when it comes from
-   Athena/Parquet, which supports a native DATE type.
-6. **Statistical Highlights** — notable distributions, correlations between numeric columns,
-   temporal patterns (seasonality, trends, gaps) — only if you actually checked these.
-7. **Suggested Analyses** — mirror the suggested_analyses array as a short numbered list.
-8. **Current Notebook Progress** — what the user has done so far (cells executed, variables
-   created) and a natural next step given that state.
-9. **Further Investigation Ideas** — mirror the investigations array, plus (only if genuinely
-   applicable): schema evolution hints (a source has columns another related source lacks —
-   possibly a newer version), performance tips (e.g. a large DynamoDB table should be queried
-   with a key condition or Limit rather than a full scan), and PII considerations (columns whose
-   name/samples look like email/phone/address — flag for masking in shared notebooks, don't
-   assume malicious intent).
 
+# ============================================================
+# WORKBOOK INTEL — PHASE 2: FULL REPORT GENERATION
+#
+# After Phase 1 returns structured arrays (analyses, alerts, etc.), this
+# prompt generates the prose full_report from the structured results +
+# entity profiles. This is a single-shot call (no tools, no agent loop)
+# that runs in the background while the user already sees Phase 1 results.
+# ============================================================
+INTEL_REPORT_PROMPT = """You are a data intelligence analyst writing a comprehensive markdown report for a notebook workbook.
+
+You have already completed the analysis phase. Below are your structured findings and the
+data source profiles. Write the full_report and identify data relationships.
+
+<precomputed_entity_profiles>
+{entity_docs}
+</precomputed_entity_profiles>
+
+<structured_findings>
+{structured_findings}
+</structured_findings>
+
+Return ONLY a JSON object (no markdown fences, no preamble):
+
+{{
+  "relationships": [
+    {{"from_source": "table1", "from_column": "col", "to_source": "table2", "to_column": "col", "confidence": "high|medium", "join_suggestion": "actual JOIN code using real table/column names"}}
+  ],
+  "full_report": "comprehensive markdown report (see structure below)"
+}}
+
+RELATIONSHIPS:
+- Identify cross-source join paths from the structured_findings data
+- Include actual SQL/pandas JOIN code in join_suggestion
+- Only include relationships where column names clearly match across sources
+
+FULL_REPORT STRUCTURE (markdown headers, omit empty sections):
+
+1. **Data Landscape Overview** — total sources, combined row counts, columns, data freshness
+2. **Source Profiles** — one entry per source from precomputed_entity_profiles (concise)
+3. **Relationships & Join Paths** — verified FK relationships, star/snowflake schema
+4. **Data Quality Alerts** — from alerts in structured_findings. DynamoDB/CSV string-typed
+   dates are EXPECTED — mention as characteristic, not defect.
+5. **Statistical Highlights** — distributions, correlations, temporal patterns
+6. **Suggested Analyses** — numbered list from the analyses
+7. **Further Investigation Ideas** — from investigations
+
+Keep under 2000 words. Be specific with numbers from structured_findings.
 Return ONLY the JSON object.
 """
 

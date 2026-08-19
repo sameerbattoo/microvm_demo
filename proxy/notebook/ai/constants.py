@@ -9,8 +9,10 @@ are defined here to avoid hardcoded values throughout the codebase.
 # MODEL CONFIGURATION
 # ============================================================
 
-# Default model for the notebook agent and one-shot calls
+# Default model for the notebook agent and one-shot calls (AI Assistant)
 DEFAULT_MODEL_ID = "us.anthropic.claude-sonnet-4-6"
+# Model for Workbook Intel (Phase 1, Phase 2, Incremental, Deletion)
+INTEL_MODEL_ID = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
 DEFAULT_REGION = "us-west-2"
 
 # Generation parameters

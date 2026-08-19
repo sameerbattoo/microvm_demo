@@ -15,6 +15,7 @@ import os
 import logging
 from strands import Agent
 from strands.models import BedrockModel
+from strands.models.bedrock import CacheConfig
 from strands.agent.conversation_manager import SlidingWindowConversationManager
 
 from .prompts import NOTEBOOK_AGENT_PROMPT, EXPLAIN_PROMPT, FIX_ERROR_PROMPT
@@ -131,6 +132,8 @@ def get_model() -> BedrockModel:
             region_name=AI_REGION,
             temperature=AGENT_TEMPERATURE,
             max_tokens=AGENT_MAX_TOKENS,
+            cache_config=CacheConfig(strategy="auto"),
+            cache_tools="default",
         )
     return _model
 

@@ -29,8 +29,9 @@ import threading
 import boto3
 import httpx
 
-from .prompts import INTEL_PROMPT
-from .notebook_agent import set_execution_context, get_or_create_agent, AgentTraceCallbackHandler
+from .prompts import INTEL_PROMPT, INTEL_REPORT_PROMPT
+from .notebook_agent import set_execution_context, get_or_create_agent, AgentTraceCallbackHandler, _get_direct_client
+from .constants import INTEL_MODEL_ID, AGENT_TEMPERATURE, AGENT_MAX_TOKENS
 from batch.entity_discovery import discover_all_local_files, get_entity_doc_markdown
 
 logger = logging.getLogger(__name__)
@@ -329,7 +330,46 @@ def generate_intel(session_id: str, vm_manager, bucket: str, storage) -> dict | 
         # Attach a tracing callback so we can see the agent's tool calls / inputs /
         # results step by step (COMPLETE flow only — the interactive chat agent stays silent).
         tracer = AgentTraceCallbackHandler(log_prefix=f"[intel] {session_id[:8]}")
-        agent = get_or_create_agent(intel_session_id, context, callback_handler=tracer)
+
+        # Create a dedicated intel agent using INTEL_MODEL_ID (Haiku) — separate from the
+        # user's chat agent (Sonnet). Uses prompt caching for the multi-turn tool loop.
+        from strands import Agent
+        from strands.models import BedrockModel
+        from strands.models.bedrock import CacheConfig
+        from strands.agent.conversation_manager import SlidingWindowConversationManager
+
+        intel_model = BedrockModel(
+            model_id=os.environ.get("INTEL_MODEL_ID", INTEL_MODEL_ID),
+            region_name=AWS_REGION,
+            temperature=AGENT_TEMPERATURE,
+            max_tokens=AGENT_MAX_TOKENS,
+            cache_config=CacheConfig(strategy="auto"),
+            cache_tools="default",
+        )
+
+        from datetime import datetime as _dt, timezone as _tz
+        _now = _dt.now(_tz.utc)
+        from .prompts import NOTEBOOK_AGENT_PROMPT
+        _system_prompt = NOTEBOOK_AGENT_PROMPT.format(
+            current_time=_now.strftime("%Y-%m-%d %H:%M UTC (%A)"),
+            aws_region=AWS_REGION,
+            memory_tier=f"{context.get('memory_mib', 2048)} MB",
+            athena_workgroup=os.environ.get("ATHENA_WORKGROUP", "microvm-demo"),
+            athena_db=os.environ.get("ATHENA_DB", "microvm_demo_db"),
+            s3_bucket=os.environ.get("ARTIFACT_BUCKET", "unknown"),
+            dynamo_table_prefix=os.environ.get("DYNAMO_TABLE", "microvm-demo").rsplit("-", 1)[0] + "-",
+        )
+
+        from .tools.execution_tools import (
+            execute_code, get_variables, get_notebook_state, install_package, get_available_data_sources
+        )
+        agent = Agent(
+            model=intel_model,
+            system_prompt=_system_prompt,
+            tools=[execute_code, get_variables, get_notebook_state, install_package, get_available_data_sources],
+            conversation_manager=SlidingWindowConversationManager(window_size=10),
+            callback_handler=tracer,
+        )
 
         # Send the intel prompt
         logger.info(f"[intel]    → Invoking analysis agent for session {session_id[:8]}... (dedicated agent: {intel_session_id[:20]}...)")
@@ -351,7 +391,9 @@ def generate_intel(session_id: str, vm_manager, bucket: str, storage) -> dict | 
             logger.info(f"[intel]    → Parsed structured intel: "
                        f"{len(intel_data.get('suggested_analyses', []))} analyses, "
                        f"{len(intel_data.get('alerts', []))} alerts")
-            return intel_data
+            # Phase 1 complete — structured arrays are ready (no full_report yet)
+            intel_data["report_status"] = "generating"
+            return intel_data, entity_docs
         else:
             # Final fallback: wrap entire response as a narrative full_report
             logger.warning(f"[intel] All JSON extraction strategies failed — using raw text as report")
@@ -363,14 +405,15 @@ def generate_intel(session_id: str, vm_manager, bucket: str, storage) -> dict | 
                 "data_landscape": {"source_summary": "See full report for details"},
                 "relationships": [],
                 "full_report": raw_text[:8000],
-            }
+                "report_status": "ready",
+            }, entity_docs
 
     except Exception as e:
         logger.error(f"[intel] Generation failed for session {session_id[:8]}...: {e}")
         import traceback
         logger.error(traceback.format_exc())
 
-    return None
+    return None, None
 
 
 def save_intel_to_s3(session_id: str, intel_data: dict, bucket: str) -> str:
@@ -385,6 +428,85 @@ def save_intel_to_s3(session_id: str, intel_data: dict, bucket: str) -> str:
     )
     logger.info(f"[intel]    → Saved to s3://{bucket}/{s3_key}")
     return s3_key
+
+
+def generate_full_report(session_id: str, intel_data: dict, entity_docs: str, bucket: str, storage) -> None:
+    """
+    Phase 2: Generate the full_report markdown + enrich structured arrays with
+    prompt/action/join_suggestion fields.
+    
+    Single-shot Bedrock call (no tools, no agent loop). Runs in background after
+    Phase 1 results are already saved and visible to the user.
+    Updates the existing S3 intel JSON with enriched data + sets report_status='ready'.
+    """
+    from .constants import AGENT_MAX_TOKENS
+    
+    _t0 = time.time()
+    try:
+        # Build a compact representation of Phase 1 findings for the report prompt
+        structured_findings = json.dumps({
+            "suggested_analyses": intel_data.get("suggested_analyses", []),
+            "visualizations": intel_data.get("visualizations", []),
+            "investigations": intel_data.get("investigations", []),
+            "alerts": intel_data.get("alerts", []),
+            "data_landscape": intel_data.get("data_landscape", {}),
+            "relationships": intel_data.get("relationships", []),
+        }, indent=2)
+
+        prompt_text = INTEL_REPORT_PROMPT.format(
+            entity_docs=entity_docs,
+            structured_findings=structured_findings,
+        )
+
+        # Single-shot Bedrock converse call (no agent, no tools)
+        client = _get_direct_client()
+        response = client.converse(
+            modelId=os.environ.get("INTEL_MODEL_ID", INTEL_MODEL_ID),
+            messages=[{"role": "user", "content": [{"text": prompt_text}]}],
+            inferenceConfig={"maxTokens": AGENT_MAX_TOKENS, "temperature": 0.2},
+        )
+
+        raw_text = response["output"]["message"]["content"][0]["text"].strip()
+        logger.info(f"[intel]    → Phase 2 response in {time.time() - _t0:.1f}s ({len(raw_text)} chars)")
+
+        # Parse the Phase 2 JSON (enriched arrays + full_report)
+        phase2_data = _extract_intel_json(raw_text) if _looks_like_intel != None else None
+        # Try direct JSON parse first, then extraction
+        try:
+            phase2_data = json.loads(raw_text)
+        except (json.JSONDecodeError, ValueError):
+            # Try extracting from markdown fences or preamble
+            phase2_data = _extract_json_object(raw_text)
+
+        if phase2_data and isinstance(phase2_data, dict):
+            # Merge Phase 2 results: relationships + full_report
+            if phase2_data.get("relationships"):
+                intel_data["relationships"] = phase2_data["relationships"]
+            if phase2_data.get("full_report"):
+                intel_data["full_report"] = phase2_data["full_report"]
+            else:
+                intel_data["full_report"] = ""
+        else:
+            # Fallback: treat the entire response as the full_report markdown
+            logger.warning(f"[intel] Phase 2 JSON parse failed — using raw text as full_report")
+            intel_data["full_report"] = raw_text[:15000]
+
+        intel_data["report_status"] = "ready"
+
+        # Re-save to S3
+        save_intel_to_s3(session_id, intel_data, bucket)
+        logger.info(f"[intel]    → Phase 2 complete for session {session_id[:8]}... "
+                    f"(full_report: {len(intel_data.get('full_report', ''))} chars)")
+
+    except Exception as e:
+        logger.error(f"[intel] Phase 2 (full_report) failed for session {session_id[:8]}...: {e}")
+        # Mark as ready anyway (user just won't get the prose report)
+        intel_data["report_status"] = "ready"
+        intel_data["full_report"] = ""
+        try:
+            save_intel_to_s3(session_id, intel_data, bucket)
+        except Exception:
+            pass
 
 
 def load_intel_from_s3(session_id: str, bucket: str) -> dict | None:
@@ -639,7 +761,7 @@ def generate_intel_incremental(session_id: str, vm_manager, bucket: str, storage
             ),
         )
 
-        model_id = os.environ.get("BEDROCK_MODEL_ID", "us.anthropic.claude-sonnet-4-6")
+        model_id = os.environ.get("INTEL_MODEL_ID", INTEL_MODEL_ID)
 
         # Pass a COMPACT summary of the existing report (titles/messages only, no
         # full_report). This keeps the prompt small and tells the model what already
@@ -737,7 +859,7 @@ def generate_intel_deletion(session_id: str, bucket: str, storage, existing_inte
                 connect_timeout=BEDROCK_CONNECT_TIMEOUT,
             ),
         )
-        model_id = os.environ.get("BEDROCK_MODEL_ID", "us.anthropic.claude-sonnet-4-6")
+        model_id = os.environ.get("INTEL_MODEL_ID", INTEL_MODEL_ID)
 
         # Pass the FULL existing report so the model can reason about indirect dependencies
         # (a large context is fine — the model supports ~1M tokens; the OUTPUT stays tiny).
@@ -801,6 +923,7 @@ def generate_intel_async(session_id: str, vm_manager, bucket: str, storage, trig
 
     def _worker():
         start = time.time()
+        entity_docs_for_report = None  # Only set by the COMPLETE path (Phase 1)
         try:
             intel_data = None
 
@@ -836,7 +959,7 @@ def generate_intel_async(session_id: str, vm_manager, bucket: str, storage, trig
             # (A file_delete that reached here already returned above, so it never does a full regen.)
             if not intel_data:
                 logger.info(f"[intel] ▶ Initiating COMPLETE Notebook Intel for session {session_id[:8]}... (trigger={trigger})")
-                intel_data = generate_intel(session_id, vm_manager, bucket, storage)
+                intel_data, entity_docs_for_report = generate_intel(session_id, vm_manager, bucket, storage)
 
             elapsed = time.time() - start
             if intel_data:
@@ -845,6 +968,16 @@ def generate_intel_async(session_id: str, vm_manager, bucket: str, storage, trig
                     storage.workbook_intel_save(session_id, s3_key)
                 except Exception as e:
                     logger.warning(f"[intel] Failed to save metadata to DB: {e}")
+
+                # If Phase 1 returned without a full_report, kick off Phase 2 in-thread
+                # (we're already in a background thread, so just continue sequentially)
+                if intel_data.get("report_status") == "generating" and entity_docs_for_report:
+                    # Mark generating DONE so frontend sees Phase 1 content immediately
+                    _mark_generating_done(session_id)
+                    logger.info(f"[intel]    → Phase 1 complete ({elapsed:.1f}s). Starting Phase 2 (full_report)...")
+                    generate_full_report(session_id, intel_data, entity_docs_for_report, bucket, storage)
+                    elapsed = time.time() - start
+
                 logger.info(f"[intel] Complete for session {session_id[:8]}... ({elapsed:.1f}s)")
             else:
                 logger.warning(f"[intel] No intel generated for session {session_id[:8]}... ({elapsed:.1f}s)")

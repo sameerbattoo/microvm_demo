@@ -91,6 +91,7 @@ async def get_workbook_intel(request: Request):
             "intel": intel_data,
             "generated_at": intel_meta["generated_at"],
             "version": intel_meta["version"],
+            "report_status": intel_data.get("report_status", "ready"),
         }
 
     return {"status": "error", "intel": None, "message": "Intel metadata exists but S3 content not found"}

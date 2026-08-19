@@ -46,6 +46,9 @@ export default function IntelPanel({ activeTab, onClose, onInsertPrompt }) {
   // Why we're updating: "addition" (file uploaded) or "deletion" (file removed) —
   // drives the wording of the updating strip.
   const [updateReason, setUpdateReason] = useState('addition')
+  // Tracks Phase 2 (full_report generation): 'generating' while prose report is being written,
+  // 'ready' once it's available. Structured intel (analyses, alerts) is already visible.
+  const [reportStatus, setReportStatus] = useState('ready')
 
   const sessionId = activeTab?.sessionId
   const regeneratingRef = useRef(null)  // timestamp when regeneration was triggered
@@ -82,6 +85,7 @@ export default function IntelPanel({ activeTab, onClose, onInsertPrompt }) {
           setGeneratedAt(data.generated_at)
           setStatus('ready')
           setIsUpdating(false)
+          setReportStatus(data.report_status || data.intel?.report_status || 'ready')
           regeneratingRef.current = null
           _generatingMap.delete(sessionId)
         } else if (data.status === 'generating') {
@@ -155,6 +159,11 @@ export default function IntelPanel({ activeTab, onClose, onInsertPrompt }) {
           )}
           {status === 'ready' && fullReport && (
             <button className="intel-btn-icon" onClick={() => setShowFullReport(true)} title="View full report">
+              <svg width={14} height={14} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+            </button>
+          )}
+          {status === 'ready' && !fullReport && reportStatus === 'generating' && (
+            <button className="intel-btn-icon" disabled title="Full report generating...">
               <svg width={14} height={14} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
             </button>
           )}

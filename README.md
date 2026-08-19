@@ -160,6 +160,27 @@ Native SQL cells with intelligent auto-routing — write standard SQL, engine ch
 - **Auto-Annotate** — document all cells with AI in one click
 - Agent runs in the proxy (not the MicroVM) — no image bloat, instant iteration
 - Auto-detects Bedrock credentials; hides AI buttons if not configured
+- Model: Claude Sonnet 4.6 (via Amazon Bedrock)
+
+### Workbook Intelligence (AI-Powered Data Analysis)
+Automatic data profiling and intelligence generation when data sources are connected:
+
+- **Two-phase generation** — structured tab cards appear fast (~25-30s), full prose report generates in background (~35-45s)
+- **4 insight tabs** — Suggested Analyses, Visualizations, Investigations, Alerts — each card is clickable (sends prompt to AI chat)
+- **Entity discovery** — automatic schema profiling for all connected S3, DynamoDB, Athena, and local files
+- **Cross-source verification** — agent validates referential integrity (FK overlaps) and flags issues
+- **Incremental updates** — uploading a new file triggers a fast delta (only new findings, ~16s)
+- **Deletion pruning** — removing a file auto-prunes related insights (~6s)
+- **Full report modal** — comprehensive markdown report with relationships, join paths, and data quality analysis
+- **Data quality alerts** — PII detection, null rates, type mismatches, cardinality anomalies
+- Model: Claude Haiku 4.5 (optimized for speed; configurable via `INTEL_MODEL_ID`)
+- Prompt caching enabled for multi-turn agent loop (reduces latency on subsequent tool calls)
+
+### Logs Panel
+- **Real-time VM logs** — CloudWatch log stream from the MicroVM, live-updating
+- **Execution traces** — stdout/stderr from code execution, agent tool calls
+- **Intel tracing** — per-tool-call trace of the Workbook Intel agent (which tools called, inputs, results, timing)
+- **Session-aware** — automatically follows the active notebook tab's VM
 
 ### MicroVM Management
 - 4 memory tiers: 1 GB (0.5 vCPU) through 8 GB (4 vCPU), burst to 4×
@@ -170,7 +191,11 @@ Native SQL cells with intelligent auto-routing — write standard SQL, engine ch
 - Instance panel: specs, lifecycle, resources, cost breakdown per VM
 
 ### Sidebar (VS Code-style)
-Notebooks, Outline, Data Sources, Snippets, Variables, Packages, Samples, MicroVMs — resizable, collapsible.
+Notebooks, Outline, Data Sources, Variables, Packages, Terminal, Logs, Intel, Snippets, Samples — resizable, collapsible, grouped with visual dividers:
+- **Group 1:** Notebooks
+- **Group 2:** Outline, Data Sources, Variables, Packages
+- **Group 3:** Terminal, Logs, Intel (Workbook Intelligence)
+- **Group 4:** Snippets, Sample Notebooks
 
 ### Snippets Library
 Pre-loaded helper functions available in every cell — no imports needed:
@@ -300,7 +325,10 @@ IMAGE_SIZES="1024 2048 4096 8192"     # Memory tiers (MiB)
 
 Override for testing: `SESSION_PERSISTENCE_MODE=checkpoint MAX_LIFETIME_SECONDS=180 ./aws_microvm_run.sh`
 
-AI config in `proxy/notebook/ai/constants.py` — model IDs, temperature, token limits. Uses Bedrock Claude Sonnet by default.
+AI config in `proxy/notebook/ai/constants.py`:
+- `DEFAULT_MODEL_ID` — Claude Sonnet 4.6 for the AI Assistant (chat, explain, fix)
+- `INTEL_MODEL_ID` — Claude Haiku 4.5 for Workbook Intelligence (faster, 2x speedup with near-equal quality)
+- Temperature, token limits, truncation constants
 
 ---
 
@@ -343,7 +371,13 @@ app/                          # Runs INSIDE the MicroVM
     ├── executor.py           # SandboxExecutor (stateful Python engine)
     ├── code_engine.py        # /execute endpoint
     ├── sql_engine.py         # /execute-sql with auto-routing
+    ├── data_catalog.py       # /data-catalog endpoint (S3, DynamoDB, Athena discovery)
+    ├── dtypes.py             # DataFrame type detection utilities
     └── routes.py             # /install, /variables, /health, /metrics, /upload
+
+batch/                        # Background jobs (entity discovery)
+├── __init__.py
+└── entity_discovery.py       # Auto-profile all data sources (S3, DynamoDB, Athena, local files)
 
 proxy/                        # Runs on your machine (hides all VM internals)
 ├── server.py                 # FastAPI entrypoint, WebSocket terminal relay, health
@@ -354,22 +388,61 @@ proxy/                        # Runs on your machine (hides all VM internals)
 │   ├── package_classifier.py # PyPI-based package category detection
 │   ├── datasources/          # Schema discovery (S3, DynamoDB, Athena, local files)
 │   └── routes/
-│       └── microvm.py        # /launch, /terminate, /proxy/{path}, /instances
+│       ├── microvm.py        # /launch, /terminate, /proxy/{path}, /instances
+│       ├── sessions.py       # /sessions, /datasources, /secrets
+│       └── metrics.py        # /instances/metrics, /instances/metrics/history
 ├── notebook/
-│   ├── ai/                   # Strands Agent (chat, explain, fix)
-│   └── routes/               # AI + notebook CRUD endpoints
-└── storage/                  # SQLite backend (notebooks, sessions, metrics)
+│   ├── ai/
+│   │   ├── constants.py      # Model IDs (DEFAULT_MODEL_ID, INTEL_MODEL_ID), token limits
+│   │   ├── prompts.py        # All LLM prompts (agent, intel Phase 1/2, incremental, deletion, entity discovery)
+│   │   ├── notebook_agent.py # Strands Agent (chat, explain, fix) + prompt caching
+│   │   ├── workbook_intel.py # Two-phase intel generation, incremental delta, deletion pruning
+│   │   ├── sessions.py       # Agent session management
+│   │   └── tools/            # Agent tools (execute_code, get_variables, etc.)
+│   └── routes/
+│       ├── ai.py             # /ai/chat, /ai/explain, /ai/fix endpoints
+│       ├── intel.py          # /workbook-intel (GET/POST) endpoints
+│       ├── notebooks.py      # Notebook CRUD
+│       └── logs.py           # CloudWatch log streaming
+├── storage/
+│   ├── interface.py          # Abstract StorageBackend
+│   └── sqlite_db.py          # SQLite implementation
+└── data/                     # Local SQLite database
 
 web/src/                      # React UI (Vite)
+├── App.jsx                   # Main app, tab management, intel watching
 ├── components/
 │   ├── panels/
-│   │   └── TerminalPanel.jsx # xterm.js terminal (WebSocket → proxy → VM shell)
-│   ├── Cell.jsx, Notebook.jsx, Sidebar.jsx, ConnectionPanel.jsx, AiChatPanel.jsx
-│   └── Icons.jsx, Modal.jsx, TabBar.jsx
-└── services/microvm.js       # API client (all calls use X-Session-Id)
+│   │   ├── TerminalPanel.jsx # xterm.js terminal (WebSocket -> proxy -> VM shell)
+│   │   ├── DataSourcesPanel.jsx # Data source browser with schemas
+│   │   └── OutlinePanel.jsx  # Cell navigator with Run All status icon
+│   ├── Cell.jsx              # Code/SQL/Markdown cell with output display
+│   ├── Notebook.jsx          # Cell list, execution, Run All
+│   ├── Sidebar.jsx           # Activity bar with grouped icons
+│   ├── IntelPanel.jsx        # Workbook Intelligence (4 tabs + full report modal)
+│   ├── LogsPanel.jsx         # Real-time CloudWatch log viewer
+│   ├── ConnectionPanel.jsx   # VM connection status + MicroVM management
+│   ├── PackageManager.jsx    # pip package search + install
+│   ├── Icons.jsx, Modal.jsx, TabBar.jsx
+│   └── ErrorBoundary.jsx     # React error boundary
+├── services/microvm.js       # API client (all calls use X-Session-Id)
+├── utils/dragOverlay.js      # Plotly chart drag-resize handler
+└── constants.js              # Frontend constants
 
-tests/                        # E2E tests (common + eternal + checkpoint)
-scripts/                      # config.sh, setup_iam.sh, build_all_images.sh, teardown.sh
+scripts/                      # Setup and operations
+├── config.sh                 # All configuration (region, bucket, IAM, etc.)
+├── setup_iam.sh              # Create IAM roles
+├── setup_sample_data.sh      # Seed e-commerce data (S3, DynamoDB, Athena)
+├── build_all_images.sh       # Build MicroVM Docker images
+├── teardown.sh               # Clean up all AWS resources
+└── benchmark_intel_models.py # LLM model benchmark (Phase1/2, incremental, deletion, judge)
+
+tests/                        # E2E tests + test fixtures
+├── run_tests.sh              # Auto-detect mode, run common + mode-specific
+├── product_returns.csv       # Test fixture for deletion-flow testing
+├── common/                   # Both modes
+├── eternal/                  # Rotation tests
+└── checkpoint/               # Checkpoint/restore tests
 ```
 
 ---
@@ -464,6 +537,8 @@ See [Why MicroVMs](#why-lambda-microvms-for-notebooks) for comparison vs EKS (~4
 ---
 
 ## Network Egress Control (Layer 7)
+
+> **Note:** This section provides architectural guidance and implementation patterns for production deployments. **None of the egress control mechanisms below are implemented in this POC** — MicroVMs have unrestricted internet access by default. These options are documented for teams planning production deployment with compliance requirements.
 
 MicroVMs have full internet access by default via the `INTERNET_EGRESS` network connector. For production deployments where you need to control **which domains** user code can reach (e.g., block unauthorized data exfiltration, restrict to approved APIs only), you can implement Layer 7 egress filtering.
 
