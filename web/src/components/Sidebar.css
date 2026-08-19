@@ -295,6 +295,28 @@
   color: var(--text-tertiary);
   transition: all var(--transition-fast);
   border-left: 2px solid transparent;
+  position: relative;
+}
+
+/* Vertical indent guide rails — connect nested items visually */
+.outline-indent-guide {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 0;
+  border-left: 1px solid var(--border-subtle);
+  pointer-events: none;
+}
+.outline-item:hover .outline-indent-guide {
+  border-left-color: var(--border-default);
+}
+
+/* Chevron spacer keeps non-section (code/sql) icons aligned under section titles */
+.outline-chevron-spacer {
+  width: 12px;
+  margin-right: 2px;
+  flex-shrink: 0;
+  display: inline-block;
 }
 
 .outline-item:hover {
@@ -359,6 +381,7 @@
 .outline-status-success { color: var(--accent-success); }
 .outline-status-error { color: var(--accent-danger); }
 .outline-status-stale { color: var(--accent-warning); font-size: 14px; }
+.outline-status-running { color: var(--accent-primary); flex-shrink: 0; }
 
 .outline-exec-time {
   font-size: 9px;
@@ -388,17 +411,11 @@
   border-bottom: 1px solid var(--border-subtle);
 }
 
-.outline-section-group {
-  margin-bottom: 2px;
-}
-
-.outline-section-group > .outline-item:not(.outline-item-section) {
-  padding-left: 28px;
-}
-
+/* Section (markdown heading) rows: bold. Left padding comes from the inline
+   depth-based style (paddingLeft: 10 + depth*14) so headings nest by level.
+   Do NOT set padding-left here — an !important rule would flatten the tree. */
 .outline-item-section {
   font-weight: 600;
-  padding-left: 4px !important;
 }
 
 .outline-section-chevron {
@@ -453,6 +470,21 @@
 .outline-action-btn:hover { background: var(--surface-3); color: var(--text-primary); }
 .outline-delete-btn:hover { color: var(--accent-danger); background: var(--accent-danger-subtle); }
 
+/* Expand / collapse all sections */
+.outline-expand-toggle {
+  background: none;
+  border: 1px solid var(--border-subtle);
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 4px 6px;
+  border-radius: 4px;
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.outline-expand-toggle:hover { color: var(--text-primary); background: var(--surface-3); border-color: var(--text-muted); }
+
 /* Multi-select mode */
 .outline-select-toggle {
   background: none;
@@ -478,6 +510,65 @@
 .outline-item-selected {
   background: var(--accent-primary-subtle) !important;
   border-left-color: var(--accent-primary) !important;
+}
+
+/* Active cell (scroll-sync) — the cell currently in view */
+.outline-item-active {
+  background: var(--surface-3);
+  border-left-color: var(--accent-primary);
+  font-weight: 600;
+}
+.outline-item-active .outline-item-label { color: var(--text-primary); }
+
+/* Nested heading hierarchy */
+.outline-section-number {
+  font-size: 9px;
+  font-weight: 600;
+  color: var(--text-muted);
+  margin-right: 4px;
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+}
+.outline-item-h1 .outline-item-label { font-weight: 600; }
+.outline-item-h2 .outline-item-label { font-weight: 500; }
+.outline-item-h1 .outline-section-number { color: var(--accent-primary); }
+
+/* Type/status filter chips */
+.outline-filter-chips {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border-subtle);
+  flex-wrap: wrap;
+}
+.outline-filter-chip {
+  font-size: 10px;
+  padding: 2px 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  background: var(--surface-2);
+  color: var(--text-muted);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.outline-filter-chip:hover {
+  color: var(--text-primary);
+  background: var(--surface-3);
+  border-color: var(--text-muted);
+}
+.outline-filter-chip.active {
+  color: var(--accent-primary);
+  background: var(--accent-primary-subtle);
+  border-color: var(--accent-primary-muted);
+  font-weight: 600;
+}
+.outline-filter-chip.has-errors {
+  color: var(--danger, #e5484d);
+  border-color: var(--danger, #e5484d);
+}
+.outline-filter-chip.has-errors.active {
+  background: var(--danger-subtle, rgba(229, 72, 77, 0.15));
 }
 
 /* Bulk action bar */
@@ -508,7 +599,8 @@
   align-items: center;
   gap: 3px;
 }
-.outline-bulk-btn:hover { background: var(--surface-4, var(--surface-3)); color: var(--text-primary); }
+.outline-bulk-btn:hover:not(:disabled) { background: var(--surface-4, var(--surface-3)); color: var(--text-primary); }
+.outline-bulk-btn:disabled { opacity: 0.35; cursor: not-allowed; }
 .outline-bulk-delete { border-color: var(--accent-danger-muted, rgba(255,92,92,0.3)); color: var(--accent-danger); }
 .outline-bulk-delete:hover { background: var(--accent-danger-subtle); }
 .outline-bulk-run { border-color: var(--accent-success-muted, rgba(0,201,167,0.3)); color: var(--accent-success); }

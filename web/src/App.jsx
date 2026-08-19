@@ -1006,6 +1006,17 @@ export default function App() {
             reordered.splice(toIdx, 0, moved)
             updateTab(activeTabId, { _cells: reordered })
           }}
+          onReorderCellIds={(orderedIds) => {
+            // Bulk reorder: rebuild _cells to match the given id order in one update
+            // (used by the outline's tree-aware block move up/down).
+            const tab = tabs.find(t => t.id === activeTabId)
+            if (!tab || !tab._cells) return
+            const byId = new Map(tab._cells.map(c => [c.id, c]))
+            const reordered = orderedIds.map(id => byId.get(id)).filter(Boolean)
+            if (reordered.length === tab._cells.length) {
+              updateTab(activeTabId, { _cells: reordered })
+            }
+          }}
           onRunFromCell={(cellIdx) => {
             window.dispatchEvent(new CustomEvent('notebook-run-from-cell', { detail: { cellIdx } }))
           }}

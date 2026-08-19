@@ -247,6 +247,9 @@ export default function Notebook({ tab, instances = {}, onUpdateTab, onMarkVmRun
     if (activeCellId) {
       const idx = cells.findIndex(c => c.id === activeCellId)
       if (idx >= 0) onUpdateTab({ _activeCellIndex: idx })
+      // Notify the Outline panel so it can highlight the corresponding row
+      // (helps navigate long notebooks — clicking a cell selects it in the outline).
+      window.dispatchEvent(new CustomEvent('notebook-active-cell', { detail: { cellId: activeCellId } }))
     }
   }, [activeCellId, cells])
 

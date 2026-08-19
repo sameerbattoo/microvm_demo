@@ -49,6 +49,7 @@ export default function Sidebar({
   activeTab = null,
   onScrollToCell,
   onReorderCells,
+  onReorderCellIds,
   onRunFromCell,
   onDeleteCells,
   onRunCells,
@@ -494,6 +495,7 @@ export default function Sidebar({
               activeTab={activeTab}
               onScrollToCell={onScrollToCell}
               onReorderCells={onReorderCells}
+              onReorderCellIds={onReorderCellIds}
               onRunFromCell={onRunFromCell}
               onDeleteCells={onDeleteCells}
               onRunCells={onRunCells}

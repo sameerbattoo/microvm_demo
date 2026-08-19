@@ -5,7 +5,7 @@
   "cells": [
     {
       "type": "markdown",
-      "code": "# AWS Multi-Source E-Commerce Pipeline\n\nThis notebook demonstrates connecting to **4 AWS data sources** from a single MicroVM sandbox using built-in helper functions:\n\n| Source | Service | Data | Helper |\n|--------|---------|------|--------|\n| Athena | SQL tables | orders (2000), customers (500), products (100) | `read_athena(sql)` |\n| S3 | CSV files | clickstream (10K), inventory (500), marketing (20) | `read_s3_csv(bucket, key)` |\n| DynamoDB | NoSQL | reviews (200), recommendations (522) | `read_dynamodb(table)` |\n| Local | /tmp files | sales_targets, competitor_prices | `read_local(path)` |\n\nAll services are accessed via the MicroVM's **execution role** \u2014 no credentials to manage.",
+      "code": "# AWS Multi-Source E-Commerce Pipeline\n\nThis notebook demonstrates connecting to **4 AWS data sources** from a single MicroVM sandbox using built-in helper functions:\n\n| Source | Service | Data | Helper |\n|--------|---------|------|--------|\n| Athena | SQL tables | orders (2000), customers (500), products (100) | `read_athena(sql)` |\n| S3 | CSV files | clickstream (10K), inventory (500), marketing (20) | `read_s3_csv(bucket, key)` |\n| DynamoDB | NoSQL | reviews (200), recommendations (522) | `read_dynamodb(table)` |\n| Local | /tmp files | sales_targets, competitor_prices | `read_local(path)` |\n\nAll services are accessed via the MicroVM's **execution role** — no credentials to manage.",
       "output": null,
       "error": null,
       "html": null,
@@ -23,16 +23,7 @@
     },
     {
       "type": "markdown",
-      "code": "## Source 1: Athena (SQL Tables)\n\nQuery structured transactional data using standard SQL. The `read_athena()` helper handles query execution, polling, and returns a DataFrame.",
-      "output": null,
-      "error": null,
-      "html": null,
-      "image": null,
-      "executionNumber": null
-    },
-    {
-      "type": "code",
-      "code": "# Load all 3 Athena tables\nimport pandas as pd\norders = read_athena(\"SELECT * FROM microvm_demo_db.orders\")\ncustomers = read_athena(\"SELECT * FROM microvm_demo_db.customers\")\nproducts = read_athena(\"SELECT * FROM microvm_demo_db.products\")\n\n# Convert numeric columns (Athena returns strings)\nfor col in ['quantity', 'unit_price', 'total']:\n    orders[col] = pd.to_numeric(orders[col], errors='coerce')\nfor col in ['price', 'cost', 'stock_quantity', 'rating_avg']:\n    products[col] = pd.to_numeric(products[col], errors='coerce')\n\nprint(f\"\u2713 Orders:    {orders.shape[0]} rows \u00d7 {orders.shape[1]} cols\")\nprint(f\"\u2713 Customers: {customers.shape[0]} rows \u00d7 {customers.shape[1]} cols\")\nprint(f\"\u2713 Products:  {products.shape[0]} rows \u00d7 {products.shape[1]} cols\")\norders.head()",
+      "code": "## Connecting to Data Sources\n\nThe MicroVM's **execution role** grants access to Athena, DynamoDB, and S3 — no credentials to manage. Each source below uses a dedicated `read_*` helper.",
       "output": null,
       "error": null,
       "html": null,
@@ -41,7 +32,7 @@
     },
     {
       "type": "markdown",
-      "code": "## Source 2: DynamoDB (NoSQL)\n\nScan product reviews and recommendations. The `read_dynamodb()` helper handles Decimal conversion and pagination.",
+      "code": "### Source 1: Athena (SQL Tables)\n\nQuery structured transactional data using standard SQL. The `read_athena()` helper handles query execution, polling, and returns a DataFrame.",
       "output": null,
       "error": null,
       "html": null,
@@ -50,7 +41,7 @@
     },
     {
       "type": "code",
-      "code": "# Scan DynamoDB tables\nreviews = read_dynamodb('ecommerce-reviews')\nrecommendations = read_dynamodb('ecommerce-recommendations')\n\nprint(f\"\u2713 Reviews:         {len(reviews)} rows\")\nprint(f\"\u2713 Recommendations: {len(recommendations)} rows\")\nreviews.head()",
+      "code": "# Load all 3 Athena tables\nimport pandas as pd\norders = read_athena(\"SELECT * FROM microvm_demo_db.orders\")\ncustomers = read_athena(\"SELECT * FROM microvm_demo_db.customers\")\nproducts = read_athena(\"SELECT * FROM microvm_demo_db.products\")\n\n# Convert numeric columns (Athena returns strings)\nfor col in ['quantity', 'unit_price', 'total']:\n    orders[col] = pd.to_numeric(orders[col], errors='coerce')\nfor col in ['price', 'cost', 'stock_quantity', 'rating_avg']:\n    products[col] = pd.to_numeric(products[col], errors='coerce')\n\nprint(f\"✓ Orders:    {orders.shape[0]} rows × {orders.shape[1]} cols\")\nprint(f\"✓ Customers: {customers.shape[0]} rows × {customers.shape[1]} cols\")\nprint(f\"✓ Products:  {products.shape[0]} rows × {products.shape[1]} cols\")\norders.head()",
       "output": null,
       "error": null,
       "html": null,
@@ -59,7 +50,7 @@
     },
     {
       "type": "markdown",
-      "code": "## Source 3: S3 Files (Raw/Semi-Structured)\n\nRead operational and behavioral data stored as CSV files in S3.",
+      "code": "### Source 2: DynamoDB (NoSQL)\n\nScan product reviews and recommendations. The `read_dynamodb()` helper handles Decimal conversion and pagination.",
       "output": null,
       "error": null,
       "html": null,
@@ -68,7 +59,7 @@
     },
     {
       "type": "code",
-      "code": "# Get bucket name from environment\nimport os\naccount = os.environ.get('ACCOUNT_ID', whoami()['account'])\nbucket = f'microvm-sandbox-artifacts-{account}-us-west-2'\n\n# Load S3 files\nclickstream = read_s3_csv(bucket, 'samples/clickstream_events.csv')\ninventory = read_s3_csv(bucket, 'samples/inventory_daily.csv')\nmarketing = read_s3_csv(bucket, 'samples/marketing_campaigns.csv')\n\nprint(f\"\u2713 Clickstream: {len(clickstream)} events\")\nprint(f\"\u2713 Inventory:   {len(inventory)} daily snapshots\")\nprint(f\"\u2713 Marketing:   {len(marketing)} campaigns\")\nclickstream.head()",
+      "code": "# Scan DynamoDB tables\nreviews = read_dynamodb('ecommerce-reviews')\nrecommendations = read_dynamodb('ecommerce-recommendations')\n\nprint(f\"✓ Reviews:         {len(reviews)} rows\")\nprint(f\"✓ Recommendations: {len(recommendations)} rows\")\nreviews.head()",
       "output": null,
       "error": null,
       "html": null,
@@ -77,7 +68,7 @@
     },
     {
       "type": "markdown",
-      "code": "## Cross-Source Join: Orders \u00d7 Products \u00d7 Reviews\n\nJoin Athena orders with products, then enrich with DynamoDB review ratings.",
+      "code": "### Source 3: S3 Files (Raw/Semi-Structured)\n\nRead operational and behavioral data stored as CSV files in S3.",
       "output": null,
       "error": null,
       "html": null,
@@ -86,7 +77,7 @@
     },
     {
       "type": "code",
-      "code": "# Join orders with products (both from Athena)\norder_details = orders.merge(products[['product_id', 'name', 'category', 'brand']], on='product_id', how='left')\n\n# Calculate average review rating per product from DynamoDB\navg_reviews = reviews.groupby('productId').agg(\n    avg_rating=('rating', 'mean'),\n    review_count=('reviewId', 'count')\n).reset_index()\n\n# Enrich with review data\norder_details = order_details.merge(\n    avg_reviews, left_on='product_id', right_on='productId', how='left'\n)\n\nprint(f\"\u2713 Merged dataset: {len(order_details)} rows \u00d7 {len(order_details.columns)} cols\")\nprint(f\"  Sources: Athena (orders + products) + DynamoDB (reviews)\")\norder_details[['order_id', 'product_id', 'name', 'category', 'total', 'avg_rating', 'review_count']].head(10)",
+      "code": "# Get bucket name from environment\nimport os\naccount = os.environ.get('ACCOUNT_ID', whoami()['account'])\nbucket = f'microvm-sandbox-artifacts-{account}-us-west-2'\n\n# Load S3 files\nclickstream = read_s3_csv(bucket, 'samples/clickstream_events.csv')\ninventory = read_s3_csv(bucket, 'samples/inventory_daily.csv')\nmarketing = read_s3_csv(bucket, 'samples/marketing_campaigns.csv')\n\nprint(f\"✓ Clickstream: {len(clickstream)} events\")\nprint(f\"✓ Inventory:   {len(inventory)} daily snapshots\")\nprint(f\"✓ Marketing:   {len(marketing)} campaigns\")\nclickstream.head()",
       "output": null,
       "error": null,
       "html": null,
@@ -95,7 +86,34 @@
     },
     {
       "type": "markdown",
-      "code": "## Analysis: Revenue by Category & Country\n\nUsing the merged data to analyze revenue patterns.",
+      "code": "## Cross-Source Analysis\n\nCombine data across all three backends. Athena, DynamoDB, and S3 results are all pandas DataFrames, so they join seamlessly in-memory.",
+      "output": null,
+      "error": null,
+      "html": null,
+      "image": null,
+      "executionNumber": null
+    },
+    {
+      "type": "markdown",
+      "code": "### Join: Orders × Products × Reviews\n\nJoin Athena orders with products, then enrich with DynamoDB review ratings.",
+      "output": null,
+      "error": null,
+      "html": null,
+      "image": null,
+      "executionNumber": null
+    },
+    {
+      "type": "code",
+      "code": "# Join orders with products (both from Athena)\norder_details = orders.merge(products[['product_id', 'name', 'category', 'brand']], on='product_id', how='left')\n\n# Calculate average review rating per product from DynamoDB\navg_reviews = reviews.groupby('productId').agg(\n    avg_rating=('rating', 'mean'),\n    review_count=('reviewId', 'count')\n).reset_index()\n\n# Enrich with review data\norder_details = order_details.merge(\n    avg_reviews, left_on='product_id', right_on='productId', how='left'\n)\n\nprint(f\"✓ Merged dataset: {len(order_details)} rows × {len(order_details.columns)} cols\")\nprint(f\"  Sources: Athena (orders + products) + DynamoDB (reviews)\")\norder_details[['order_id', 'product_id', 'name', 'category', 'total', 'avg_rating', 'review_count']].head(10)",
+      "output": null,
+      "error": null,
+      "html": null,
+      "image": null,
+      "executionNumber": null
+    },
+    {
+      "type": "markdown",
+      "code": "### Revenue by Category & Country\n\nUsing the merged data to analyze revenue patterns.",
       "output": null,
       "error": null,
       "html": null,
