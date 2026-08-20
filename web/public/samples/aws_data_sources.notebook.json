@@ -1,20 +1,11 @@
 {
-  "name": "AWS Data Sources",
-  "description": "Connect to S3, DynamoDB, and Athena from the MicroVM using built-in helpers. Merge data across all sources for unified e-commerce analysis.",
-  "savedAt": "2026-08-13T00:00:00.000Z",
+  "name": "AWS: Q4 Product Action Plan",
+  "description": "A decision workbook that fuses Athena (orders/products/customers), DynamoDB (reviews + recommendations), S3 (inventory + clickstream), and a public holidays API into a slider-driven plan: which products to restock, promote, fix, or wind down before the peak.",
+  "savedAt": "2026-07-16T00:00:00.000Z",
   "cells": [
     {
       "type": "markdown",
-      "code": "# AWS Multi-Source E-Commerce Pipeline\n\nThis notebook demonstrates connecting to **4 AWS data sources** from a single MicroVM sandbox using built-in helper functions:\n\n| Source | Service | Data | Helper |\n|--------|---------|------|--------|\n| Athena | SQL tables | orders (2000), customers (500), products (100) | `read_athena(sql)` |\n| S3 | CSV files | clickstream (10K), inventory (500), marketing (20) | `read_s3_csv(bucket, key)` |\n| DynamoDB | NoSQL | reviews (200), recommendations (522) | `read_dynamodb(table)` |\n| Local | /tmp files | sales_targets, competitor_prices | `read_local(path)` |\n\nAll services are accessed via the MicroVM's **execution role** — no credentials to manage.",
-      "output": null,
-      "error": null,
-      "html": null,
-      "image": null,
-      "executionNumber": null
-    },
-    {
-      "type": "code",
-      "code": "# Check identity and environment\ninfo = whoami()\nprint(f\"Account: {info['account']}\")\nprint(f\"Region:  {info['region']}\")\nprint(f\"Bucket:  {info['bucket']}\")",
+      "code": "# 🛒 Q4 Product Action Plan\n\n**The decision:** the holiday peak is coming — which products do we **restock**, **promote**, **fix**, or **wind down**? Guess wrong and we stock out on winners while cash sits in losers.\n\nThis workbook builds a **360° view of every product** from all of our data, then applies a transparent rule engine you steer with sliders. It's not a tour of *how* to connect to AWS — it's a tool that produces an **action list a merchandising manager can act on today**.\n\n| Signal | Source | Service | Cell |\n|---|---|---|---|\n| Demand, revenue, margin, buyer mix | `orders` × `products` × `customers` | **Athena** | SQL |\n| Customer sentiment | `ecommerce-reviews` | **DynamoDB** | SQL |\n| Recommendation pipeline (future demand) | `ecommerce-recommendations` | **DynamoDB** | SQL |\n| Stock health | `inventory_daily.csv` | **S3** | code + SQL |\n| Demand momentum | `clickstream_events.csv` | **S3** | code |\n| Seasonality (peak proximity) | Public Holidays | **Nager.at API** | code |\n\n**How to use it:** Run all cells top-to-bottom, then drag the ⚙️ **@param sliders** — each sits above the step it controls — to match your risk appetite and watch the plan change. All AWS access uses the MicroVM's **execution role**; there are no credentials in the notebook.",
       "output": null,
       "error": null,
       "html": null,
@@ -23,7 +14,16 @@
     },
     {
       "type": "markdown",
-      "code": "## Connecting to Data Sources\n\nThe MicroVM's **execution role** grants access to Athena, DynamoDB, and S3 — no credentials to manage. Each source below uses a dedicated `read_*` helper.",
+      "code": "## Step 0 · Connect to the sandbox\n\nEverything below runs inside the MicroVM using its **execution role** — no keys in the notebook. We just confirm identity and resolve the S3 artifacts bucket.",
+      "output": null,
+      "error": null,
+      "html": null,
+      "image": null,
+      "executionNumber": null
+    },
+    {
+      "type": "code",
+      "code": "import os, pandas as pd\ninfo = whoami()\naccount, region = info['account'], info['region']\nbucket = f\"microvm-sandbox-artifacts-{account}-{region}\"\nprint(f\"Account {account} · {region}\")\nprint(f\"Artifacts bucket: {bucket}\")",
       "output": null,
       "error": null,
       "html": null,
@@ -32,7 +32,64 @@
     },
     {
       "type": "markdown",
-      "code": "### Source 1: Athena (SQL Tables)\n\nQuery structured transactional data using standard SQL. The `read_athena()` helper handles query execution, polling, and returns a DataFrame.",
+      "code": "## Step 1 · Demand, margin & buyers — Athena (SQL)\n\nOne SQL query joins all three **Athena** tables (`orders` × `products` × `customers`) to compute, per product: revenue, units sold, margin %, distinct buyers, and the share bought by **Premium** customers. The result is saved as `product_demand` for later steps.",
+      "output": null,
+      "error": null,
+      "html": null,
+      "image": null,
+      "executionNumber": null
+    },
+    {
+      "type": "sql",
+      "code": "-- Athena: demand, revenue, margin and buyer mix per product\n-- (orders x products x customers — all three Athena tables in one query)\nSELECT\n  p.product_id, p.name, p.category, p.brand,\n  p.price, p.cost,\n  ROUND((p.price - p.cost) / p.price * 100, 1)                                AS margin_pct,\n  COUNT(o.order_id)                                                          AS order_count,\n  SUM(o.quantity)                                                            AS units_sold,\n  ROUND(SUM(o.total), 2)                                                     AS revenue,\n  COUNT(DISTINCT o.user_id)                                                  AS distinct_buyers,\n  ROUND(AVG(CASE WHEN c.segment = 'Premium' THEN 1.0 ELSE 0.0 END) * 100, 1) AS premium_buyer_pct\nFROM microvm_demo_db.orders o\nJOIN microvm_demo_db.products p        ON o.product_id = p.product_id\nLEFT JOIN microvm_demo_db.customers c  ON o.user_id = c.user_id\nGROUP BY p.product_id, p.name, p.category, p.brand, p.price, p.cost\nORDER BY revenue DESC",
+      "output": null,
+      "error": null,
+      "html": null,
+      "image": null,
+      "executionNumber": null,
+      "outputVariable": "product_demand"
+    },
+    {
+      "type": "markdown",
+      "code": "## Step 2 · Customer sentiment — DynamoDB (SQL)\n\nReviews live in **DynamoDB**. The SQL engine can't push a `GROUP BY` to DynamoDB, so it transparently scans the table and runs the aggregation in DuckDB — you just write SQL. We capture rating, review volume, negative-review count, and verified-purchase share as `product_sentiment`.",
+      "output": null,
+      "error": null,
+      "html": null,
+      "image": null,
+      "executionNumber": null
+    },
+    {
+      "type": "sql",
+      "code": "-- DynamoDB reviews aggregated per product (auto-routed: scan -> DuckDB)\nSELECT\n  productId                                                             AS product_id,\n  COUNT(*)                                                              AS review_count,\n  ROUND(AVG(rating), 2)                                                 AS avg_rating,\n  SUM(CASE WHEN rating <= 2 THEN 1 ELSE 0 END)                          AS negative_reviews,\n  ROUND(AVG(CASE WHEN verified_purchase THEN 1.0 ELSE 0.0 END) * 100, 1) AS verified_pct\nFROM dynamodb.\"ecommerce-reviews\"\nGROUP BY productId",
+      "output": null,
+      "error": null,
+      "html": null,
+      "image": null,
+      "executionNumber": null,
+      "outputVariable": "product_sentiment"
+    },
+    {
+      "type": "markdown",
+      "code": "## Step 3 · Recommendation pipeline — DynamoDB (SQL)\n\nThe recommendation model's output (also **DynamoDB**) tells us which products are queued to be surfaced to users — a **forward-looking demand signal**. A product the model is about to push hard is a stronger restock case. Saved as `product_reco`.",
+      "output": null,
+      "error": null,
+      "html": null,
+      "image": null,
+      "executionNumber": null
+    },
+    {
+      "type": "sql",
+      "code": "-- DynamoDB recommendations: reach + strength of each product in the reco pipeline\nSELECT\n  productId              AS product_id,\n  COUNT(DISTINCT userId) AS recommended_to_users,\n  ROUND(AVG(score), 3)   AS avg_reco_score\nFROM dynamodb.\"ecommerce-recommendations\"\nGROUP BY productId",
+      "output": null,
+      "error": null,
+      "html": null,
+      "image": null,
+      "executionNumber": null,
+      "outputVariable": "product_reco"
+    },
+    {
+      "type": "markdown",
+      "code": "## Step 4 · Stock health & demand momentum — S3\n\nOperational data lives as CSVs in **S3**. We load them with `read_s3_csv`, aggregate clickstream behavior in pandas (`demand_signal`), then use a **SQL cell over the inventory DataFrame** to pull each product's latest stock snapshot (`product_stock`) — SQL and code, same data.",
       "output": null,
       "error": null,
       "html": null,
@@ -41,7 +98,35 @@
     },
     {
       "type": "code",
-      "code": "# Load all 3 Athena tables\nimport pandas as pd\norders = read_athena(\"SELECT * FROM microvm_demo_db.orders\")\ncustomers = read_athena(\"SELECT * FROM microvm_demo_db.customers\")\nproducts = read_athena(\"SELECT * FROM microvm_demo_db.products\")\n\n# Convert numeric columns (Athena returns strings)\nfor col in ['quantity', 'unit_price', 'total']:\n    orders[col] = pd.to_numeric(orders[col], errors='coerce')\nfor col in ['price', 'cost', 'stock_quantity', 'rating_avg']:\n    products[col] = pd.to_numeric(products[col], errors='coerce')\n\nprint(f\"✓ Orders:    {orders.shape[0]} rows × {orders.shape[1]} cols\")\nprint(f\"✓ Customers: {customers.shape[0]} rows × {customers.shape[1]} cols\")\nprint(f\"✓ Products:  {products.shape[0]} rows × {products.shape[1]} cols\")\norders.head()",
+      "code": "inventory   = read_s3_csv(bucket, 'samples/inventory_daily.csv')\nclickstream = read_s3_csv(bucket, 'samples/clickstream_events.csv')\n\n# Demand momentum per product from clickstream behavior (S3)\ncs = clickstream[clickstream['product_id'].notna() & (clickstream['product_id'] != '')]\nviews = cs[cs['action'] == 'page_view'].groupby('product_id').size()\ncarts = cs[cs['action'] == 'add_to_cart'].groupby('product_id').size()\nbuys  = cs[cs['action'] == 'purchase'].groupby('product_id').size()\ndemand_signal = pd.DataFrame({'views': views, 'cart_adds': carts, 'purchases': buys}).fillna(0)\ndemand_signal['cart_to_buy_pct'] = (demand_signal['purchases'] / demand_signal['cart_adds'].replace(0, pd.NA) * 100).round(1)\ndemand_signal.index.name = 'product_id'\ndemand_signal = demand_signal.reset_index()\nprint(f\"Inventory snapshots: {len(inventory)} · clickstream events: {len(clickstream)} · products with behavior: {len(demand_signal)}\")\ndemand_signal.head()",
+      "output": null,
+      "error": null,
+      "html": null,
+      "image": null,
+      "executionNumber": null
+    },
+    {
+      "type": "sql",
+      "code": "-- Stock health: latest snapshot per product+warehouse, rolled up per product.\n-- S3 data (loaded above) queried with SQL — DuckDB runs it over the DataFrame.\nWITH latest AS (\n  SELECT product_id, warehouse, quantity_on_hand, reorder_point, days_of_supply,\n         ROW_NUMBER() OVER (PARTITION BY product_id, warehouse ORDER BY date DESC) AS rn\n  FROM inventory\n)\nSELECT product_id,\n       SUM(quantity_on_hand) AS on_hand,\n       MIN(days_of_supply)   AS min_days_of_supply,\n       MAX(reorder_point)    AS reorder_point\nFROM latest\nWHERE rn = 1\nGROUP BY product_id",
+      "output": null,
+      "error": null,
+      "html": null,
+      "image": null,
+      "executionNumber": null,
+      "outputVariable": "product_stock"
+    },
+    {
+      "type": "markdown",
+      "code": "## Step 5 · How close is the peak? — Public Holidays API\n\nStock runways should tighten as a demand peak approaches. We pull the **public holiday calendar** for a target market from the free **Nager.at** API and turn the number of holidays in the planning window into a **season multiplier** that later shortens the acceptable days-of-supply.\n\n⚙️ *Sliders below:* planning horizon, target market, and expected holiday uplift.",
+      "output": null,
+      "error": null,
+      "html": null,
+      "image": null,
+      "executionNumber": null
+    },
+    {
+      "type": "code",
+      "code": "# @param {\"type\": \"slider\", \"min\": 7, \"max\": 90, \"step\": 1, \"default\": 45}\nplanning_horizon_days = 45\n# @param {\"type\": \"dropdown\", \"options\": [\"US\", \"GB\", \"DE\", \"FR\", \"JP\", \"CA\", \"AU\", \"IN\"], \"default\": \"US\"}\nholiday_market = \"US\"\n# @param {\"type\": \"slider\", \"min\": 0.0, \"max\": 1.0, \"step\": 0.05, \"default\": 0.4}\nholiday_uplift = 0.4\nimport requests\nfrom datetime import date, timedelta\n\ntoday = date.today()\nhorizon_end = today + timedelta(days=planning_horizon_days)\nhols = []\nfor y in sorted({today.year, horizon_end.year}):\n    r = requests.get(f\"https://date.nager.at/api/v3/publicholidays/{y}/{holiday_market}\", timeout=30)\n    if r.ok:\n        hols += r.json()\nhol_df = pd.DataFrame(hols)\nhol_df['date'] = pd.to_datetime(hol_df['date']).dt.date\nin_window = hol_df[(hol_df['date'] >= today) & (hol_df['date'] <= horizon_end)]\nholidays_in_window = len(in_window)\n# More holidays in the window => higher expected demand => tighter stock runway\nseason_multiplier = round(1 + holiday_uplift * min(holidays_in_window, 3) / 3, 2)\nprint(f\"{holiday_market}: {holidays_in_window} public holiday(s) within {planning_horizon_days} days ({today} -> {horizon_end})\")\nif holidays_in_window:\n    print(in_window[['date', 'localName']].to_string(index=False))\nprint(f\"\\nSeason demand multiplier: x{season_multiplier}\")",
       "output": null,
       "error": null,
       "html": null,
@@ -50,7 +135,7 @@
     },
     {
       "type": "markdown",
-      "code": "### Source 2: DynamoDB (NoSQL)\n\nScan product reviews and recommendations. The `read_dynamodb()` helper handles Decimal conversion and pagination.",
+      "code": "## Step 6 · The 360° product view\n\nAll six signals join on `product_id` into one table — `products360` — spanning **Athena + DynamoDB + S3**. This unified frame is what the decision engine reasons over. Products with no reviews / stock / behavior rows get sensible defaults.",
       "output": null,
       "error": null,
       "html": null,
@@ -59,7 +144,7 @@
     },
     {
       "type": "code",
-      "code": "# Scan DynamoDB tables\nreviews = read_dynamodb('ecommerce-reviews')\nrecommendations = read_dynamodb('ecommerce-recommendations')\n\nprint(f\"✓ Reviews:         {len(reviews)} rows\")\nprint(f\"✓ Recommendations: {len(recommendations)} rows\")\nreviews.head()",
+      "code": "products360 = (product_demand\n    .merge(product_sentiment, on='product_id', how='left')\n    .merge(product_reco,      on='product_id', how='left')\n    .merge(product_stock,     on='product_id', how='left')\n    .merge(demand_signal,     on='product_id', how='left'))\n\n# Sensible defaults where a product has no reviews / stock / behavior rows\nproducts360['review_count']         = products360['review_count'].fillna(0).astype(int)\nproducts360['negative_reviews']     = products360['negative_reviews'].fillna(0).astype(int)\nproducts360['recommended_to_users'] = products360['recommended_to_users'].fillna(0).astype(int)\nproducts360['min_days_of_supply']   = products360['min_days_of_supply'].fillna(999)  # no stock data -> not at risk\nproducts360['on_hand']              = products360['on_hand'].fillna(0)\nprint(f\"360 view: {products360.shape[0]} products x {products360.shape[1]} signals (Athena + DynamoDB + S3)\")\nproducts360[['product_id','name','category','revenue','margin_pct','avg_rating','review_count','recommended_to_users','min_days_of_supply']].head(10)",
       "output": null,
       "error": null,
       "html": null,
@@ -68,7 +153,7 @@
     },
     {
       "type": "markdown",
-      "code": "### Source 3: S3 Files (Raw/Semi-Structured)\n\nRead operational and behavioral data stored as CSV files in S3.",
+      "code": "## Step 7 · The decision engine\n\nA transparent rule set turns signals into an **action** per product, plus a 0–100 **priority score**. This is where the business judgment lives — the sliders are the levers.\n\n⚙️ *Sliders below:* stockout-risk threshold, promote-quality bar, margin floor, and what counts as high demand.\n\n| Action | When |\n|---|---|\n| 🔴 **RESTOCK** | high demand **and** stock runs out within the (season-adjusted) runway |\n| 🟢 **PROMOTE** | high demand, well-rated, healthy margin |\n| 🟡 **INVESTIGATE** | selling but poorly rated — a quality problem |\n| ⚪ **WIND_DOWN** | weak demand and weak/absent ratings |\n| **MONITOR** | everything else |",
       "output": null,
       "error": null,
       "html": null,
@@ -77,7 +162,7 @@
     },
     {
       "type": "code",
-      "code": "# Get bucket name from environment\nimport os\naccount = os.environ.get('ACCOUNT_ID', whoami()['account'])\nbucket = f'microvm-sandbox-artifacts-{account}-us-west-2'\n\n# Load S3 files\nclickstream = read_s3_csv(bucket, 'samples/clickstream_events.csv')\ninventory = read_s3_csv(bucket, 'samples/inventory_daily.csv')\nmarketing = read_s3_csv(bucket, 'samples/marketing_campaigns.csv')\n\nprint(f\"✓ Clickstream: {len(clickstream)} events\")\nprint(f\"✓ Inventory:   {len(inventory)} daily snapshots\")\nprint(f\"✓ Marketing:   {len(marketing)} campaigns\")\nclickstream.head()",
+      "code": "# @param {\"type\": \"slider\", \"min\": 3, \"max\": 45, \"step\": 1, \"default\": 14}\nstockout_risk_days = 14\n# @param {\"type\": \"slider\", \"min\": 3.0, \"max\": 5.0, \"step\": 0.1, \"default\": 4.0}\nmin_rating_to_promote = 4.0\n# @param {\"type\": \"slider\", \"min\": 0, \"max\": 60, \"step\": 5, \"default\": 30}\nmin_margin_pct = 30\n# @param {\"type\": \"slider\", \"min\": 50, \"max\": 95, \"step\": 5, \"default\": 75}\nhigh_demand_percentile = 75\nimport numpy as np\n\nrev_threshold = products360['revenue'].quantile(high_demand_percentile / 100)\neff_stockout_days = stockout_risk_days * season_multiplier  # holidays tighten the runway\n\ndef decide(r):\n    high_demand  = r['revenue'] >= rev_threshold\n    at_risk      = r['min_days_of_supply'] <= eff_stockout_days\n    rated        = r['review_count'] >= 3\n    good_quality = rated and r['avg_rating'] >= min_rating_to_promote\n    poor_quality = rated and r['avg_rating'] < min_rating_to_promote\n    good_margin  = r['margin_pct'] >= min_margin_pct\n    if high_demand and at_risk:                                        return 'RESTOCK'\n    if high_demand and good_quality and good_margin:                   return 'PROMOTE'\n    if poor_quality:                                                   return 'INVESTIGATE'\n    if (not high_demand) and (poor_quality or r['review_count'] == 0): return 'WIND_DOWN'\n    return 'MONITOR'\n\nproducts360['action'] = products360.apply(decide, axis=1)\n\n# Priority score (0-100): revenue + stockout urgency + margin, lifted by holiday season\nrev_n  = products360['revenue'] / products360['revenue'].max()\nrisk_n = (eff_stockout_days - products360['min_days_of_supply']).clip(lower=0) / eff_stockout_days\nmar_n  = (products360['margin_pct'] / 100).clip(0, 1)\nproducts360['priority_score'] = ((0.5 * rev_n + 0.3 * risk_n + 0.2 * mar_n) * 100 * season_multiplier).clip(upper=100).round(1)\n\nprint('Recommended actions:')\nprint(products360['action'].value_counts().to_string())\nprint(f\"\\nHigh-demand cutoff = P{high_demand_percentile} (${rev_threshold:,.0f} revenue) · effective stock runway = {eff_stockout_days:.0f} days (season x{season_multiplier})\")",
       "output": null,
       "error": null,
       "html": null,
@@ -86,7 +171,34 @@
     },
     {
       "type": "markdown",
-      "code": "## Cross-Source Analysis\n\nCombine data across all three backends. Athena, DynamoDB, and S3 results are all pandas DataFrames, so they join seamlessly in-memory.",
+      "code": "## Step 8 · The action plan\n\nThe payoff: how many products fall into each action, where they sit on the margin/revenue map, and the ranked **restock list** to act on first. Change any slider above and re-run to see the plan shift.",
+      "output": null,
+      "error": null,
+      "html": null,
+      "image": null,
+      "executionNumber": null
+    },
+    {
+      "type": "code",
+      "code": "action_counts = products360['action'].value_counts().reset_index()\naction_counts.columns = ['action', 'products']\nplot_bar(action_counts, x='action', y='products', title='Q4 Action Plan — products per recommended action')",
+      "output": null,
+      "error": null,
+      "html": null,
+      "image": null,
+      "executionNumber": null
+    },
+    {
+      "type": "code",
+      "code": "# Portfolio quadrant: where does each product sit, and what should we do about it?\nplot_scatter(products360, x='margin_pct', y='revenue', size='units_sold', color='action',\n             title='Product portfolio — margin vs revenue (bubble = units sold)')",
+      "output": null,
+      "error": null,
+      "html": null,
+      "image": null,
+      "executionNumber": null
+    },
+    {
+      "type": "code",
+      "code": "# @param {\"type\": \"slider\", \"min\": 5, \"max\": 30, \"step\": 1, \"default\": 10}\ntop_n = 10\nrestock = products360[products360['action'] == 'RESTOCK'].sort_values('priority_score', ascending=False).head(top_n)\nif len(restock):\n    plot_bar(restock, x='name', y='priority_score', color='category',\n             title=f'Top {top_n} RESTOCK priorities before the peak')\nelse:\n    print(\"No products flagged RESTOCK at current settings — try lowering 'stockout_risk_days' or 'high_demand_percentile'.\")\nrestock[['product_id','name','category','revenue','margin_pct','avg_rating','min_days_of_supply','recommended_to_users','priority_score']]",
       "output": null,
       "error": null,
       "html": null,
@@ -95,70 +207,7 @@
     },
     {
       "type": "markdown",
-      "code": "### Join: Orders × Products × Reviews\n\nJoin Athena orders with products, then enrich with DynamoDB review ratings.",
-      "output": null,
-      "error": null,
-      "html": null,
-      "image": null,
-      "executionNumber": null
-    },
-    {
-      "type": "code",
-      "code": "# Join orders with products (both from Athena)\norder_details = orders.merge(products[['product_id', 'name', 'category', 'brand']], on='product_id', how='left')\n\n# Calculate average review rating per product from DynamoDB\navg_reviews = reviews.groupby('productId').agg(\n    avg_rating=('rating', 'mean'),\n    review_count=('reviewId', 'count')\n).reset_index()\n\n# Enrich with review data\norder_details = order_details.merge(\n    avg_reviews, left_on='product_id', right_on='productId', how='left'\n)\n\nprint(f\"✓ Merged dataset: {len(order_details)} rows × {len(order_details.columns)} cols\")\nprint(f\"  Sources: Athena (orders + products) + DynamoDB (reviews)\")\norder_details[['order_id', 'product_id', 'name', 'category', 'total', 'avg_rating', 'review_count']].head(10)",
-      "output": null,
-      "error": null,
-      "html": null,
-      "image": null,
-      "executionNumber": null
-    },
-    {
-      "type": "markdown",
-      "code": "### Revenue by Category & Country\n\nUsing the merged data to analyze revenue patterns.",
-      "output": null,
-      "error": null,
-      "html": null,
-      "image": null,
-      "executionNumber": null
-    },
-    {
-      "type": "code",
-      "code": "# Revenue by category\ncategory_revenue = order_details.groupby('category').agg(\n    total_revenue=('total', 'sum'),\n    order_count=('order_id', 'count'),\n    avg_order=('total', 'mean')\n).round(2).sort_values('total_revenue', ascending=False)\n\nprint(\"Revenue by Product Category:\")\ncategory_revenue",
-      "output": null,
-      "error": null,
-      "html": null,
-      "image": null,
-      "executionNumber": null
-    },
-    {
-      "type": "code",
-      "code": "# Revenue by shipping country\ncountry_revenue = order_details.groupby('shipping_country').agg(\n    total_revenue=('total', 'sum'),\n    order_count=('order_id', 'count')\n).round(2).sort_values('total_revenue', ascending=False)\n\nplot_bar(country_revenue.reset_index(), x='shipping_country', y='total_revenue', title='Revenue by Shipping Country')",
-      "output": null,
-      "error": null,
-      "html": null,
-      "image": null,
-      "executionNumber": null
-    },
-    {
-      "type": "markdown",
-      "code": "## Visualization: Multi-Source Dashboard\n\nUsing `plot_*` helpers for interactive Plotly charts with data from all sources.",
-      "output": null,
-      "error": null,
-      "html": null,
-      "image": null,
-      "executionNumber": null
-    },
-    {
-      "type": "code",
-      "code": "# Clickstream funnel (S3 data)\nfunnel = clickstream.groupby('action').size().reset_index(name='count').sort_values('count', ascending=False)\nplot_bar(funnel, x='action', y='count', title='Clickstream Event Distribution (S3)')",
-      "output": null,
-      "error": null,
-      "html": null,
-      "image": null,
-      "executionNumber": null
-    },
-    {
-      "type": "code",
-      "code": "# Review ratings distribution (DynamoDB data)\nrating_dist = reviews.groupby('rating').size().reset_index(name='count')\nplot_bar(rating_dist, x='rating', y='count', title='Product Review Ratings (DynamoDB)')",
+      "code": "## Make it yours\n\n- **App mode:** the sliders become the app's inputs — ship this as an internal *Q4 Planner* where an ops lead picks a market and risk appetite and gets an action list back.\n- **Extend it:** fold in `marketing_campaigns.csv` (S3) to weight PROMOTE by channel ROI, or bring in World Bank GDP (public API) to size international expansion.\n- **Trust it:** every number traces back to a source cell — Athena SQL, DynamoDB SQL, or S3 — so the plan is auditable, not a black box.",
       "output": null,
       "error": null,
       "html": null,

@@ -77,7 +77,7 @@
     },
     {
       "type": "code",
-      "code": "# Preview first 5 rows from S3 without downloading the full file\npreview = head_s3(info['bucket'], \"samples/clickstream_events.csv\", n=5)\npreview",
+      "code": "# @param {\"type\": \"slider\", \"min\": 1, \"max\": 20, \"step\": 1, \"default\": 5}\npreview_rows = 5\n# Preview first N rows from S3 without downloading the full file\npreview = head_s3(info['bucket'], \"samples/clickstream_events.csv\", n=preview_rows)\npreview",
       "output": null,
       "error": null,
       "html": null,
@@ -109,7 +109,7 @@
     },
     {
       "type": "code",
-      "code": "# Interactive bar chart\ncountry_rev = df.groupby('shipping_country')['total'].sum().reset_index()\nplot_bar(country_rev, x='shipping_country', y='total', title='Revenue by Country')",
+      "code": "# @param {\"type\": \"slider\", \"min\": 3, \"max\": 15, \"step\": 1, \"default\": 10}\ntop_n_countries = 10\n# Interactive bar chart\ncountry_rev = df.groupby('shipping_country')['total'].sum().reset_index().sort_values('total', ascending=False).head(top_n_countries)\nplot_bar(country_rev, x='shipping_country', y='total', title=f'Top {top_n_countries} Countries by Revenue')",
       "output": null,
       "error": null,
       "html": null,
@@ -125,7 +125,7 @@
     },
     {
       "type": "code",
-      "code": "# Interactive histogram\nplot_histogram(df, 'total', bins=25, title='Order Total Distribution')",
+      "code": "# @param {\"type\": \"slider\", \"min\": 5, \"max\": 50, \"step\": 5, \"default\": 25}\nhist_bins = 25\n# Interactive histogram\nplot_histogram(df, 'total', bins=hist_bins, title='Order Total Distribution')",
       "output": null,
       "error": null,
       "html": null,
