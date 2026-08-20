@@ -388,6 +388,7 @@ export default function DataSourcesPanel({
   uploadedFiles,
   onUploadFile,
   onDeleteFile,
+  onDeleteS3File,
   onInsertCode,
   activeTab,
   sources = [],
@@ -472,6 +473,15 @@ export default function DataSourcesPanel({
           <span className="sidebar-file-name">{displayName || src.display_name}</span>
           <span className="sidebar-file-meta">{sourceMeta(src)}</span>
         </div>
+        {src.source_type === 's3' && src.deletable && onDeleteS3File && (
+          <button
+            className="sidebar-file-delete"
+            onClick={(e) => { e.stopPropagation(); onDeleteS3File(src) }}
+            title="Delete file from S3"
+          >
+            <IconX width={11} height={11} />
+          </button>
+        )}
         <SchemaExpander sourceType={src.source_type} sourceId={src.source_id} onInsertCode={onInsertCode} />
         {entityDocMap[eKey] && (
           <EntityDocBadge

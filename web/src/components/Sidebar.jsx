@@ -42,6 +42,7 @@ export default function Sidebar({
   onRenameTab,
   onUploadFile,
   onDeleteFile,
+  onDeleteS3File,
   onLoadSample,
   onInsertCode,
   cells = [],
@@ -526,6 +527,7 @@ export default function Sidebar({
               uploadedFiles={uploadedFiles}
               onUploadFile={onUploadFile}
               onDeleteFile={onDeleteFile}
+              onDeleteS3File={onDeleteS3File}
               onInsertCode={onInsertCode}
               activeTab={activeTab}
               sources={sources}

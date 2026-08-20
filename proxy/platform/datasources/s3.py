@@ -44,6 +44,13 @@ class S3SchemaProvider(DataSourceProvider):
             p.strip() for p in os.environ.get("DATASOURCE_S3_PREFIXES", "samples/,user-data/").split(",")
             if p.strip()
         ]
+        # Prefixes whose files a user may DELETE from the panel (subset of the scan
+        # prefixes). Declarative via config.sh (DATASOURCE_S3_DELETABLE_PREFIXES);
+        # blank disables S3 deletion. Deletes trigger a Notebook Intel deletion update.
+        self._deletable_prefixes = [
+            p.strip() for p in os.environ.get("DATASOURCE_S3_DELETABLE_PREFIXES", "user-data/").split(",")
+            if p.strip()
+        ]
         self._cache: dict[str, tuple[float, SourceSchema]] = {}
 
     @property
@@ -84,6 +91,9 @@ class S3SchemaProvider(DataSourceProvider):
                                 "size_bytes": size_bytes,
                                 "uri": uri,
                                 "extension": ext,
+                                # Surfaced to the panel so it can show a delete button
+                                # only for files under a configured deletable prefix.
+                                "deletable": any(key.startswith(p) for p in self._deletable_prefixes),
                             },
                         ))
         except Exception as e:
@@ -221,6 +231,34 @@ class S3SchemaProvider(DataSourceProvider):
             return parts[0], parts[1] if len(parts) > 1 else ""
         # Assume default bucket
         return self._bucket, source_id
+
+    # --- Deletion (panel "delete file" for user-owned prefixes) -----------
+    def is_deletable(self, source_id: str) -> bool:
+        """
+        True only if source_id points at an object in the artifact bucket whose key
+        is under a configured deletable prefix. Guards the delete endpoint so users
+        can't remove sample data or arbitrary keys.
+        """
+        if not self._deletable_prefixes:
+            return False
+        bucket, key = self._parse_s3_path(source_id)
+        if not key:
+            return False
+        if self._bucket and bucket and bucket != self._bucket:
+            return False
+        return any(key.startswith(p) for p in self._deletable_prefixes)
+
+    def delete(self, source_id: str) -> None:
+        """
+        Delete an S3 object. Caller MUST validate is_deletable() first.
+        Raises on failure (so the route can surface a 500).
+        """
+        bucket, key = self._parse_s3_path(source_id)
+        s3 = boto3.client("s3", region_name=self._region)
+        s3.delete_object(Bucket=bucket, Key=key)
+        # Drop any cached schema for the removed object.
+        self._cache.pop(source_id, None)
+        self._cache.pop(f"s3://{bucket}/{key}", None)
 
     def _schema_from_csv(self, s3, bucket: str, key: str) -> tuple[list[ColumnInfo], Optional[int]]:
         """Read CSV header + sample rows to infer schema."""

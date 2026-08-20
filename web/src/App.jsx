@@ -715,6 +715,7 @@ export default function App() {
 
   const intelTriggerTimer = useRef(null)
   const intelDeleteTimer = useRef(null)
+  const intelS3DeleteTimer = useRef(null)
 
   // After a file upload triggers an intel (re)generation — full OR delta — watch for
   // that run to finish, then refresh the Data Sources panel so the newly-uploaded
@@ -857,6 +858,49 @@ export default function App() {
     }
   }, [activeTabId, tabs, watchIntelThenRefreshDataSources])
 
+  // Delete an S3 file (restricted server-side to configured deletable prefixes,
+  // e.g. user-data/). Mirrors the local-file delete: remove the object, refresh the
+  // Data Sources panel, then trigger a debounced Notebook Intel deletion update so
+  // insights tied to the removed file are pruned. `src` is the discovered source
+  // object; src.source_id is the canonical S3 URI ('s3://bucket/key').
+  const deleteS3File = useCallback(async (src) => {
+    const sourceId = src?.source_id
+    if (!sourceId) return
+    try {
+      const resp = await fetch(`${PROXY_URL}/datasources/s3-file?source_id=${encodeURIComponent(sourceId)}`, {
+        method: 'DELETE',
+      })
+      if (!resp.ok) {
+        const err = await resp.json().catch(() => ({}))
+        alert(err.error || `Delete failed: ${resp.status}`)
+        return
+      }
+    } catch (e) {
+      logError('deleteS3File', e)
+      return
+    }
+
+    // Remove the row immediately (backend discover() will also no longer list it).
+    window.dispatchEvent(new CustomEvent('refresh-datasources'))
+
+    // Deletion intel: prune insights tied to the removed S3 file. Session-scoped like
+    // local deletes; debounced 2s. Backend no-ops if there's no existing report.
+    const activeTab = tabs.find(t => t.id === activeTabId)
+    if (activeTab?.sessionId) {
+      clearTimeout(intelS3DeleteTimer.current)
+      const triggerSessionId = activeTab.sessionId
+      intelS3DeleteTimer.current = setTimeout(() => {
+        fetch(`${PROXY_URL}/workbook-intel/generate`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-Session-Id': triggerSessionId },
+          body: JSON.stringify({ trigger: 'file_delete', deleted_source: sourceId }),
+        })
+          .then(() => watchIntelThenRefreshDataSources(triggerSessionId))
+          .catch(() => {})
+      }, 2000)
+    }
+  }, [activeTabId, tabs, watchIntelThenRefreshDataSources])
+
 
 
   const loadSample = useCallback(async (sampleUrl, sampleName) => {
@@ -992,6 +1036,7 @@ export default function App() {
           onRenameTab={renameTab}
           onUploadFile={uploadFile}
           onDeleteFile={deleteFile}
+          onDeleteS3File={deleteS3File}
           onLoadSample={loadSample}
           onInsertCode={insertCode}
           cells={(tabs.find(t => t.id === activeTabId)?._cells) || []}

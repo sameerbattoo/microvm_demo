@@ -101,6 +101,11 @@ export ATHENA_WORKGROUP="microvm-demo"
 export DATASOURCE_ATHENA_DATABASES="${ATHENA_DB}"
 # S3: comma-separated key prefixes to scan (one level deep).
 export DATASOURCE_S3_PREFIXES="samples/,user-data/"
+# S3: comma-separated prefixes whose files a user may DELETE from the Data Sources
+# panel. Should be a subset of DATASOURCE_S3_PREFIXES. Deleting a file removes the
+# S3 object and triggers a Notebook Intel deletion update (like local file delete).
+# Leave blank to disable S3 deletion entirely.
+export DATASOURCE_S3_DELETABLE_PREFIXES="user-data/"
 # DynamoDB: comma-separated substrings; only tables whose name contains one are shown.
 export DATASOURCE_DDB_NAME_FILTERS="microvm,demo,ecommerce"
 

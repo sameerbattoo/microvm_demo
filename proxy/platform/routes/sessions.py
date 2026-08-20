@@ -478,6 +478,52 @@ async def get_datasource_snippet(source_type: str, source_id: str, language: str
     return {"code": code, "cell_type": cell_type}
 
 
+@router.delete("/datasources/s3-file")
+async def delete_datasource_s3_file(source_id: str, request: Request):
+    """
+    Delete an S3 file from the artifact bucket. Restricted to keys under a
+    configured deletable prefix (DATASOURCE_S3_DELETABLE_PREFIXES, e.g. user-data/)
+    so users can't remove sample data or arbitrary objects.
+
+    Args:
+        source_id: S3 URI ('s3://bucket/key') of the file to delete.
+
+    Returns:
+        {"deleted": "<source_id>"} on success. 403 if the key isn't in a deletable
+        prefix; 400 for unknown provider; 500 if the S3 delete fails.
+    """
+    from proxy.platform.datasources import registry
+
+    provider = registry.get_provider("s3")
+    if not provider:
+        return Response(
+            content='{"error": "S3 provider unavailable"}',
+            status_code=400,
+            media_type="application/json",
+        )
+
+    if not provider.is_deletable(source_id):
+        logger.warning(f"Rejected S3 delete (not in a deletable prefix): {source_id}")
+        return Response(
+            content=json.dumps({"error": "This file is not in a deletable location."}),
+            status_code=403,
+            media_type="application/json",
+        )
+
+    try:
+        provider.delete(source_id)
+        logger.info(f"Deleted S3 file: {source_id}")
+    except Exception as e:
+        logger.error(f"S3 delete failed for {source_id}: {e}")
+        return Response(
+            content=json.dumps({"error": f"Delete failed: {e}"}),
+            status_code=500,
+            media_type="application/json",
+        )
+
+    return {"deleted": source_id}
+
+
 @router.get("/secrets")
 async def list_secrets(request: Request):
     """List available secrets from AWS Secrets Manager (names only, not values)."""
