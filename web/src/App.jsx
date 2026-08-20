@@ -6,6 +6,13 @@ import TerminalPanel from './components/panels/TerminalPanel'
 import LogsPanel from './components/LogsPanel'
 import IntelPanel from './components/IntelPanel'
 import { ConfirmModal, InputModal } from './components/Modal'
+import WelcomeScreen from './components/WelcomeScreen'
+import { useInstances } from './hooks/useInstances'
+import { useTabsPersistence } from './hooks/useTabsPersistence'
+import { useNotebookFiles } from './hooks/useNotebookFiles'
+import { useSamplesImport } from './hooks/useSamplesImport'
+import { useTheme } from './hooks/useTheme'
+import { useBottomPanel } from './hooks/useBottomPanel'
 import { IconZap, IconSun, IconMoon, IconFlame, IconTerminal, IconLogs, IconIntel } from './components/Icons'
 import { PROXY_URL } from './config'
 import { logError } from './services/logger'
@@ -65,215 +72,43 @@ export default function App() {
     } catch {}
     return null
   })
-  const [instances, setInstances] = useState({})
-  const [vmMetrics, setVmMetrics] = useState({})  // microvm_id -> latest metrics
   const [pollIntervalMs, setPollIntervalMs] = useState(DEFAULT_POLL_INTERVAL_MS)
-  const saveTimerRef = useRef(null)
 
-  // Fetch metrics for a specific VM (called after cell execution, not on a timer)
-  const refreshMetrics = useCallback(async (microvmId) => {
-    if (!microvmId) return
-    try {
-      const resp = await fetch(`${PROXY_URL}/instances/metrics?microvm_id=${microvmId}`)
-      if (resp.ok) {
-        const data = await resp.json()
-        if (data.metrics) setVmMetrics(prev => ({ ...prev, ...data.metrics }))
-      }
-    } catch (e) { logError('fetchInstances', e) }
-  }, [])
+  // Persist tabs (localStorage + API, debounced), load/migrate from API on mount,
+  // and persist the active tab id.
+  useTabsPersistence({ tabs, setTabs, activeTabId, setActiveTabId })
 
-  // Persist tabs to localStorage (debounced 1.5s to avoid thrashing during typing)
-  useEffect(() => {
-    if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
-    saveTimerRef.current = setTimeout(() => {
-    const toSave = tabs.map(({ _loadedCells, ...tab }) => {
-      // Persist cells with code and text outputs, but strip base64 images
-      const cells = (tab._cells || []).map(c => ({
-        id: c.id,
-        type: c.type || 'code',
-        code: c.code || '',
-        output: c.output || null,
-        error: c.error || null,
-        html: c.html || null,
-        image: null, // Strip base64 images (too large for localStorage)
-        status: c.output || c.error || c.html ? 'success' : 'idle',
-        executionNumber: c.executionNumber || null,
-        executionTime: c.executionTime || null,
-        lastExecutedCode: c.lastExecutedCode || null,
-        aiExplanation: c.aiExplanation || null,
-      }))
-      return { ...tab, _cells: cells.length > 0 ? cells : undefined }
-    })
-    try {
-      localStorage.setItem('microvm-notebooks', JSON.stringify(toSave))
-    } catch (e) {
-      // If localStorage is full (quota exceeded), save without outputs
-      const minimal = tabs.map(({ _cells, _loadedCells, ...rest }) => ({
-        ...rest,
-        _cells: (_cells || []).map(c => ({ id: c.id, type: c.type || 'code', code: c.code || '', output: null, error: null, html: null, image: null, status: 'idle', executionNumber: null, executionTime: null, lastExecutedCode: null })),
-      }))
-      try {
-        localStorage.setItem('microvm-notebooks', JSON.stringify(minimal))
-      } catch {}
-    }
-    }, 1500)
-    return () => { if (saveTimerRef.current) clearTimeout(saveTimerRef.current) }
-  }, [tabs])
-
-  // Also persist to API (debounced, non-blocking)
-  const apiSaveTimerRef = useRef(null)
-  useEffect(() => {
-    if (apiSaveTimerRef.current) clearTimeout(apiSaveTimerRef.current)
-    apiSaveTimerRef.current = setTimeout(() => {
-      tabs.forEach(tab => {
-        const cells = (tab._cells || []).map(c => ({
-          type: c.type || 'code',
-          code: c.code || '',
-          output: c.output || null,
-          error: c.error || null,
-          html: c.html || null,
-          image: c.image || null,
-          aiExplanation: c.aiExplanation || null,
-        }))
-        apiSaveNotebook({
-          id: String(tab.id),
-          name: tab.name,
-          description: tab.description || '',
-          tag: tab.tag || 'Drafts',
-          cells,
-          session_id: tab.sessionId || null,
-          microvm_id: tab.microvmId || null,
-          checkpoint_enabled: tab.checkpointEnabled || false,
-        }).catch(() => {})  // Non-blocking — localStorage is the safety net
-      })
-    }, 3000)
-    return () => { if (apiSaveTimerRef.current) clearTimeout(apiSaveTimerRef.current) }
-  }, [tabs])
-
-  // On first mount: try to load notebooks from API, migrate localStorage if needed
-  useEffect(() => {
-    async function loadFromApi() {
-      // Try migration first (if localStorage has data but API doesn't)
-      if (!localStorage.getItem('microvm-notebooks-migrated')) {
-        await migrateFromLocalStorage()
-      }
-
-      // Fetch from API
-      const apiNotebooks = await fetchNotebooks()
-      if (apiNotebooks && apiNotebooks.length > 0) {
-        if (tabs.length === 0) {
-          // API has notebooks but local state is empty — load from API
-          const loaded = apiNotebooks.map(nb => ({
-            id: nb.id.includes('-') ? nb.id : parseInt(nb.id) || nb.id,
-            name: nb.name,
-            description: nb.description || '',
-            tag: nb.tag || 'Drafts',
-            _cells: nb.cells || [],
-            microvmEndpoint: null,
-            microvmId: nb.microvm_id || null,
-            status: 'disconnected',
-            mode: null,
-            sessionId: nb.session_id || null,
-            checkpointEnabled: nb.checkpoint_enabled || false,
-          }))
-          setTabs(loaded)
-          if (loaded.length > 0 && !activeTabId) {
-            setActiveTabId(loaded[0].id)
-          }
-        } else {
-          // Enrich existing tabs with images from API (localStorage strips them)
-          const apiMap = {}
-          apiNotebooks.forEach(nb => { apiMap[nb.id] = nb })
-          setTabs(prev => prev.map(tab => {
-            const apiNb = apiMap[String(tab.id)]
-            if (!apiNb || !apiNb.cells) return tab
-            const apiCells = apiNb.cells
-            const enrichedCells = (tab._cells || []).map((cell, idx) => {
-              if (!cell.image && apiCells[idx]?.image) {
-                return { ...cell, image: apiCells[idx].image }
-              }
-              return cell
-            })
-            return { ...tab, _cells: enrichedCells }
-          }))
-        }
-
-        // Load chat messages from DB for each notebook (non-blocking)
-        apiNotebooks.forEach(async (nb) => {
-          const tabId = nb.id.includes('-') ? nb.id : parseInt(nb.id) || nb.id
-          const sessionId = nb.session_id
-          if (sessionId) {
-            const msgs = await loadChatMessages(sessionId)
-            if (msgs && msgs.length > 0) {
-              setTabs(prev => prev.map(t => t.id === tabId ? { ...t, _chatMessages: msgs } : t))
-            }
-          }
-        })
-      }
-    }
-    loadFromApi()
-  }, [])  // eslint-disable-line react-hooks/exhaustive-deps
-
-  useEffect(() => {
-    localStorage.setItem('microvm-active-tab', JSON.stringify(activeTabId))
-  }, [activeTabId])
-
-  // Theme state
-  const [theme, setTheme] = useState(() => {
-    return localStorage.getItem('microvm-theme') || 'dark'
-  })
-
-  useEffect(() => {
-    document.documentElement.setAttribute('data-theme', theme)
-    localStorage.setItem('microvm-theme', theme)
-  }, [theme])
-
-  const toggleTheme = useCallback(() => {
-    setTheme(prev => {
-      if (prev === 'dark') return 'light'
-      if (prev === 'light') return 'ember'
-      return 'dark'
-    })
-  }, [])
+  // Theme state (persisted, 3-way toggle)
+  const { theme, toggleTheme } = useTheme()
 
   // Modal state
   const [modal, setModal] = useState(null)
   const [showAiChat, setShowAiChat] = useState(true)
-  const [bottomPanelTabs, setBottomPanelTabs] = useState(new Set()) // Set of 'terminal' | 'logs'
-  const [bottomPanelActive, setBottomPanelActive] = useState(null) // which tab is visible
-  const [bottomPanelHeight, setBottomPanelHeight] = useState(220) // resizable height
 
-  const toggleBottomTab = (tab) => {
-    setBottomPanelTabs(prev => {
-      const next = new Set(prev)
-      if (next.has(tab)) {
-        // Close this tab
-        next.delete(tab)
-        // If it was active, switch to the other or close panel
-        if (bottomPanelActive === tab) {
-          const remaining = [...next]
-          setBottomPanelActive(remaining.length > 0 ? remaining[0] : null)
-        }
-      } else {
-        // Open this tab and make it active
-        next.add(tab)
-        setBottomPanelActive(tab)
-      }
-      return next
-    })
-  }
+  // MicroVM instances + lifecycle (polling, auto-connect/rotation/termination sync,
+  // metrics, attach/resume/suspend/terminate). Single source of truth for VM state.
+  const {
+    instances, vmMetrics, refreshMetrics, markVmRunning, fetchInstances,
+    attachInstance, resumeInstance, terminateInstance, confirmTerminateInstance,
+    terminateAndSave, suspendInstance,
+  } = useInstances({ tabs, setTabs, setActiveTabId, setModal, createTab, pollIntervalMs })
 
-  const closeBottomTab = (tab) => {
-    setBottomPanelTabs(prev => {
-      const next = new Set(prev)
-      next.delete(tab)
-      if (bottomPanelActive === tab) {
-        const remaining = [...next]
-        setBottomPanelActive(remaining.length > 0 ? remaining[0] : null)
-      }
-      return next
-    })
-  }
+  // Sandbox + S3 file operations (list/upload/delete) with Intel (re)generation.
+  const { fetchFiles, uploadFile, deleteFile, deleteS3File } = useNotebookFiles({ tabs, setTabs, activeTabId })
+
+  // Welcome-screen sample gallery + git import + sample loading.
+  const {
+    loadSample, showGitImport, setShowGitImport, gitImportUrl, setGitImportUrl,
+    gitImportLoading, importFromGitUrl, showSampleGallery, setShowSampleGallery,
+    toggleSampleGallery, samples,
+  } = useSamplesImport({ createTab, setTabs, setActiveTabId, setShowAiChat })
+  // Bottom panel (terminal / logs / intel) — open tabs, active tab, height.
+  const {
+    bottomPanelTabs, setBottomPanelTabs,
+    bottomPanelActive, setBottomPanelActive,
+    bottomPanelHeight, setBottomPanelHeight,
+    toggleBottomTab, closeBottomTab,
+  } = useBottomPanel()
   const [aiAvailable, setAiAvailable] = useState(false)
   const [intelShownForSession, setIntelShownForSession] = useState(null) // tracks which session we auto-showed intel for
 
@@ -348,12 +183,15 @@ export default function App() {
     poll()  // check right away — no blind upfront wait
 
     return () => { pollState.cancelled = true }
-  }, [activeTabId, tabs.find?.(t => t?.id === activeTabId)?.status, intelShownForSession])
+    // NOTE: sessionId MUST be a dependency. On some connect paths `status` flips to
+    // 'connected' before the tab's sessionId is set (e.g. auto-reconnect in
+    // useInstances/useNotebookCells updates status without sessionId). Without
+    // sessionId here, the effect runs once with sessionId=null, bails at the guard
+    // above, and never re-runs when the id lands — so the poll never starts and the
+    // Intel tab never auto-opens even though generation completed.
+  }, [activeTabId, tabs.find?.(t => t?.id === activeTabId)?.status, tabs.find?.(t => t?.id === activeTabId)?.sessionId, intelShownForSession])
   const [newNotebookName, setNewNotebookName] = useState('')
   const [newNotebookDesc, setNewNotebookDesc] = useState('')
-
-  // Track previous instances to detect termination transitions
-  const prevInstancesRef = useRef({})
 
   // Global keyboard shortcuts
   useEffect(() => {
@@ -399,130 +237,6 @@ export default function App() {
     return () => window.removeEventListener('keydown', handler)
   }, [])
 
-  // Fetch instances periodically — this is THE SINGLE SOURCE OF TRUTH for VM state.
-  // No copies (_vmState) are stored on tabs. Components derive state from `instances[tab.microvmId]`.
-  const fetchInstances = useCallback(async () => {
-    try {
-      const resp = await fetch(`${PROXY_URL}/instances`)
-      if (resp.ok) {
-        const data = await resp.json()
-        const inst = data.instances || {}
-        setInstances(inst)
-
-        // Only sync connection-related info on tabs (endpoint, status)
-        // NOT vm state — that comes from `instances` directly
-        setTabs(prev => {
-          const prevInst = prevInstancesRef.current
-          let changed = false
-          const updated = prev.map(tab => {
-            if (tab.microvmId && inst[tab.microvmId]) {
-              const vmState = inst[tab.microvmId].state || 'UNKNOWN'
-              const endpoint = inst[tab.microvmId].endpoint
-
-              // Auto-connect: tab has a VM that is RUNNING/SUSPENDED but tab is not connected
-              if ((tab.status === 'connecting' || tab.status === 'disconnected') && (vmState === 'RUNNING' || vmState === 'SUSPENDED') && endpoint) {
-                changed = true
-                return {
-                  ...tab,
-                  microvmEndpoint: `${PROXY_URL}/proxy`,
-                  microvmMemory: inst[tab.microvmId].memory_mib || tab.microvmMemory,
-                  status: 'connected',
-                  mode: 'microvm',
-                }
-              }
-            } else if (tab.microvmId && !inst[tab.microvmId]) {
-              // VM not in instances → might be terminated OR rotated to a new VM
-              // Don't interfere with a tab that's currently launching a new VM
-              if (tab.status === 'launching') return tab
-
-              // Check if rotation happened — look for a new VM with our session_id
-              if (tab.sessionId) {
-                const rotatedVm = Object.entries(inst).find(([, info]) => info.session_id === tab.sessionId)
-                if (rotatedVm) {
-                  // Rotation completed — update tab to point to new VM
-                  const [newVmId, newInfo] = rotatedVm
-                  changed = true
-                  return {
-                    ...tab,
-                    microvmId: newVmId,
-                    microvmEndpoint: `${PROXY_URL}/proxy`,
-                    status: 'connected',
-                  }
-                }
-              }
-
-              // Not rotation — actual termination
-              const updates = {
-                status: 'disconnected',
-                microvmEndpoint: null,
-                sessionSaved: true,
-              }
-              if (tab.status !== 'disconnected' || !tab.sessionSaved) {
-                changed = true
-                return { ...tab, ...updates }
-              }
-            }
-            return tab
-          })
-          prevInstancesRef.current = inst
-          return changed ? updated : prev
-        })
-      }
-    } catch {
-      // Proxy not available
-    }
-  }, [])
-
-  // Helper: immediately update a single VM's state in the instances map
-  // Used after successful cell execution on a suspended VM (don't wait for poll)
-  const markVmRunning = useCallback((microvmId) => {
-    setInstances(prev => {
-      if (!prev[microvmId]) return prev
-      if (prev[microvmId].state === 'RUNNING') return prev
-      return { ...prev, [microvmId]: { ...prev[microvmId], state: 'RUNNING' } }
-    })
-  }, [])
-
-  // Fetch files from the active MicroVM (stored per-tab to avoid cross-VM contamination)
-  const fetchFiles = useCallback(async () => {
-    const activeTab = tabs.find(t => t.id === activeTabId)
-    if (!activeTab || activeTab.status !== 'connected') {
-      return
-    }
-
-    const headers = {}
-    if (activeTab.sessionId) {
-      headers['X-Session-Id'] = activeTab.sessionId
-    }
-
-    try {
-      const resp = await fetch(`${activeTab.microvmEndpoint}/files`, { headers })
-      if (resp.ok) {
-        const data = await resp.json()
-        const files = (data.files || []).map(f => ({
-          name: f.name,
-          size: f.size,
-          variable: f.name.split('/').pop().replace(/\.[^.]+$/, '').replace(/[-\s.]/g, '_'),
-          status: 'ready',
-        }))
-        // Store files on the tab object so each VM has its own file list
-        setTabs(prev => prev.map(t => t.id === activeTabId ? { ...t, _localFiles: files } : t))
-      }
-    } catch {
-      // Ignore — might not be connected yet
-    }
-  }, [tabs, activeTabId])
-
-  useEffect(() => {
-    fetchInstances()
-    const interval = setInterval(fetchInstances, pollIntervalMs)
-
-    // Metrics are NOT polled continuously — that would keep VMs awake.
-    // Instead, metrics are fetched on-demand after cell execution via refreshMetrics().
-
-    return () => { clearInterval(interval) }
-  }, [fetchInstances, pollIntervalMs])
-
   // Fetch poll interval from proxy config
   useEffect(() => {
     fetch(`${PROXY_URL}/health`)
@@ -544,11 +258,6 @@ export default function App() {
   // NOTE: Auto-reconnect is handled by fetchInstances polling (runs on mount + every 10s).
   // It auto-connects any tab whose VM is RUNNING or SUSPENDED.
   // No separate mount effect needed — fetchInstances is the single source of truth.
-
-  // Refresh files when active tab changes or connects
-  useEffect(() => {
-    fetchFiles()
-  }, [activeTabId, tabs.find(t => t.id === activeTabId)?.status])
 
   const addTab = useCallback(() => {
     setNewNotebookName(`Notebook ${nextTabId}`)
@@ -634,362 +343,6 @@ export default function App() {
   const renameTab = useCallback((tabId, newName) => {
     setTabs(prev => prev.map(t => t.id === tabId ? { ...t, name: newName } : t))
   }, [])
-
-  const attachInstance = useCallback((microvmId, endpoint, memoryMib) => {
-    const tab = createTab(`VM-${microvmId.replace('microvm-', '').slice(0, 8)}`)
-    tab.microvmId = microvmId
-    tab.microvmEndpoint = `${PROXY_URL}/proxy`
-    tab.microvmMemory = memoryMib || 4096
-    tab.status = 'connected'
-    tab.mode = 'microvm'
-    setTabs(prev => [...prev, tab])
-    setActiveTabId(tab.id)
-  }, [])
-
-  const resumeInstance = useCallback(async (microvmId) => {
-    const sessionId = instances[microvmId]?.session_id
-    if (!sessionId) return
-    try {
-      await fetch(`${PROXY_URL}/resume`, { method: 'POST', headers: { 'X-Session-Id': sessionId } })
-      fetchInstances()
-    } catch (e) { logError('resumeVM', e) }
-  }, [fetchInstances, instances])
-
-  const terminateInstance = useCallback(async (microvmId) => {
-    // Check if attached to a notebook
-    const attachedTab = tabs.find(t => t.microvmId === microvmId)
-    if (attachedTab) {
-      setModal({
-        type: 'cannotTerminate',
-        microvmId,
-        notebookName: attachedTab.name,
-      })
-      return
-    }
-    setModal({ type: 'terminateInstance', microvmId })
-  }, [tabs])
-
-  const confirmTerminateInstance = useCallback(async (microvmId) => {
-    setModal(null)
-    try {
-      const sid = instances[microvmId]?.session_id
-      if (sid) await fetch(`${PROXY_URL}/terminate`, { method: 'POST', headers: { 'X-Session-Id': sid } })
-      fetchInstances()
-    } catch (e) { logError('terminateVM', e) }
-  }, [fetchInstances, instances])
-
-  // Terminate & Save: terminates attached VM, detaches from notebook but preserves sessionId for restore
-  const terminateAndSave = useCallback(async (microvmId) => {
-    try {
-      const tab = tabs.find(t => t.microvmId === microvmId)
-      const sid = tab?.sessionId || instances[microvmId]?.session_id
-      if (sid) await fetch(`${PROXY_URL}/terminate`, { method: 'POST', headers: { 'X-Session-Id': sid } })
-      // Detach from notebook tab but keep sessionId for restore
-      setTabs(prev => prev.map(t => {
-        if (t.microvmId !== microvmId) return t
-        return {
-          ...t,
-          microvmId: null,
-          microvmEndpoint: null,
-          status: 'disconnected',
-          mode: null,
-          sessionSaved: true, // Signal that checkpoint was saved — enables "Restore Session"
-        }
-      }))
-      fetchInstances()
-    } catch {}
-  }, [fetchInstances, tabs, instances])
-
-  // Suspend: suspends an attached VM via the AWS API
-  const suspendInstance = useCallback(async (microvmId) => {
-    try {
-      const sid = instances[microvmId]?.session_id || tabs.find(t => t.microvmId === microvmId)?.sessionId
-      if (sid) await fetch(`${PROXY_URL}/suspend`, { method: 'POST', headers: { 'X-Session-Id': sid } })
-      // Immediately update instances state so UI reflects suspension without waiting for poll
-      setInstances(prev => {
-        if (!prev[microvmId]) return prev
-        return { ...prev, [microvmId]: { ...prev[microvmId], state: 'SUSPENDED' } }
-      })
-    } catch {}
-  }, [instances, tabs])
-
-  const intelTriggerTimer = useRef(null)
-  const intelDeleteTimer = useRef(null)
-  const intelS3DeleteTimer = useRef(null)
-
-  // After a file upload triggers an intel (re)generation — full OR delta — watch for
-  // that run to finish, then refresh the Data Sources panel so the newly-uploaded
-  // local file's entity-doc (sparkle) icon appears without a manual refresh.
-  // This is needed in addition to the one-time auto-open poll, which is gated by
-  // intelShownForSession and therefore does NOT re-fire for deltas on the same session.
-  const watchIntelThenRefreshDataSources = useCallback((sessionId) => {
-    if (!sessionId) return
-    let attempts = 0
-    let sawGenerating = false
-    const poll = async () => {
-      attempts++
-      let data = null
-      try {
-        const resp = await fetch(`${PROXY_URL}/workbook-intel`, { headers: { 'X-Session-Id': sessionId } })
-        if (resp.ok) data = await resp.json()
-      } catch { /* transient — retry below */ }
-
-      const status = data?.status
-      if (status === 'generating') {
-        sawGenerating = true
-      }
-      // Done once the run we triggered has produced a ready report. Requiring that we
-      // first observed "generating" avoids refreshing on the pre-existing report before
-      // the delta has actually started.
-      if (status === 'ready' && (sawGenerating || attempts > 2)) {
-        window.dispatchEvent(new CustomEvent('refresh-datasources'))
-        return
-      }
-      if (status === 'error') return
-      if (attempts >= INTEL_MAX_POLL_ATTEMPTS) return
-      const delay = status === 'generating' ? INTEL_GENERATING_POLL_MS : INTEL_IDLE_POLL_MS
-      setTimeout(poll, delay)
-    }
-    poll()
-  }, [])
-
-  const uploadFile = useCallback(async (file) => {
-    // Find the active tab's connection to upload to
-    const activeTab = tabs.find(t => t.id === activeTabId)
-    if (!activeTab || activeTab.status !== 'connected') {
-      alert('Connect to a MicroVM first before uploading files.')
-      return
-    }
-
-    const size = file.size < 1024 * 1024
-      ? `${(file.size / 1024).toFixed(1)} KB`
-      : `${(file.size / (1024 * 1024)).toFixed(1)} MB`
-
-    // Add to list immediately (uploading state)
-    setTabs(prev => prev.map(t => t.id === activeTabId
-      ? { ...t, _localFiles: [...(t._localFiles || []), { name: file.name, size, variable: null, status: 'uploading' }] }
-      : t
-    ))
-
-    // Read as base64
-    const reader = new FileReader()
-    reader.onload = async (ev) => {
-      const base64 = ev.target.result.split(',')[1]
-
-      const headers = { 'Content-Type': 'application/json' }
-      if (activeTab.sessionId) {
-        headers['X-Session-Id'] = activeTab.sessionId
-      }
-
-      try {
-        const response = await fetch(`${activeTab.microvmEndpoint}/upload`, {
-          method: 'POST',
-          headers,
-          body: JSON.stringify({ filename: file.name, data: base64 }),
-        })
-        const result = await response.json()
-
-        setTabs(prev => prev.map(t => t.id === activeTabId
-          ? { ...t, _localFiles: (t._localFiles || []).map(f =>
-              f.name === file.name
-                ? { ...f, variable: result.variable_name || null, status: result.success ? 'ready' : 'error' }
-                : f
-            ) }
-          : t
-        ))
-
-        // Debounced intel trigger: fires 2s after the last successful upload
-        if (result.success && activeTab.sessionId) {
-          clearTimeout(intelTriggerTimer.current)
-          const triggerSessionId = activeTab.sessionId
-          intelTriggerTimer.current = setTimeout(() => {
-            fetch(`${PROXY_URL}/workbook-intel/generate`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json', 'X-Session-Id': triggerSessionId },
-              body: JSON.stringify({ trigger: 'file_upload' }),
-            })
-              .then(() => watchIntelThenRefreshDataSources(triggerSessionId))
-              .catch(() => {})
-          }, 2000)
-        }
-      } catch {
-        setTabs(prev => prev.map(t => t.id === activeTabId
-          ? { ...t, _localFiles: (t._localFiles || []).map(f =>
-              f.name === file.name ? { ...f, status: 'error', variable: 'failed' } : f
-            ) }
-          : t
-        ))
-      }
-    }
-    reader.readAsDataURL(file)
-  }, [tabs, activeTabId, watchIntelThenRefreshDataSources])
-
-  const deleteFile = useCallback(async (filename) => {
-    // Remove from frontend state immediately (optimistic)
-    setTabs(prev => prev.map(t => t.id === activeTabId
-      ? { ...t, _localFiles: (t._localFiles || []).filter(f => f.name !== filename) }
-      : t
-    ))
-    // Also delete from the VM's /tmp so it doesn't reappear on next refresh
-    const activeTab = tabs.find(t => t.id === activeTabId)
-    if (activeTab?.sessionId) {
-      try {
-        await fetch(`${PROXY_URL}/proxy/execute`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'X-Session-Id': activeTab.sessionId },
-          body: JSON.stringify({ code: `import os\ntry:\n    os.remove('/tmp/${filename}')\nexcept FileNotFoundError:\n    pass` }),
-        })
-      } catch (e) { logError('deleteFile', e) }
-
-      // Deletion intel: prune insights tied to the removed file. Mirrors the upload
-      // flow — debounced 2s (batches rapid deletes), then trigger + watch-and-refresh.
-      // The backend no-ops if there's no existing report to prune.
-      clearTimeout(intelDeleteTimer.current)
-      const triggerSessionId = activeTab.sessionId
-      intelDeleteTimer.current = setTimeout(() => {
-        fetch(`${PROXY_URL}/workbook-intel/generate`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'X-Session-Id': triggerSessionId },
-          body: JSON.stringify({ trigger: 'file_delete', deleted_source: `/tmp/${filename}` }),
-        })
-          .then(() => watchIntelThenRefreshDataSources(triggerSessionId))
-          .catch(() => {})
-      }, 2000)
-    }
-  }, [activeTabId, tabs, watchIntelThenRefreshDataSources])
-
-  // Delete an S3 file (restricted server-side to configured deletable prefixes,
-  // e.g. user-data/). Mirrors the local-file delete: remove the object, refresh the
-  // Data Sources panel, then trigger a debounced Notebook Intel deletion update so
-  // insights tied to the removed file are pruned. `src` is the discovered source
-  // object; src.source_id is the canonical S3 URI ('s3://bucket/key').
-  const deleteS3File = useCallback(async (src) => {
-    const sourceId = src?.source_id
-    if (!sourceId) return
-    try {
-      const resp = await fetch(`${PROXY_URL}/datasources/s3-file?source_id=${encodeURIComponent(sourceId)}`, {
-        method: 'DELETE',
-      })
-      if (!resp.ok) {
-        const err = await resp.json().catch(() => ({}))
-        alert(err.error || `Delete failed: ${resp.status}`)
-        return
-      }
-    } catch (e) {
-      logError('deleteS3File', e)
-      return
-    }
-
-    // Remove the row immediately (backend discover() will also no longer list it).
-    window.dispatchEvent(new CustomEvent('refresh-datasources'))
-
-    // Deletion intel: prune insights tied to the removed S3 file. Session-scoped like
-    // local deletes; debounced 2s. Backend no-ops if there's no existing report.
-    const activeTab = tabs.find(t => t.id === activeTabId)
-    if (activeTab?.sessionId) {
-      clearTimeout(intelS3DeleteTimer.current)
-      const triggerSessionId = activeTab.sessionId
-      intelS3DeleteTimer.current = setTimeout(() => {
-        fetch(`${PROXY_URL}/workbook-intel/generate`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'X-Session-Id': triggerSessionId },
-          body: JSON.stringify({ trigger: 'file_delete', deleted_source: sourceId }),
-        })
-          .then(() => watchIntelThenRefreshDataSources(triggerSessionId))
-          .catch(() => {})
-      }, 2000)
-    }
-  }, [activeTabId, tabs, watchIntelThenRefreshDataSources])
-
-
-
-  const loadSample = useCallback(async (sampleUrl, sampleName) => {
-    try {
-      const resp = await fetch(sampleUrl)
-      const notebook = await resp.json()
-
-      const tab = createTab(sampleName || notebook.name, notebook.description || '', 'Samples')
-      tab._loadedCells = notebook.cells
-      tab._cells = notebook.cells.map((c, i) => ({
-        id: Date.now() + Math.random() + i,
-        type: c.type || 'code',
-        code: c.code || '',
-        output: c.output || null,
-        error: c.error || null,
-        html: c.html || null,
-        image: c.image || null,
-        aiExplanation: c.aiExplanation || null,
-        outputVariable: c.outputVariable || null,
-      }))
-      setTabs(prev => [...prev, { ...tab }])
-      setActiveTabId(tab.id)
-      setShowAiChat(true)
-    } catch (err) {
-      alert(`Failed to load sample: ${err.message}`)
-    }
-  }, [])
-
-  const [showGitImport, setShowGitImport] = useState(false)
-  const [gitImportUrl, setGitImportUrl] = useState('')
-  const [gitImportLoading, setGitImportLoading] = useState(false)
-
-  // Sample gallery (welcome screen) — lazily loads the sample manifest on first open
-  const [showSampleGallery, setShowSampleGallery] = useState(false)
-  const [samples, setSamples] = useState([])
-  const [samplesLoaded, setSamplesLoaded] = useState(false)
-
-  const toggleSampleGallery = useCallback(async () => {
-    setShowGitImport(false)
-    setShowSampleGallery(v => !v)
-    if (!samplesLoaded) {
-      try {
-        const resp = await fetch('/samples/index.json')
-        const data = await resp.json()
-        setSamples(Array.isArray(data) ? data : [])
-      } catch { setSamples([]) }
-      setSamplesLoaded(true)
-    }
-  }, [samplesLoaded])
-
-  const importFromGitUrl = useCallback(async () => {
-    if (!gitImportUrl.trim()) return
-    setGitImportLoading(true)
-    try {
-      const resp = await fetch(`${PROXY_URL}/import-from-url`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url: gitImportUrl.trim() }),
-      })
-      if (!resp.ok) {
-        const err = await resp.json().catch(() => ({}))
-        alert(err.error || `Import failed: ${resp.status}`)
-        setGitImportLoading(false)
-        return
-      }
-      const notebook = await resp.json()
-      const tab = createTab(notebook.name || 'Imported', notebook.description || '', 'Imported')
-      tab._loadedCells = notebook.cells
-      tab._cells = notebook.cells.map((c, i) => ({
-        id: Date.now() + Math.random() + i,
-        type: c.type || 'code',
-        code: c.code || '',
-        output: null,
-        error: null,
-        html: null,
-        image: null,
-        outputVariable: c.outputVariable || null,
-      }))
-      tab.sourceUrl = notebook.source_url
-      setTabs(prev => [...prev, { ...tab }])
-      setActiveTabId(tab.id)
-      setShowGitImport(false)
-      setGitImportUrl('')
-      setShowAiChat(true)
-    } catch (err) {
-      alert(`Import error: ${err.message}`)
-    }
-    setGitImportLoading(false)
-  }, [gitImportUrl])
 
   // Listen for "Open Notebook" events from Notebook toolbar (creates a new tab)
   useEffect(() => {
@@ -1107,123 +460,22 @@ export default function App() {
         />
         <main className="app-main">
           {tabs.length === 0 && (
-            <div className="app-empty">
-              <button className="app-empty-theme-btn" onClick={toggleTheme} title={`Switch theme (${theme})`}>
-                {theme === 'dark' ? <IconSun width={16} height={16} /> : theme === 'light' ? <IconFlame width={16} height={16} /> : <IconMoon width={16} height={16} />}
-              </button>
-              <div className="app-empty-icon">
-                <svg width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" fill="rgba(137,180,250,0.2)" stroke="#89b4fa"/>
-                </svg>
-              </div>
-              <h2 className="app-empty-title">Lambda MicroVM Notebook</h2>
-              <p className="app-empty-subtitle">AI-Powered Python & SQL Notebooks on Serverless Firecracker Sandboxes</p>
-              <div className="app-empty-actions">
-                <button className="app-empty-btn app-empty-btn-primary" onClick={addTab}>
-                  + New Notebook
-                </button>
-                <button className="app-empty-btn" onClick={() => {
-                  const input = document.createElement('input')
-                  input.type = 'file'
-                  input.accept = '.json,.notebook.json,.ipynb'
-                  input.onchange = (e) => {
-                    const file = e.target.files?.[0]
-                    if (!file) return
-                    const reader = new FileReader()
-                    reader.onload = (ev) => {
-                      try {
-                        const data = JSON.parse(ev.target.result)
-                        if (data.nbformat && data.cells) {
-                          // Jupyter .ipynb
-                          const cells = data.cells
-                            .filter(c => c.cell_type === 'code' || c.cell_type === 'markdown')
-                            .map(c => {
-                              const code = Array.isArray(c.source) ? c.source.join('') : (c.source || '')
-                              let cellType = c.cell_type === 'markdown' ? 'markdown' : 'code'
-                              let cellCode = code
-                              if (cellType === 'code' && code.trimStart().startsWith('%%sql')) {
-                                cellType = 'sql'
-                                cellCode = code.trimStart().replace(/^%%sql\s*\n?/, '')
-                              }
-                              return { type: cellType, code: cellCode, output: null, error: null, html: null, image: null }
-                            })
-                          window.dispatchEvent(new CustomEvent('open-notebook', { detail: { name: file.name.replace('.ipynb', ''), description: '', tag: null, cells } }))
-                        } else if (data.cells && Array.isArray(data.cells)) {
-                          // Native .notebook.json
-                          window.dispatchEvent(new CustomEvent('open-notebook', { detail: { name: data.name || file.name.replace('.notebook.json', '').replace('.json', ''), description: data.description || '', tag: data.tag || null, cells: data.cells } }))
-                        }
-                      } catch { alert('Invalid notebook file.') }
-                    }
-                    reader.readAsText(file)
-                  }
-                  input.click()
-                }}>
-                  Open Existing
-                </button>
-                <button className={`app-empty-btn${showSampleGallery ? ' app-empty-btn-active' : ''}`} onClick={toggleSampleGallery}>
-                  Open Sample
-                </button>
-                <button className="app-empty-btn" onClick={() => { setShowSampleGallery(false); setShowGitImport(v => !v) }}>
-                  Import from Git URL
-                </button>
-              </div>
-              {showSampleGallery && (
-                <div className="app-empty-samples">
-                  {samples.length === 0 && (
-                    <div className="app-empty-samples-loading">Loading samples…</div>
-                  )}
-                  {samples.map(s => (
-                    <button
-                      key={s.id}
-                      className="sample-card"
-                      onClick={() => loadSample(`/samples/${s.file}`, s.name)}
-                      title={s.description || s.name}
-                    >
-                      <span className="sample-card-icon">{s.icon}</span>
-                      <span className="sample-card-text">
-                        <span className="sample-card-name">{s.name}</span>
-                        {s.description && <span className="sample-card-desc">{s.description}</span>}
-                      </span>
-                    </button>
-                  ))}
-                </div>
-              )}
-              {showGitImport && (
-                <div className="app-empty-git-import">
-                  <input
-                    className="app-empty-git-input"
-                    type="text"
-                    placeholder="Paste GitHub URL (e.g. https://github.com/user/repo/blob/main/notebook.ipynb)"
-                    value={gitImportUrl}
-                    onChange={e => setGitImportUrl(e.target.value)}
-                    onKeyDown={e => { if (e.key === 'Enter') importFromGitUrl(); if (e.key === 'Escape') setShowGitImport(false) }}
-                    autoFocus
-                    disabled={gitImportLoading}
-                  />
-                  <button className="app-empty-git-btn" onClick={importFromGitUrl} disabled={gitImportLoading || !gitImportUrl.trim()}>
-                    {gitImportLoading ? 'Importing...' : 'Import'}
-                  </button>
-                </div>
-              )}
-              <div className="app-empty-hints">
-                <div className="app-empty-hint">
-                  <span className="app-empty-hint-icon">1</span>
-                  <span>Create a notebook and connect to a MicroVM sandbox</span>
-                </div>
-                <div className="app-empty-hint">
-                  <span className="app-empty-hint-icon">2</span>
-                  <span>Write Python or SQL in cells — <kbd>Shift+Enter</kbd> to execute</span>
-                </div>
-                <div className="app-empty-hint">
-                  <span className="app-empty-hint-icon">3</span>
-                  <span>Use the <strong>AI assistant</strong> — toggle any cell to AI mode, describe what you want, and get code generated</span>
-                </div>
-                <div className="app-empty-hint">
-                  <span className="app-empty-hint-icon">4</span>
-                  <span>Click data sources in the sidebar to insert ready-to-run query code</span>
-                </div>
-              </div>
-            </div>
+            <WelcomeScreen
+              theme={theme}
+              onToggleTheme={toggleTheme}
+              onNewNotebook={addTab}
+              showSampleGallery={showSampleGallery}
+              onToggleSampleGallery={toggleSampleGallery}
+              samples={samples}
+              onLoadSample={loadSample}
+              showGitImport={showGitImport}
+              setShowGitImport={setShowGitImport}
+              setShowSampleGallery={setShowSampleGallery}
+              gitImportUrl={gitImportUrl}
+              setGitImportUrl={setGitImportUrl}
+              gitImportLoading={gitImportLoading}
+              onImportFromGitUrl={importFromGitUrl}
+            />
           )}
           {(() => {
             const tab = tabs.find(t => t.id === activeTabId)

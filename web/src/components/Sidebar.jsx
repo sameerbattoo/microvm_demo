@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef, Fragment } from 'react'
 import { IconX, IconNotebook, IconDatabase, IconCode, IconPackage, IconServer, IconBraces, IconTerminal, IconLogs, IconIntel } from './Icons'
 import { PROXY_URL, API_TIMEOUT_MS } from '../config'
 import { fetchWithTimeout } from '../services/fetchWithTimeout'
+import { useDataSources } from '../hooks/useDataSources'
 import './Sidebar.css'
 
 // Panel components
@@ -89,20 +90,14 @@ export default function Sidebar({
   const [pkgLoading, setPkgLoading] = useState(false)
   const [pkgFetched, setPkgFetched] = useState(false)
 
-  // External data sources state — registry-driven, type-agnostic view of
-  // discovered sources plus their type metadata (rendered generically). The raw
-  // /datasources response (incl. legacy grouped arrays) is forwarded to the parent
-  // via onSyncDataSources for consumers like the editor autocomplete.
-  const [sources, setSources] = useState([])
-  const [sourceTypes, setSourceTypes] = useState([])
-  const [catalogEntries, setCatalogEntries] = useState([])  // enriched entries from /datasources/catalog
-  const [dsLoading, setDsLoading] = useState(false)
-  const [dsFetched, setDsFetched] = useState(false)
-  // True once the enriched /datasources/catalog (has_entity_doc + schemas) has
-  // been successfully loaded for the current session. Distinct from dsFetched,
-  // which only tracks the plain source list. Drives the connect re-fetch so the
-  // entity intel icons appear without a manual refresh.
-  const [catalogLoaded, setCatalogLoaded] = useState(false)
+  // External data sources — registry-driven discovery + enriched catalog, fetch
+  // lifecycle, and the raw response forwarded to the parent (editor autocomplete).
+  const { sources, sourceTypes, catalogEntries, dsLoading, fetchDataSources } = useDataSources({
+    activePanel,
+    activeTab,
+    onRefreshFiles,
+    onSyncDataSources,
+  })
 
   // VM badge state — use instances prop directly (synced with parent polling)
   // Only use local poll as fallback when instances prop is empty
@@ -183,95 +178,6 @@ export default function Sidebar({
     window.addEventListener('toggle-sidebar-panel', handler)
     return () => window.removeEventListener('toggle-sidebar-panel', handler)
   }, [])
-
-  // --- Data Sources fetching ---
-  // NOTE: this callback MUST depend on activeTab.sessionId. The enriched catalog
-  // (which carries has_entity_doc → the entity intel icons) is only fetched when
-  // a sessionId is present. If this closed over a stale activeTab, the catalog
-  // fetch would be skipped on the first connect, dsFetched would latch true, and
-  // the icons would never appear until a manual refresh.
-  const sessionId = activeTab?.sessionId
-  const fetchDataSources = useCallback(async () => {
-    setDsLoading(true)
-    // Also refresh local VM files
-    if (onRefreshFiles) onRefreshFiles()
-    // Track whether we got everything we need. We only "latch" dsFetched=true once
-    // the enriched catalog has actually been retrieved (or there is genuinely no
-    // session to enrich against). Otherwise we leave it false so the connect
-    // effect retries once the session id lands / the VM stops returning 502.
-    let catalogResolved = false
-    try {
-      const resp = await fetchWithTimeout(`${PROXY_URL}/datasources`)
-      if (resp.ok) {
-        const data = await resp.json()
-        setSources(data.sources || [])
-        setSourceTypes(data.source_types || [])
-
-        // Fetch full catalog (with column schemas + entity-doc enrichment) when a
-        // session is active. The proxy retries the VM internally on transient 502s.
-        if (sessionId) {
-          try {
-            const catalogResp = await fetch(`${PROXY_URL}/datasources/catalog`, {
-              headers: { 'X-Session-Id': sessionId },
-            })
-            if (catalogResp.ok) {
-              const catalog = await catalogResp.json()
-              data._catalog = catalog  // Attach catalog entries with column info
-              setCatalogEntries(catalog.entries || [])
-              catalogResolved = true
-              setCatalogLoaded(true)
-            }
-          } catch {}
-        }
-
-        if (onSyncDataSources) onSyncDataSources(data)
-      }
-    } catch (err) {
-      if (err.name === 'AbortError') {
-        console.warn('[datasources] Fetch timed out')
-      }
-    }
-    setDsLoading(false)
-    // Only mark as fetched once the enriched catalog resolved. When there is no
-    // session yet, mark fetched so the panel isn't stuck in a loading state — the
-    // connect effect will re-run and re-fetch once a sessionId is available.
-    if (catalogResolved || !sessionId) {
-      setDsFetched(true)
-    }
-  }, [onRefreshFiles, onSyncDataSources, sessionId])
-
-  // Lazy-load data sources when panel is active
-  useEffect(() => {
-    if (activePanel === 'data' && !dsFetched) {
-      fetchDataSources()
-    }
-  }, [activePanel, dsFetched, fetchDataSources])
-
-  // Also fetch data sources on connect (so AI chat always has the info).
-  // This re-fires when the sessionId lands (not just on the status flip), and
-  // keeps trying until the enriched catalog has actually loaded — so a transient
-  // VM 502 or a status-before-sessionId race can't leave the icons missing.
-  useEffect(() => {
-    if (activeTab?.status === 'connected' && sessionId && !catalogLoaded) {
-      fetchDataSources()
-    }
-  }, [activeTab?.status, sessionId, catalogLoaded, fetchDataSources])
-
-  // Reset the catalog-loaded flag whenever the active session changes, so a newly
-  // linked VM re-fetches its enriched catalog (entity docs are session-scoped for
-  // local files and VM-catalog-scoped for schemas).
-  useEffect(() => {
-    setCatalogLoaded(false)
-  }, [sessionId])
-
-  // Re-fetch data sources when intel generation completes (local file entity
-  // docs are created during intel generation — this ensures sparkle icons
-  // appear for local files without requiring the user to manually refresh)
-  useEffect(() => {
-    const handler = () => fetchDataSources()
-    window.addEventListener('refresh-datasources', handler)
-    return () => window.removeEventListener('refresh-datasources', handler)
-  }, [fetchDataSources])
 
   // Delete a variable from the session namespace, then ask the notebook to
   // refresh its variable list (which re-fetches from the VM's /variables).
