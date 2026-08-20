@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
-import { IconUpload, IconFile, IconDatabase, IconBucket, IconRefresh, IconX, IconNotebook, IconTable, IconCode, IconSparkles } from '../Icons'
+import { IconUpload, IconFile, IconDatabase, IconBucket, IconRefresh, IconX, IconNotebook, IconTable, IconCode, IconSparkles, IconFolderOpen } from '../Icons'
 import { marked } from 'marked'
 import { PROXY_URL } from '../../config'
 
@@ -210,6 +210,32 @@ function EntityDocBadge({ sourceId, businessDescription, qualityFlags, sessionId
     return 'var(--text-muted)'
   }
 
+  const entityName = () => sourceId.split('/').pop() || sourceId
+  const entitySlug = () => entityName().replace(/[^a-z0-9]+/gi, '_').replace(/^_+|_+$/g, '') || 'entity'
+
+  // Export the full entity profile (raw markdown, incl. Data Quality section) as .md
+  const exportEntityMarkdown = () => {
+    let md = fullDoc?.markdown || ''
+    md += `\n\n---\n\n*Lambda MicroVM Notebook — Developed by the AWS Startup SA Team*\n`
+    const blob = new Blob([md], { type: 'text/markdown' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url; a.download = `entity-${entitySlug()}.md`; a.click()
+    URL.revokeObjectURL(url)
+  }
+
+  // Export the full entity profile as a self-contained styled .html document
+  const exportEntityHtml = () => {
+    const bodyHtml = marked(fullDoc?.markdown || '')
+    const footer = `<hr style="margin-top:32px;border:none;border-top:1px solid #333"><footer style="text-align:center;padding:12px;color:#666;font-size:11px"><strong>Lambda MicroVM Notebook</strong><br>Developed by the AWS Startup SA Team<br>&copy; ${new Date().getFullYear()} Amazon Web Services, Inc.</footer>`
+    const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${entityName()} — Entity Profile</title><style>body{font-family:-apple-system,sans-serif;max-width:800px;margin:40px auto;padding:0 20px;line-height:1.6;color:#e0e0e0;background:#1a1a2e}h1,h2,h3{color:#fff}code{background:#2d2d44;padding:2px 6px;border-radius:3px}pre{background:#2d2d44;padding:12px;border-radius:6px;overflow-x:auto}li{margin-bottom:8px}em{color:#aaa}table{width:100%;border-collapse:collapse;margin:12px 0;font-size:13px}th{text-align:left;padding:6px 10px;background:#2d2d44;color:#fff;border:1px solid #3d3d5c}td{padding:5px 10px;border:1px solid #3d3d5c}tr:nth-child(even){background:#1f1f35}</style></head><body>${bodyHtml}${footer}</body></html>`
+    const blob = new Blob([html], { type: 'text/html' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url; a.download = `entity-${entitySlug()}.html`; a.click()
+    URL.revokeObjectURL(url)
+  }
+
   return (
     <>
       <button
@@ -244,7 +270,17 @@ function EntityDocBadge({ sourceId, businessDescription, qualityFlags, sessionId
           <div className="ds-entity-modal" onClick={(e) => e.stopPropagation()}>
             <div className="ds-entity-modal-header">
               <span>{sourceId.split('/').pop() || sourceId}</span>
-              <button onClick={() => setShowModal(false)}><IconX width={14} height={14} /></button>
+              <div className="ds-entity-modal-actions">
+                <button className="ds-entity-export-btn" onClick={exportEntityMarkdown} disabled={!fullDoc?.markdown} title="Export as Markdown">
+                  <svg width={14} height={14} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                  <span className="ds-entity-export-label">.md</span>
+                </button>
+                <button className="ds-entity-export-btn" onClick={exportEntityHtml} disabled={!fullDoc?.markdown} title="Export as HTML">
+                  <svg width={14} height={14} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                  <span className="ds-entity-export-label">.html</span>
+                </button>
+                <button onClick={() => setShowModal(false)}><IconX width={14} height={14} /></button>
+              </div>
             </div>
             <div className="ds-entity-modal-body">
               <div dangerouslySetInnerHTML={{ __html: marked(_stripTitleAndDataQuality(fullDoc?.markdown || '')) }} />
@@ -282,27 +318,113 @@ const PUBLIC_APIS = [
 
 
 
+// Icon for a source-type group header, keyed by the provider's metadata `icon`.
+// A new/unknown icon key falls back to a generic database glyph.
+function GroupIcon({ iconKey, ...props }) {
+  switch (iconKey) {
+    case 's3': return <IconBucket {...props} className="sidebar-icon-s3" />
+    case 'dynamodb': return <IconDatabase {...props} className="sidebar-icon-dynamodb" />
+    case 'athena': return <IconTable {...props} className="sidebar-icon-athena" />
+    case 'local': return <IconUpload {...props} className="sidebar-icon-file-csv" />
+    default: return <IconDatabase {...props} />
+  }
+}
+
+// Icon for an individual source row (S3 uses a file-type icon based on extension).
+function RowIcon({ src }) {
+  if (src.source_type === 's3') {
+    return <span className="sidebar-file-icon sidebar-icon-s3"><FileTypeIcon filename={src.display_name} /></span>
+  }
+  if (src.source_type === 'athena') {
+    return <span className="sidebar-file-icon sidebar-icon-athena"><IconTable width={13} height={13} /></span>
+  }
+  if (src.source_type === 'dynamodb') {
+    return <span className="sidebar-file-icon sidebar-icon-dynamodb"><IconDatabase width={13} height={13} /></span>
+  }
+  return <span className="sidebar-file-icon"><IconDatabase width={13} height={13} /></span>
+}
+
+// Secondary meta line for a source row, composed from the generic detail plus a
+// type-specific hint (region for DynamoDB, database for Athena).
+function sourceMeta(src) {
+  let meta = src.detail || src.size || ''
+  if (src.source_type === 'dynamodb' && src.region) meta = meta ? `${meta} · ${src.region}` : src.region
+  else if (src.source_type === 'athena' && src.database) meta = meta ? `${meta} · ${src.database}` : src.database
+  return meta
+}
+
+// Entity-doc lookup key — matches the source_id convention used by
+// batch/entity_discovery.py (DynamoDB docs are keyed "dynamodb.<table>").
+function entityDocKey(src) {
+  return src.source_type === 'dynamodb' ? `dynamodb.${src.source_id}` : src.source_id
+}
+
+// Build a nested folder tree from S3 sources using their key path (display_name,
+// e.g. "samples/clickstream_events.csv"). Each node has { folders: Map, files: [] }.
+// Files carry a _fileName (leaf label). Handles arbitrary nesting depth.
+function buildS3Tree(srcs) {
+  const root = { folders: new Map(), files: [] }
+  for (const src of srcs) {
+    const parts = (src.display_name || src.source_id || '').split('/').filter(Boolean)
+    const fileName = parts.length ? parts.pop() : (src.display_name || src.source_id)
+    let node = root
+    for (const part of parts) {
+      if (!node.folders.has(part)) node.folders.set(part, { folders: new Map(), files: [] })
+      node = node.folders.get(part)
+    }
+    node.files.push({ ...src, _fileName: fileName })
+  }
+  return root
+}
+
+// Count all files in a tree node (recursively) — for the folder file-count badge.
+function countS3Files(node) {
+  let n = node.files.length
+  for (const child of node.folders.values()) n += countS3Files(child)
+  return n
+}
+
 export default function DataSourcesPanel({
   uploadedFiles,
   onUploadFile,
   onDeleteFile,
   onInsertCode,
   activeTab,
-  s3Files,
-  dynamoTables,
-  athenaTables,
-  athenaWorkgroup,
+  sources = [],
+  sourceTypes = [],
   dsLoading,
   catalogEntries = [],
   fetchDataSources,
   onClose,
 }) {
   const [sandboxExpanded, setSandboxExpanded] = useState(true)
-  const [s3Expanded, setS3Expanded] = useState(true)
-  const [dynamoExpanded, setDynamoExpanded] = useState(true)
-  const [athenaExpanded, setAthenaExpanded] = useState(true)
   const [publicApisExpanded, setPublicApisExpanded] = useState(true)
+  // Collapse state for the registry-driven cloud source groups, keyed by source_type.
+  const [collapsedGroups, setCollapsedGroups] = useState(() => new Set())
+  // Collapse state for S3 folder nodes in the tree view, keyed by full folder path.
+  const [collapsedFolders, setCollapsedFolders] = useState(() => new Set())
   const [activePopover, setActivePopover] = useState(null) // key of item with open popover
+
+  const toggleGroup = (st) => setCollapsedGroups(prev => {
+    const next = new Set(prev)
+    next.has(st) ? next.delete(st) : next.add(st)
+    return next
+  })
+
+  const toggleFolder = (path) => setCollapsedFolders(prev => {
+    const next = new Set(prev)
+    next.has(path) ? next.delete(path) : next.add(path)
+    return next
+  })
+
+  // Group discovered sources by source_type for generic rendering.
+  const sourcesByType = useMemo(() => {
+    const map = {}
+    for (const src of sources) {
+      (map[src.source_type] ||= []).push(src)
+    }
+    return map
+  }, [sources])
 
   // Build a lookup map from source_id → entity doc metadata (from the enriched catalog)
   const entityDocMap = useMemo(() => {
@@ -329,6 +451,74 @@ export default function DataSourcesPanel({
       })
     }
     input.click()
+  }
+
+  // Render a single discovered-source row (shared by flat groups + S3 tree leaves).
+  // displayName overrides the visible label (e.g. just the filename in the tree);
+  // indentPx adds left padding for tree nesting.
+  const renderSourceRow = (src, displayName = null, indentPx = 0) => {
+    const key = `${src.source_type}-${src.source_id}`
+    const eKey = entityDocKey(src)
+    return (
+      <div
+        key={key}
+        className="sidebar-file-item sidebar-ds-clickable"
+        style={indentPx ? { paddingLeft: `${indentPx}px` } : undefined}
+        onClick={() => setActivePopover(activePopover === key ? null : key)}
+        title={`Click to insert code for ${src.display_name}`}
+      >
+        <RowIcon src={src} />
+        <div className="sidebar-file-info">
+          <span className="sidebar-file-name">{displayName || src.display_name}</span>
+          <span className="sidebar-file-meta">{sourceMeta(src)}</span>
+        </div>
+        <SchemaExpander sourceType={src.source_type} sourceId={src.source_id} onInsertCode={onInsertCode} />
+        {entityDocMap[eKey] && (
+          <EntityDocBadge
+            sourceId={eKey}
+            businessDescription={entityDocMap[eKey].business_description}
+            qualityFlags={entityDocMap[eKey].quality_flags}
+            sessionId={activeTab?.sessionId}
+          />
+        )}
+        {activePopover === key && (
+          <InsertChoicePopover
+            sourceType={src.source_type}
+            sourceId={src.source_id}
+            onInsert={onInsertCode}
+            onClose={() => setActivePopover(null)}
+          />
+        )}
+      </div>
+    )
+  }
+
+  // Render an S3 folder tree node recursively: folders (collapsible) then files.
+  const renderS3Node = (node, pathPrefix, depth) => {
+    const els = []
+    for (const [folderName, child] of node.folders) {
+      const fullPath = pathPrefix ? `${pathPrefix}/${folderName}` : folderName
+      const collapsed = collapsedFolders.has(fullPath)
+      els.push(
+        <div
+          key={`fold-${fullPath}`}
+          className="ds-tree-folder"
+          style={{ paddingLeft: `${12 + depth * 14}px` }}
+          onClick={() => toggleFolder(fullPath)}
+          title={`${fullPath}/`}
+        >
+          <span className="ds-tree-chevron">{collapsed ? '▸' : '▾'}</span>
+          <IconFolderOpen width={12} height={12} className="sidebar-icon-s3" />
+          <span className="ds-tree-folder-name">{folderName}/</span>
+          <span className="ds-tree-folder-count">{countS3Files(child)}</span>
+        </div>
+      )
+      if (!collapsed) els.push(...renderS3Node(child, fullPath, depth + 1))
+    }
+    for (const src of node.files) {
+      els.push(renderSourceRow(src, src._fileName, 12 + depth * 14 + 16))
+    }
+    return els
   }
 
   return (
@@ -427,137 +617,35 @@ export default function DataSourcesPanel({
 
 
 
-        {/* S3 Bucket */}
-        <div className="sidebar-subheader sidebar-subheader-toggle" onClick={() => setS3Expanded(!s3Expanded)}>
-          <IconBucket width={11} height={11} className="sidebar-icon-s3" /> S3 Bucket
-          {s3Files.length > 0 && <span className="sidebar-subheader-count">{s3Files.length} files</span>}
-          <span className="sidebar-subheader-chevron">{s3Expanded ? '▾' : '▸'}</span>
-        </div>
-        {s3Expanded && (
-          <>
-            {dsLoading && <div className="sidebar-empty-inline">Loading...</div>}
-            {!dsLoading && s3Files.length === 0 && <div className="sidebar-empty-inline">No S3 files found.</div>}
-            {s3Files.map(file => (
-              <div
-                key={file.key}
-                className="sidebar-file-item sidebar-ds-clickable"
-                onClick={() => setActivePopover(activePopover === `s3-${file.key}` ? null : `s3-${file.key}`)}
-                title={`Click to insert code: read '${file.key}' from S3`}
-              >
-                <span className="sidebar-file-icon sidebar-icon-s3"><FileTypeIcon filename={file.key} /></span>
-                <div className="sidebar-file-info">
-                  <span className="sidebar-file-name">{file.key}</span>
-                  <span className="sidebar-file-meta">{file.size}</span>
-                </div>
-                <SchemaExpander sourceType="s3" sourceId={file.uri} onInsertCode={onInsertCode} />
-                {entityDocMap[file.uri] && (
-                  <EntityDocBadge
-                    sourceId={file.uri}
-                    businessDescription={entityDocMap[file.uri].business_description}
-                    qualityFlags={entityDocMap[file.uri].quality_flags}
-                    sessionId={activeTab?.sessionId}
-                  />
-                )}
-                {activePopover === `s3-${file.key}` && (
-                  <InsertChoicePopover
-                    sourceType="s3"
-                    sourceId={file.uri}
-                    onInsert={onInsertCode}
-                    onClose={() => setActivePopover(null)}
-                  />
-                )}
+        {/* Cloud data sources — rendered generically from the provider registry.
+            Adding a new source type on the backend makes a new group appear here
+            with no frontend change. 'local' is handled by the Sandbox section above. */}
+        {sourceTypes.filter(st => st.source_type !== 'local').map(st => {
+          const groupSources = sourcesByType[st.source_type] || []
+          const collapsed = collapsedGroups.has(st.source_type)
+          return (
+            <div key={st.source_type}>
+              <div className="sidebar-subheader sidebar-subheader-toggle" onClick={() => toggleGroup(st.source_type)}>
+                <GroupIcon iconKey={st.icon} width={11} height={11} /> {st.display_name}
+                {groupSources.length > 0 && <span className="sidebar-subheader-count">{groupSources.length}</span>}
+                <span className="sidebar-subheader-chevron">{collapsed ? '▸' : '▾'}</span>
               </div>
-            ))}
-          </>
-        )}
-
-        {/* DynamoDB */}
-        <div className="sidebar-subheader sidebar-subheader-toggle" onClick={() => setDynamoExpanded(!dynamoExpanded)}>
-          <IconDatabase width={11} height={11} className="sidebar-icon-dynamodb" /> DynamoDB
-          {dynamoTables.length > 0 && <span className="sidebar-subheader-count">{dynamoTables.length} tables</span>}
-          <span className="sidebar-subheader-chevron">{dynamoExpanded ? '▾' : '▸'}</span>
-        </div>
-        {dynamoExpanded && (
-          <>
-            {dsLoading && <div className="sidebar-empty-inline">Loading...</div>}
-            {!dsLoading && dynamoTables.length === 0 && <div className="sidebar-empty-inline">No DynamoDB tables found.</div>}
-            {dynamoTables.map(table => (
-              <div
-                key={table.name}
-                className="sidebar-file-item sidebar-ds-clickable"
-                onClick={() => setActivePopover(activePopover === `dynamo-${table.name}` ? null : `dynamo-${table.name}`)}
-                title={`Click to insert code for table '${table.name}'`}
-              >
-                <span className="sidebar-file-icon sidebar-icon-dynamodb"><IconDatabase width={13} height={13} /></span>
-                <div className="sidebar-file-info">
-                  <span className="sidebar-file-name">{table.name}</span>
-                  <span className="sidebar-file-meta">{table.item_count} items · {table.region}</span>
-                </div>
-                <SchemaExpander sourceType="dynamodb" sourceId={table.name} onInsertCode={onInsertCode} />
-                {entityDocMap[`dynamodb.${table.name}`] && (
-                  <EntityDocBadge
-                    sourceId={`dynamodb.${table.name}`}
-                    businessDescription={entityDocMap[`dynamodb.${table.name}`].business_description}
-                    qualityFlags={entityDocMap[`dynamodb.${table.name}`].quality_flags}
-                    sessionId={activeTab?.sessionId}
-                  />
-                )}
-                {activePopover === `dynamo-${table.name}` && (
-                  <InsertChoicePopover
-                    sourceType="dynamodb"
-                    sourceId={table.name}
-                    onInsert={onInsertCode}
-                    onClose={() => setActivePopover(null)}
-                  />
-                )}
-              </div>
-            ))}
-          </>
-        )}
-
-        {/* Athena */}
-        <div className="sidebar-subheader sidebar-subheader-toggle" onClick={() => setAthenaExpanded(!athenaExpanded)}>
-          <IconTable width={11} height={11} className="sidebar-icon-athena" /> Athena
-          {athenaTables.length > 0 && <span className="sidebar-subheader-count">{athenaTables.length} tables</span>}
-          <span className="sidebar-subheader-chevron">{athenaExpanded ? '▾' : '▸'}</span>
-        </div>
-        {athenaExpanded && (
-          <>
-            {dsLoading && <div className="sidebar-empty-inline">Loading...</div>}
-            {!dsLoading && athenaTables.length === 0 && <div className="sidebar-empty-inline">No Athena tables found.</div>}
-            {athenaTables.map(table => (
-              <div
-                key={`${table.database}.${table.name}`}
-                className="sidebar-file-item sidebar-ds-clickable"
-                onClick={() => setActivePopover(activePopover === `athena-${table.database}.${table.name}` ? null : `athena-${table.database}.${table.name}`)}
-                title={`Click to query ${table.database}.${table.name} (${table.column_count} columns)`}
-              >
-                <span className="sidebar-file-icon sidebar-icon-athena"><IconTable width={13} height={13} /></span>
-                <div className="sidebar-file-info">
-                  <span className="sidebar-file-name">{table.name}</span>
-                  <span className="sidebar-file-meta">{table.column_count} cols · {table.database}</span>
-                </div>
-                <SchemaExpander sourceType="athena" sourceId={`${table.database}.${table.name}`} onInsertCode={onInsertCode} />
-                {entityDocMap[`${table.database}.${table.name}`] && (
-                  <EntityDocBadge
-                    sourceId={`${table.database}.${table.name}`}
-                    businessDescription={entityDocMap[`${table.database}.${table.name}`].business_description}
-                    qualityFlags={entityDocMap[`${table.database}.${table.name}`].quality_flags}
-                    sessionId={activeTab?.sessionId}
-                  />
-                )}
-                {activePopover === `athena-${table.database}.${table.name}` && (
-                  <InsertChoicePopover
-                    sourceType="athena"
-                    sourceId={`${table.database}.${table.name}`}
-                    onInsert={onInsertCode}
-                    onClose={() => setActivePopover(null)}
-                  />
-                )}
-              </div>
-            ))}
-          </>
-        )}
+              {!collapsed && (
+                <>
+                  {dsLoading && <div className="sidebar-empty-inline">Loading...</div>}
+                  {!dsLoading && groupSources.length === 0 && (
+                    <div className="sidebar-empty-inline">No {st.display_name} found.</div>
+                  )}
+                  {/* S3 renders a collapsible folder tree (grouped by prefix);
+                      other source types render a flat list. */}
+                  {st.source_type === 's3'
+                    ? renderS3Node(buildS3Tree(groupSources), '', 0)
+                    : groupSources.map(src => renderSourceRow(src))}
+                </>
+              )}
+            </div>
+          )
+        })}
 
         {/* Public APIs */}
         <div className="sidebar-subheader sidebar-subheader-toggle" onClick={() => setPublicApisExpanded(!publicApisExpanded)}>

@@ -11,24 +11,98 @@ from typing import Optional
 
 import boto3
 
-from .interface import DataSourceProvider, SourceSchema, ColumnInfo
+from .interface import DataSourceProvider, SourceSchema, ColumnInfo, SourceRef
 
 logger = logging.getLogger(__name__)
 
 CACHE_TTL_SEC = 300  # 5 minutes
 
 
+def _human_size(size_bytes: int) -> str:
+    """Format a byte count as a short human-readable string."""
+    if size_bytes < 1024:
+        return f"{size_bytes} B"
+    if size_bytes < 1024 * 1024:
+        return f"{size_bytes / 1024:.1f} KB"
+    return f"{size_bytes / (1024 * 1024):.1f} MB"
+
+
 class S3SchemaProvider(DataSourceProvider):
     """Schema provider for S3 files (CSV, Parquet, JSON)."""
+
+    display_name = "S3 Bucket"
+    icon = "s3"
+    supports_sql = True
 
     def __init__(self):
         self._region = os.environ.get("AWS_REGION", "us-west-2")
         self._bucket = os.environ.get("ARTIFACT_BUCKET", "")
+        # Discovery scope: comma-separated S3 prefixes to scan (one level deep).
+        # Declarative via config.sh (DATASOURCE_S3_PREFIXES); defaults preserve
+        # the previous hardcoded behavior.
+        self._prefixes = [
+            p.strip() for p in os.environ.get("DATASOURCE_S3_PREFIXES", "samples/,user-data/").split(",")
+            if p.strip()
+        ]
         self._cache: dict[str, tuple[float, SourceSchema]] = {}
 
     @property
     def source_type(self) -> str:
         return "s3"
+
+    async def discover(self, session_id: str = None) -> list[SourceRef]:
+        """Enumerate files directly under the configured prefixes (one level deep)."""
+        refs: list[SourceRef] = []
+        if not self._bucket:
+            return refs
+        try:
+            s3 = boto3.client("s3", region_name=self._region)
+            paginator = s3.get_paginator("list_objects_v2")
+            for prefix in self._prefixes:
+                for page in paginator.paginate(Bucket=self._bucket, Prefix=prefix, MaxKeys=50):
+                    for obj in page.get("Contents", []):
+                        key = obj["Key"]
+                        if key.endswith("/"):
+                            continue
+                        # Only files directly under the prefix (skip Athena per-table subfolders)
+                        relative = key[len(prefix):]
+                        if "/" in relative:
+                            continue
+                        size_bytes = obj["Size"]
+                        uri = f"s3://{self._bucket}/{key}"
+                        ext = key.rsplit(".", 1)[-1].lower() if "." in key else ""
+                        refs.append(SourceRef(
+                            source_type="s3",
+                            source_id=uri,
+                            display_name=key,
+                            detail=_human_size(size_bytes),
+                            size=_human_size(size_bytes),
+                            extra={
+                                "key": key,
+                                "bucket": self._bucket,
+                                "size": _human_size(size_bytes),
+                                "size_bytes": size_bytes,
+                                "uri": uri,
+                                "extension": ext,
+                            },
+                        ))
+        except Exception as e:
+            logger.warning(f"S3 discovery failed: {e}")
+        return refs
+
+    def reader_docs(self) -> list[str]:
+        return [
+            "read_s3_csv(bucket, key) -> df                  # Read CSV from S3",
+            "read_s3_parquet(bucket, key) -> df              # Read Parquet from S3",
+            "read_s3_json(bucket, key, lines=True) -> df     # Read JSON/JSONL from S3",
+        ]
+
+    def sql_syntax_docs(self) -> list[str]:
+        return [
+            "S3 CSV files (SQL cell only): SELECT * FROM read_csv('s3://bucket/key.csv') LIMIT 10",
+            "S3 JSON files (SQL cell only): SELECT * FROM read_json('s3://bucket/key.json') LIMIT 10",
+            "S3 Parquet files (SQL cell only): SELECT * FROM read_parquet('s3://bucket/key.parquet') LIMIT 10",
+        ]
 
     async def get_schema(self, source_id: str, session_id: str = None) -> Optional[SourceSchema]:
         """

@@ -889,6 +889,24 @@ export default function App() {
   const [gitImportUrl, setGitImportUrl] = useState('')
   const [gitImportLoading, setGitImportLoading] = useState(false)
 
+  // Sample gallery (welcome screen) — lazily loads the sample manifest on first open
+  const [showSampleGallery, setShowSampleGallery] = useState(false)
+  const [samples, setSamples] = useState([])
+  const [samplesLoaded, setSamplesLoaded] = useState(false)
+
+  const toggleSampleGallery = useCallback(async () => {
+    setShowGitImport(false)
+    setShowSampleGallery(v => !v)
+    if (!samplesLoaded) {
+      try {
+        const resp = await fetch('/samples/index.json')
+        const data = await resp.json()
+        setSamples(Array.isArray(data) ? data : [])
+      } catch { setSamples([]) }
+      setSamplesLoaded(true)
+    }
+  }, [samplesLoaded])
+
   const importFromGitUrl = useCallback(async () => {
     if (!gitImportUrl.trim()) return
     setGitImportLoading(true)
@@ -1097,13 +1115,34 @@ export default function App() {
                 }}>
                   Open Existing
                 </button>
-                <button className="app-empty-btn" onClick={() => loadSample('/samples/aws_data_sources.notebook.json', 'AWS Data Sources')}>
-                  Open Sample: AWS Data Sources
+                <button className={`app-empty-btn${showSampleGallery ? ' app-empty-btn-active' : ''}`} onClick={toggleSampleGallery}>
+                  Open Sample
                 </button>
-                <button className="app-empty-btn" onClick={() => setShowGitImport(v => !v)}>
+                <button className="app-empty-btn" onClick={() => { setShowSampleGallery(false); setShowGitImport(v => !v) }}>
                   Import from Git URL
                 </button>
               </div>
+              {showSampleGallery && (
+                <div className="app-empty-samples">
+                  {samples.length === 0 && (
+                    <div className="app-empty-samples-loading">Loading samples…</div>
+                  )}
+                  {samples.map(s => (
+                    <button
+                      key={s.id}
+                      className="sample-card"
+                      onClick={() => loadSample(`/samples/${s.file}`, s.name)}
+                      title={s.description || s.name}
+                    >
+                      <span className="sample-card-icon">{s.icon}</span>
+                      <span className="sample-card-text">
+                        <span className="sample-card-name">{s.name}</span>
+                        {s.description && <span className="sample-card-desc">{s.description}</span>}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              )}
               {showGitImport && (
                 <div className="app-empty-git-import">
                   <input

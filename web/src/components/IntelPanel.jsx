@@ -134,8 +134,16 @@ export default function IntelPanel({ activeTab, onClose, onInsertPrompt }) {
     } catch { setStatus('error') }
   }
 
-  const handleRunPrompt = (prompt) => {
-    if (onInsertPrompt) onInsertPrompt(prompt)
+  // Send a card's action to the AI assistant. When the card carries a specific
+  // data-backed finding (alert message / investigation reason), pass it as grounding
+  // context alongside the task so the assistant doesn't have to re-derive it and can
+  // tailor its analysis to the actual numbers the Intel model already computed.
+  const handleRunPrompt = (task, context = null) => {
+    if (!onInsertPrompt) return
+    const prompt = context && context.trim()
+      ? `Context (from Workbook Intel):\n${context.trim()}\n\nTask: ${task}`
+      : task
+    onInsertPrompt(prompt)
   }
 
   const analyses = intel?.suggested_analyses || []
@@ -256,7 +264,7 @@ export default function IntelPanel({ activeTab, onClose, onInsertPrompt }) {
               <div key={i} className="intel-card">
                 <span className="intel-card-icon">{CATEGORY_ICONS[item.category] || '\ud83d\udcca'}</span>
                 <span className="intel-card-title">{item.title}</span>
-                <button className="intel-card-run" onClick={() => handleRunPrompt(item.prompt)}><IconPlay width={10} height={10} /> Run</button>
+                <button className="intel-card-run" onClick={() => handleRunPrompt(item.prompt, item.title)}><IconPlay width={10} height={10} /> Run</button>
               </div>
             ))}
             {activeSection === 'viz' && visualizations.map((item, i) => (
@@ -264,7 +272,7 @@ export default function IntelPanel({ activeTab, onClose, onInsertPrompt }) {
                 <span className="intel-card-icon">📉</span>
                 <span className="intel-card-title">{item.title}</span>
                 <span className="intel-card-badge">{item.chart_type}</span>
-                <button className="intel-card-run" onClick={() => handleRunPrompt(item.prompt)}><IconPlay width={10} height={10} /> Run</button>
+                <button className="intel-card-run" onClick={() => handleRunPrompt(item.prompt, item.title)}><IconPlay width={10} height={10} /> Run</button>
               </div>
             ))}
             {activeSection === 'investigate' && investigations.map((item, i) => (
@@ -274,7 +282,7 @@ export default function IntelPanel({ activeTab, onClose, onInsertPrompt }) {
                   <span className="intel-card-title">{item.title}</span>
                   {item.reason && <span className="intel-card-reason">{item.reason}</span>}
                 </div>
-                <button className="intel-card-run" onClick={() => handleRunPrompt(item.prompt)}><IconPlay width={10} height={10} /> Run</button>
+                <button className="intel-card-run" onClick={() => handleRunPrompt(item.prompt, item.reason)}><IconPlay width={10} height={10} /> Run</button>
               </div>
             ))}
             {activeSection === 'alerts' && alerts.map((item, i) => (
@@ -285,7 +293,7 @@ export default function IntelPanel({ activeTab, onClose, onInsertPrompt }) {
                   {item.action && <span className="intel-card-action">{item.action}</span>}
                 </div>
                 {item.action && (
-                  <button className="intel-card-run" onClick={() => handleRunPrompt(item.action)}><IconPlay width={10} height={10} /> Run</button>
+                  <button className="intel-card-run" onClick={() => handleRunPrompt(item.action, item.message)}><IconPlay width={10} height={10} /> Run</button>
                 )}
               </div>
             ))}

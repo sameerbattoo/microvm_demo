@@ -314,6 +314,14 @@ export default function Notebook({ tab, instances = {}, onUpdateTab, onMarkVmRun
     } catch {}
   }, [tab.microvmEndpoint, tab.sessionId, tab.status])
 
+  // Re-fetch the variable namespace on demand (e.g. after the Variables panel
+  // deletes a variable from the session).
+  useEffect(() => {
+    const handler = () => fetchVariables()
+    window.addEventListener('refresh-variables', handler)
+    return () => window.removeEventListener('refresh-variables', handler)
+  }, [fetchVariables])
+
   const executeCell = useCallback(async (cellId) => {
     // If no VM linked at all, can't execute
     if (!tab.microvmId) return

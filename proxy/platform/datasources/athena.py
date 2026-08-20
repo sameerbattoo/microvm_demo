@@ -9,7 +9,7 @@ from typing import Optional
 
 import boto3
 
-from .interface import DataSourceProvider, SourceSchema, ColumnInfo
+from .interface import DataSourceProvider, SourceSchema, ColumnInfo, SourceRef
 
 logger = logging.getLogger(__name__)
 
@@ -20,15 +20,93 @@ CACHE_TTL_SEC = 300  # 5 minutes
 class AthenaSchemaProvider(DataSourceProvider):
     """Schema provider for Athena tables via Glue catalog."""
 
+    display_name = "Athena"
+    icon = "athena"
+    supports_sql = True
+
     def __init__(self):
         self._region = os.environ.get("AWS_REGION", "us-west-2")
+        # ATHENA_DB is the DEFAULT database for query execution (db.table prefix,
+        # read_athena default, SQL engine catalog) — a single value.
         self._database = os.environ.get("ATHENA_DB", "microvm_demo_db")
+        # Discovery scope is separate: an optional comma-separated allowlist of
+        # Glue databases to surface. When empty, discovery auto-lists EVERY Glue
+        # database the role can access (a role may have many).
+        self._database_allowlist = [
+            d.strip() for d in os.environ.get("DATASOURCE_ATHENA_DATABASES", "").split(",")
+            if d.strip()
+        ]
         self._workgroup = os.environ.get("ATHENA_WORKGROUP", "microvm-demo")
         self._cache: dict[str, tuple[float, SourceSchema]] = {}
+
+    def _databases_to_scan(self, glue) -> list[str]:
+        """Resolve which Glue databases discovery should enumerate.
+        Explicit allowlist wins; otherwise auto-list all accessible databases,
+        falling back to the default ATHENA_DB if listing isn't permitted."""
+        if self._database_allowlist:
+            return self._database_allowlist
+        try:
+            databases = []
+            paginator = glue.get_paginator("get_databases")
+            for page in paginator.paginate():
+                databases.extend(db["Name"] for db in page.get("DatabaseList", []))
+            return databases or [self._database]
+        except Exception as e:
+            logger.warning(f"Athena get_databases failed; falling back to ATHENA_DB: {e}")
+            return [self._database]
 
     @property
     def source_type(self) -> str:
         return "athena"
+
+    async def discover(self, session_id: str = None) -> list[SourceRef]:
+        """Enumerate tables across every in-scope Glue database (see _databases_to_scan)."""
+        refs: list[SourceRef] = []
+        try:
+            glue = boto3.client("glue", region_name=self._region)
+            for database in self._databases_to_scan(glue):
+                try:
+                    paginator = glue.get_paginator("get_tables")
+                    tables = []
+                    for page in paginator.paginate(DatabaseName=database):
+                        tables.extend(page.get("TableList", []))
+                except Exception as e:
+                    logger.warning(f"Athena discovery failed for database {database}: {e}")
+                    continue
+                for table in tables:
+                    columns = table.get("StorageDescriptor", {}).get("Columns", [])
+                    name = table["Name"]
+                    update_time = table.get("UpdateTime")
+                    refs.append(SourceRef(
+                        source_type="athena",
+                        source_id=f"{database}.{name}",
+                        display_name=name,
+                        detail=f"{len(columns)} cols",
+                        extra={
+                            "name": name,
+                            "table_name": name,
+                            "database": database,
+                            "columns": [{"name": c["Name"], "type": c["Type"]} for c in columns],
+                            "column_count": len(columns),
+                            "region": self._region,
+                            # Change-signal metadata consumed by entity discovery:
+                            "s3_location": table.get("StorageDescriptor", {}).get("Location", ""),
+                            "glue_update_time": update_time.isoformat() if update_time else None,
+                        },
+                    ))
+        except Exception as e:
+            logger.warning(f"Athena discovery failed: {e}")
+        return refs
+
+    def reader_docs(self) -> list[str]:
+        return [
+            f'read_athena(sql, database="{self._database}") -> df  # Run Athena SQL, return DataFrame',
+        ]
+
+    def sql_syntax_docs(self) -> list[str]:
+        return [
+            f"Athena tables: SELECT * FROM {self._database}.table_name LIMIT 10 (uses database.table format)",
+        ]
 
     async def get_schema(self, source_id: str, session_id: str = None) -> Optional[SourceSchema]:
         """

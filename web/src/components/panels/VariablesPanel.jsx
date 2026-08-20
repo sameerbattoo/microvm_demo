@@ -1,5 +1,8 @@
 import { useState } from 'react'
-import { IconX, IconChevronDown, IconChevronRight, IconNotebook } from '../Icons'
+import {
+  IconX, IconChevronDown, IconChevronRight, IconNotebook,
+  IconBarChart, IconChartLine, IconTable, IconSparkles, IconBraces, IconCode, IconTrash,
+} from '../Icons'
 import VariablePreviewRenderer from '../VariablePreviewRenderer'
 
 const TYPE_ICONS = {
@@ -19,7 +22,7 @@ function getTypeColor(type) {
   return 'var-type-other'
 }
 
-export default function VariablesPanel({ variables, activeTab, onInsertCode, onClose }) {
+export default function VariablesPanel({ variables, activeTab, onInsertCode, onDeleteVariable, onClose }) {
   const [expandedVar, setExpandedVar] = useState(null)
 
   return (
@@ -69,23 +72,30 @@ export default function VariablesPanel({ variables, activeTab, onInsertCode, onC
                 <div className="var-detail-preview">
                   <VariablePreviewRenderer info={info} />
                 </div>
-                {onInsertCode && (
+                {(onInsertCode || onDeleteVariable) && (
                   <div className="var-actions">
-                    {['DataFrame', 'Series'].includes(info.type) ? (
+                    {onInsertCode && (['DataFrame', 'Series'].includes(info.type) ? (
                       <>
-                        <button className="var-action-btn" onClick={() => onInsertCode(`${name}.describe()`)} title="Statistical summary">📊 Describe</button>
-                        <button className="var-action-btn" onClick={() => onInsertCode(`${name}.head(10)`)} title="First 10 rows">🔍 Head</button>
-                        <button className="var-action-btn" onClick={() => onInsertCode(`import matplotlib.pyplot as plt\n\n${name}.plot(figsize=(10, 5), title='${name}')\nplt.tight_layout()\nplt.show()`)} title="Quick visualization">📈 Plot</button>
-                        <button className="var-action-btn" onClick={() => onInsertCode(`print(f"Shape: {${name}.shape}")\nprint(f"\\nDtypes:\\n{${name}.dtypes}")\nprint(f"\\nNull counts:\\n{${name}.isnull().sum()}")\nprint(f"\\nMemory: {${name}.memory_usage(deep=True).sum() / 1024:.1f} KB")`)} title="Data quality profile">🧹 Profile</button>
-                        <button className="var-action-btn" onClick={() => onInsertCode(`${name}.info()`)} title="Column info">ℹ️ Info</button>
+                        <button className="var-action-btn" onClick={() => onInsertCode(`${name}.describe()`)} title="Statistical summary"><IconBarChart width={11} height={11} /> Describe</button>
+                        <button className="var-action-btn" onClick={() => onInsertCode(`${name}.head(10)`)} title="First 10 rows"><IconTable width={11} height={11} /> Head</button>
+                        <button className="var-action-btn" onClick={() => onInsertCode(`import matplotlib.pyplot as plt\n\n${name}.plot(figsize=(10, 5), title='${name}')\nplt.tight_layout()\nplt.show()`)} title="Quick visualization"><IconChartLine width={11} height={11} /> Plot</button>
+                        <button className="var-action-btn" onClick={() => onInsertCode(`print(f"Shape: {${name}.shape}")\nprint(f"\\nDtypes:\\n{${name}.dtypes}")\nprint(f"\\nNull counts:\\n{${name}.isnull().sum()}")\nprint(f"\\nMemory: {${name}.memory_usage(deep=True).sum() / 1024:.1f} KB")`)} title="Data quality profile"><IconSparkles width={11} height={11} /> Profile</button>
+                        <button className="var-action-btn" onClick={() => onInsertCode(`${name}.info()`)} title="Column info"><IconBraces width={11} height={11} /> Info</button>
                       </>
                     ) : info.type === 'ndarray' ? (
                       <>
-                        <button className="var-action-btn" onClick={() => onInsertCode(`print(f"Shape: {${name}.shape}, Dtype: {${name}.dtype}")\nprint(f"Min: {${name}.min():.4f}, Max: {${name}.max():.4f}, Mean: {${name}.mean():.4f}")`)} title="Array stats">📊 Stats</button>
-                        <button className="var-action-btn" onClick={() => onInsertCode(`import matplotlib.pyplot as plt\nplt.hist(${name}.flatten(), bins=30)\nplt.title('${name} distribution')\nplt.show()`)} title="Histogram">📈 Hist</button>
+                        <button className="var-action-btn" onClick={() => onInsertCode(`print(f"Shape: {${name}.shape}, Dtype: {${name}.dtype}")\nprint(f"Min: {${name}.min():.4f}, Max: {${name}.max():.4f}, Mean: {${name}.mean():.4f}")`)} title="Array stats"><IconBarChart width={11} height={11} /> Stats</button>
+                        <button className="var-action-btn" onClick={() => onInsertCode(`import matplotlib.pyplot as plt\nplt.hist(${name}.flatten(), bins=30)\nplt.title('${name} distribution')\nplt.show()`)} title="Histogram"><IconChartLine width={11} height={11} /> Hist</button>
                       </>
                     ) : (
-                      <button className="var-action-btn" onClick={() => onInsertCode(`print(${name})`)} title="Print value">📋 Print</button>
+                      <button className="var-action-btn" onClick={() => onInsertCode(`print(${name})`)} title="Print value"><IconCode width={11} height={11} /> Print</button>
+                    ))}
+                    {onDeleteVariable && (
+                      <button
+                        className="var-action-btn var-action-delete"
+                        onClick={() => onDeleteVariable(name)}
+                        title={`Delete '${name}' from the session namespace`}
+                      ><IconTrash width={11} height={11} /> Delete</button>
                     )}
                   </div>
                 )}

@@ -2,55 +2,64 @@
   {
     "id": "sales_analysis",
     "name": "Sales Data Analysis",
-    "icon": "\ud83d\udcca",
-    "file": "sales_analysis.notebook.json"
+    "icon": "📊",
+    "file": "sales_analysis.notebook.json",
+    "description": "Explore revenue, trends, and top performers in sample sales data"
   },
   {
     "id": "time_series",
     "name": "Time Series Forecasting",
-    "icon": "\ud83d\udcc8",
-    "file": "time_series.notebook.json"
+    "icon": "📈",
+    "file": "time_series.notebook.json",
+    "description": "Decompose trend and seasonality, then forecast future values"
   },
   {
     "id": "data_cleaning",
     "name": "Data Cleaning & Transform",
-    "icon": "\ud83e\uddf9",
-    "file": "data_cleaning.notebook.json"
+    "icon": "🧹",
+    "file": "data_cleaning.notebook.json",
+    "description": "Dedupe, fix types, and reshape messy data into tidy tables"
   },
   {
     "id": "statistical_analysis",
     "name": "Statistical Analysis",
-    "icon": "\ud83d\udd2c",
-    "file": "statistical_analysis.notebook.json"
+    "icon": "🔬",
+    "file": "statistical_analysis.notebook.json",
+    "description": "Hypothesis tests, distributions, and correlation analysis"
   },
   {
     "id": "public_apis",
     "name": "Public API Data Analysis",
-    "icon": "\ud83c\udf10",
-    "file": "public_apis.notebook.json"
+    "icon": "🌐",
+    "file": "public_apis.notebook.json",
+    "description": "Fetch and analyze live data from public REST APIs"
   },
   {
     "id": "aws_data_sources",
     "name": "AWS Data Sources",
-    "icon": "\u2601\ufe0f",
-    "file": "aws_data_sources.notebook.json"
+    "icon": "☁️",
+    "file": "aws_data_sources.notebook.json",
+    "description": "Query S3, Athena, and DynamoDB from the sandbox"
   },
   {
     "id": "burst_demo",
     "name": "Memory & CPU Burst Demo",
-    "icon": "\u26a1",
-    "file": "burst_demo.notebook.json"
+    "icon": "⚡",
+    "file": "burst_demo.notebook.json",
+    "description": "Watch the MicroVM scale memory and CPU under heavy load"
   },
   {
     "id": "helper_functions",
     "name": "Helper Functions Demo",
-    "icon": "\ud83e\uddf0",
-    "file": "helper_functions.notebook.json"
+    "icon": "🧰",
+    "file": "helper_functions.notebook.json",
+    "description": "Reusable read/write helpers for files and AWS sources"
   },
   {
     "id": "interactive_params",
     "name": "Interactive Parameters",
-    "icon": "\ud83c\udf9b\ufe0f",
-    "file": "interactive_params.notebook.json"
+    "icon": "🎛️",
+    "file": "interactive_params.notebook.json",
+    "description": "Parameterize notebooks with interactive widget inputs"
   }
 ]

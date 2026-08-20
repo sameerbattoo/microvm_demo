@@ -245,9 +245,16 @@ def get_available_data_sources() -> str:
                 by_type[st] = []
             by_type[st].append(entry)
 
-        type_labels = {"s3": "S3 Files", "dynamodb": "DynamoDB Tables", "athena": "Athena Tables", "local": "Local Files (/tmp/)"}
+        # Ordered (source_type, label) pairs from the provider registry, plus any
+        # types present in the catalog that aren't registered yet (future-proof).
+        from proxy.platform.datasources import registry
+        ordered_types = [(m["source_type"], m["display_name"]) for m in registry.provider_metadata()]
+        _known = {t for t, _ in ordered_types}
+        for st in by_type:
+            if st not in _known:
+                ordered_types.append((st, st))
 
-        for src_type, label in type_labels.items():
+        for src_type, label in ordered_types:
             entries = by_type.get(src_type, [])
             if not entries:
                 continue

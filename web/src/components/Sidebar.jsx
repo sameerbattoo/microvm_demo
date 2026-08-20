@@ -88,12 +88,13 @@ export default function Sidebar({
   const [pkgLoading, setPkgLoading] = useState(false)
   const [pkgFetched, setPkgFetched] = useState(false)
 
-  // External data sources state
-  const [s3Files, setS3Files] = useState([])
-  const [dynamoTables, setDynamoTables] = useState([])
-  const [athenaTables, setAthenaTables] = useState([])
+  // External data sources state — registry-driven, type-agnostic view of
+  // discovered sources plus their type metadata (rendered generically). The raw
+  // /datasources response (incl. legacy grouped arrays) is forwarded to the parent
+  // via onSyncDataSources for consumers like the editor autocomplete.
+  const [sources, setSources] = useState([])
+  const [sourceTypes, setSourceTypes] = useState([])
   const [catalogEntries, setCatalogEntries] = useState([])  // enriched entries from /datasources/catalog
-  const [athenaWorkgroup, setAthenaWorkgroup] = useState('microvm-demo')
   const [dsLoading, setDsLoading] = useState(false)
   const [dsFetched, setDsFetched] = useState(false)
   // True once the enriched /datasources/catalog (has_entity_doc + schemas) has
@@ -202,10 +203,8 @@ export default function Sidebar({
       const resp = await fetchWithTimeout(`${PROXY_URL}/datasources`)
       if (resp.ok) {
         const data = await resp.json()
-        setS3Files(data.s3 || [])
-        setDynamoTables(data.dynamodb || [])
-        setAthenaTables(data.athena || [])
-        setAthenaWorkgroup(data.athena_workgroup || 'microvm-demo')
+        setSources(data.sources || [])
+        setSourceTypes(data.source_types || [])
 
         // Fetch full catalog (with column schemas + entity-doc enrichment) when a
         // session is active. The proxy retries the VM internally on transient 502s.
@@ -272,6 +271,24 @@ export default function Sidebar({
     window.addEventListener('refresh-datasources', handler)
     return () => window.removeEventListener('refresh-datasources', handler)
   }, [fetchDataSources])
+
+  // Delete a variable from the session namespace, then ask the notebook to
+  // refresh its variable list (which re-fetches from the VM's /variables).
+  const handleDeleteVariable = useCallback(async (name) => {
+    if (!activeTab?.microvmEndpoint) return
+    const headers = { 'Content-Type': 'application/json' }
+    if (activeTab.sessionId) headers['X-Session-Id'] = activeTab.sessionId
+    try {
+      await fetchWithTimeout(`${activeTab.microvmEndpoint}/execute`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ code: `del ${name}` }),
+      })
+    } catch (e) {
+      console.warn('Delete variable failed:', e)
+    }
+    window.dispatchEvent(new CustomEvent('refresh-variables'))
+  }, [activeTab?.microvmEndpoint, activeTab?.sessionId])
 
   // --- Package fetching ---
   const fetchPackages = useCallback(async () => {
@@ -511,10 +528,8 @@ export default function Sidebar({
               onDeleteFile={onDeleteFile}
               onInsertCode={onInsertCode}
               activeTab={activeTab}
-              s3Files={s3Files}
-              dynamoTables={dynamoTables}
-              athenaTables={athenaTables}
-              athenaWorkgroup={athenaWorkgroup}
+              sources={sources}
+              sourceTypes={sourceTypes}
               dsLoading={dsLoading}
               catalogEntries={catalogEntries}
               fetchDataSources={fetchDataSources}
@@ -541,6 +556,7 @@ export default function Sidebar({
               variables={variables}
               activeTab={activeTab}
               onInsertCode={onInsertCode}
+              onDeleteVariable={handleDeleteVariable}
               onClose={() => setActivePanel(null)}
             />
           )}

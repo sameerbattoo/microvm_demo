@@ -83,12 +83,26 @@ export SESSION_PERSISTENCE_MODE="${SESSION_PERSISTENCE_MODE:-checkpoint}"
 export PROXY_PORT="8081"
 export BACKEND_PORT="8080"
 
-# Sample data resource names
+# ------------------------------------------------------------
+# Data Source auto-discovery scope (read by proxy/platform/datasources providers)
+# These declaratively bound what the Data Sources panel + entity discovery surface.
+# The AWS role still limits what is *accessible*; these limit what is *shown*.
+# Each provider reads its own scope below; leave blank/unset to use the defaults.
+# ------------------------------------------------------------
+# Athena: ATHENA_DB is the DEFAULT database for query EXECUTION (the db.table
+# prefix, read_athena default, SQL engine catalog). ATHENA_WORKGROUP scopes runs.
 export ATHENA_DB="microvm_demo_db"
 export ATHENA_WORKGROUP="microvm-demo"
-
-# Legacy table (for cleanup only — not used by app)
-export LEGACY_DYNAMO_TABLE="microvm-demo-data"
+# Athena DISCOVERY scope (which databases' tables appear in the panel) is separate
+# from the query default above. Set to a comma-separated allowlist to restrict which
+# Glue databases are shown, or leave EMPTY to auto-discover EVERY database the role
+# can access. Defaults to the demo DB so the panel stays clean; empty it (or add more)
+# to surface additional databases the role has access to.
+export DATASOURCE_ATHENA_DATABASES="${ATHENA_DB}"
+# S3: comma-separated key prefixes to scan (one level deep).
+export DATASOURCE_S3_PREFIXES="samples/,user-data/"
+# DynamoDB: comma-separated substrings; only tables whose name contains one are shown.
+export DATASOURCE_DDB_NAME_FILTERS="microvm,demo,ecommerce"
 
 # Project root
 export ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

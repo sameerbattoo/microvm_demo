@@ -948,6 +948,35 @@
   opacity: 1;
 }
 
+/* S3 data-source folder tree */
+.ds-tree-folder {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px var(--space-3);
+  font-size: var(--font-size-sm);
+  color: var(--text-secondary);
+  cursor: pointer;
+  user-select: none;
+  transition: background var(--transition-fast);
+}
+.ds-tree-folder:hover { background: var(--accent-primary-subtle); color: var(--text-primary); }
+.ds-tree-chevron {
+  width: 10px;
+  font-size: 10px;
+  color: var(--text-muted);
+  flex-shrink: 0;
+  display: inline-block;
+}
+.ds-tree-folder-name { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ds-tree-folder-count {
+  margin-left: auto;
+  font-size: 10px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+}
+
 .sidebar-file-icon {
   font-size: var(--font-size-base);
   flex-shrink: 0;
@@ -1897,21 +1926,33 @@
 }
 
 .var-action-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   background: transparent;
   border: 1px solid var(--border-subtle);
   border-radius: 12px;
   padding: 2px 10px;
   font-size: 10px;
-  color: var(--text-muted);
+  color: var(--text-secondary);
+  border-color: var(--border-default);
   cursor: pointer;
   transition: all 0.15s;
   line-height: 1.4;
 }
+.var-action-btn svg { flex-shrink: 0; }
 
 .var-action-btn:hover {
   background: var(--accent-primary);
   color: #11111b;
   border-color: var(--accent-primary);
+}
+
+/* Delete uses the shared trash icon + a danger accent on hover */
+.var-action-delete:hover {
+  background: var(--accent-danger);
+  border-color: var(--accent-danger);
+  color: #11111b;
 }
 
 /* Variable preview styles */
@@ -2653,6 +2694,27 @@
 .ds-entity-modal-header button:hover {
   background: var(--surface-3);
   color: var(--text-primary);
+}
+.ds-entity-modal-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.ds-entity-export-btn {
+  display: flex;
+  align-items: center;
+  gap: 1px;
+}
+.ds-entity-export-label {
+  font-size: 9px;
+}
+.ds-entity-export-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.ds-entity-export-btn:disabled:hover {
+  background: none;
+  color: var(--text-muted);
 }
 .ds-entity-modal-body {
   overflow-y: auto;

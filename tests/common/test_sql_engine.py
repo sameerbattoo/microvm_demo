@@ -26,6 +26,8 @@ Usage:
     python3 tests/common/test_sql_engine.py
 """
 
+import os
+import sys
 import time
 import json
 import requests
@@ -76,15 +78,129 @@ def terminate_session(session_id):
     requests.post(f"{PROXY_URL}/terminate", headers={"X-Session-Id": session_id}, timeout=10)
 
 
+def run_classification_unit_tests():
+    """
+    Unit tests for the SQL engine's source classification — runs on the host,
+    NO proxy/VM required (imports the pure functions directly).
+
+    Covers the multi-database Athena routing added to sql_engine.py:
+      - _classify_sources now recognizes <db>.<table> for ANY configured Glue
+        database (not just the single ATHENA_DB), validated against per-db catalogs.
+      - _resolve_athena_databases parses the DATASOURCE_ATHENA_DATABASES allowlist.
+      - _get_athena_catalogs returns a per-database {db: {tables}} mapping.
+      - DynamoDB vs Athena disambiguation and comment-stripping still hold.
+    """
+    log("━" * 70)
+    log("  UNIT: SQL source classification (multi-DB Athena routing)")
+    log("━" * 70)
+
+    # Make 'app' importable regardless of the cwd the test is launched from.
+    root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    if root not in sys.path:
+        sys.path.insert(0, root)
+    from app.notebook import sql_engine as se
+
+    passed = 0
+    failed = 0
+    details = []
+
+    def u(name, cond, detail=""):
+        nonlocal passed, failed
+        if cond:
+            passed += 1
+            details.append(("✓", name))
+            log(f"  ✓ {name}")
+        else:
+            failed += 1
+            details.append(("❌", name))
+            log(f"  ❌ {name}{' — ' + detail if detail else ''}")
+
+    ATH = se.SourceType.ATHENA
+    DDB = se.SourceType.DYNAMODB
+    LOCAL = se.SourceType.LOCAL_FILE
+    DF = se.SourceType.DATAFRAME
+
+    # Two Glue databases, each with its own tables. Note "orders" exists only in demo_db.
+    catalogs = {
+        "microvm_demo_db": {"orders", "customers", "products"},
+        "sensordata": {"alertdata", "reportingdata"},
+    }
+    ns = {"sales", "products_df"}  # in-memory DataFrames
+
+    def athena_refs(sql):
+        return sorted(s.full_ref for s in se._classify_sources(sql, catalogs, ns) if s.source_type == ATH)
+
+    # 1. Table in the primary database
+    u("primary-db table → ATHENA",
+      athena_refs("SELECT * FROM microvm_demo_db.orders LIMIT 5") == ["microvm_demo_db.orders"])
+
+    # 2. Table in a SECOND database (the new capability)
+    u("second-db table → ATHENA",
+      athena_refs("SELECT * FROM sensordata.alertdata") == ["sensordata.alertdata"])
+
+    # 3. Cross-database JOIN — both recognized
+    u("cross-db JOIN → both ATHENA",
+      athena_refs("SELECT * FROM microvm_demo_db.orders o JOIN sensordata.alertdata a ON o.id=a.id")
+      == ["microvm_demo_db.orders", "sensordata.alertdata"])
+
+    # 4. Unknown database → not Athena
+    u("unknown db.table → not ATHENA", athena_refs("SELECT * FROM otherdb.mystery") == [])
+
+    # 5. Right db name but table only exists in a different db → not matched
+    u("table under wrong db → not ATHENA", athena_refs("SELECT * FROM sensordata.orders") == [])
+
+    # 6. DynamoDB still disambiguated from Athena by the dynamodb. prefix
+    srcs = se._classify_sources('SELECT * FROM dynamodb."ecommerce-reviews" LIMIT 5', catalogs, ns)
+    u("dynamodb.\"t\" → DYNAMODB",
+      any(s.source_type == DDB and s.table_name == "ecommerce-reviews" for s in srcs))
+
+    # 7. Local file + DataFrame unaffected
+    srcs = se._classify_sources("SELECT * FROM '/tmp/x.csv' a JOIN products_df b ON a.id=b.id", catalogs, ns)
+    types = {s.source_type for s in srcs}
+    u("local file still detected", LOCAL in types)
+    u("dataframe still detected", DF in types)
+
+    # 8. Comments ignored — dynamodb ref in a comment must NOT classify
+    srcs = se._classify_sources("-- FROM dynamodb.\"fake\"\nSELECT * FROM microvm_demo_db.customers", catalogs, ns)
+    u("comment ignored (no false DDB, real ATHENA found)",
+      not any(s.source_type == DDB for s in srcs) and any(s.source_type == ATH for s in srcs))
+
+    # 9. _resolve_athena_databases honors an explicit allowlist (no AWS call)
+    _old = os.environ.get("DATASOURCE_ATHENA_DATABASES")
+    os.environ["DATASOURCE_ATHENA_DATABASES"] = "db_a, db_b ,db_c"
+    try:
+        dbs = se._resolve_athena_databases("us-west-2")
+    finally:
+        if _old is None:
+            os.environ.pop("DATASOURCE_ATHENA_DATABASES", None)
+        else:
+            os.environ["DATASOURCE_ATHENA_DATABASES"] = _old
+    u("resolve: explicit allowlist parsed", dbs == ["db_a", "db_b", "db_c"], f"got: {dbs}")
+
+    # 10. _get_athena_catalogs returns a per-db mapping from a warm cache (no AWS call)
+    se._glue_cache.clear()
+    se._glue_cache.update({"db1": {"t1", "t2"}, "db2": {"t3"}})
+    se._glue_cache_ts = time.time()  # fresh → no refresh, no boto3
+    cats = se._get_athena_catalogs(["db1", "db2"], "us-west-2")
+    u("catalogs: per-db mapping from cache", cats == {"db1": {"t1", "t2"}, "db2": {"t3"}}, f"got: {cats}")
+
+    log("")
+    return passed, failed, details
+
+
 def main():
     log("=" * 70)
     log("  SQL Engine Test — Multi-Source Routing & Correctness")
     log("=" * 70)
     log("")
 
-    checks_passed = 0
-    checks_failed = 0
-    check_details = []
+    # Run the host-side classification unit tests first (fast, no VM needed).
+    unit_passed, unit_failed, unit_details = run_classification_unit_tests()
+
+    # Seed the running totals with the unit-test results so the final report covers both.
+    checks_passed = unit_passed
+    checks_failed = unit_failed
+    check_details = list(unit_details)
 
     def check(name, condition, detail=""):
         nonlocal checks_passed, checks_failed
@@ -650,6 +766,35 @@ def main():
     log("")
 
     # ================================================================
+    # TEST 22: Multi-database Athena routing (skips if only 1 DB configured)
+    # ================================================================
+    log("━" * 70)
+    log("  TEST 22: Multi-DB Athena — route a table in a SECOND database")
+    log("━" * 70)
+
+    try:
+        ds = requests.get(f"{PROXY_URL}/datasources", timeout=10).json()
+        athena_tables = ds.get("athena", [])
+        primary_db = "microvm_demo_db"  # the query-execution default (ATHENA_DB)
+        distinct_dbs = sorted({t.get("database") for t in athena_tables if t.get("database")})
+        secondary = [t for t in athena_tables if t.get("database") and t["database"] != primary_db]
+        if secondary:
+            t = secondary[0]
+            db, name = t["database"], t["name"]
+            with timed("Query"):
+                r = execute_sql(session_id, f"SELECT * FROM {db}.{name} LIMIT 5", "multidb_athena", timeout=60)
+            check("T22: success", r.get("success"), r.get("error", ""))
+            check("T22: engine=athena (second DB routed)", r.get("engine") == "athena", f"got: {r.get('engine')}")
+            check("T22: query returned", r.get("row_count") is not None, f"got: {r.get('row_count')}")
+        else:
+            log(f"  ⚠ Only one Athena database in scope ({distinct_dbs}) — skipping multi-DB routing test.")
+            log("     Set DATASOURCE_ATHENA_DATABASES to 2+ DBs (and rebuild the VM image) to exercise this.")
+            check("T22: skipped (single Athena DB configured)", True)
+    except Exception as e:
+        check("T22: multi-DB probe", False, str(e))
+    log("")
+
+    # ================================================================
     # CLEANUP
     # ================================================================
     log("━" * 70)
@@ -693,6 +838,8 @@ def main():
     print(f"    T19:     Empty result (0 rows)          → DuckDB")
     print(f"    T20:     SQL with comments              → Athena (comments ignored)")
     print(f"    T21:     Triple source (Athena+DDB+file)→ materialize all → DuckDB")
+    print(f"    T22:     Multi-DB Athena (2nd database)  → Athena (skips if 1 DB)")
+    print(f"    UNIT:    Source classification (multi-DB) → host-side, no VM")
     print()
     print("=" * 70)
 
@@ -700,4 +847,13 @@ def main():
 
 
 if __name__ == "__main__":
+    # `--unit` runs only the host-side classification unit tests (no proxy/VM needed) —
+    # this is what validates the multi-DB sql_engine changes without an image rebuild.
+    if "--unit" in sys.argv:
+        p, f, _ = run_classification_unit_tests()
+        print()
+        print("=" * 70)
+        print(f"  UNIT TESTS: {'✅ PASSED' if f == 0 else '❌ FAILED'} — {p} passed, {f} failed")
+        print("=" * 70)
+        exit(0 if f == 0 else 1)
     main()

@@ -71,15 +71,10 @@ MAX_CONCURRENT_DISCOVERY = int(os.environ.get("ENTITY_DISCOVERY_CONCURRENCY", "8
 # we're profiling for a catalog description, not doing exhaustive analysis)
 SAMPLE_ROW_LIMIT = 500
 
-# S3 prefixes to scan for entity files — mirrors the enumeration already used
-# when building the data_sources payload for VM launch
-# (see proxy/platform/routes/microvm.py)
-S3_ENTITY_PREFIXES = ["samples/", "user-data/"]
-
-# DynamoDB table name filter — mirrors the heuristic used elsewhere in the proxy
-# to distinguish demo/app tables from unrelated tables that might exist in the
-# same AWS account
-_DYNAMO_NAME_HINTS = ("microvm", "demo", "ecommerce")
+# NOTE: Source enumeration + scope (S3 prefixes, DynamoDB name filters, Athena
+# databases) now live in the data source provider registry
+# (proxy/platform/datasources) and are shared with the /datasources endpoints
+# and the Data Sources panel. See list_global_entities() below.
 
 _bedrock_client = None
 
@@ -108,66 +103,62 @@ def _get_bedrock_client():
 
 def list_global_entities(bucket: str, athena_db: str, region: str) -> list[dict]:
     """
-    Enumerate all user-non-specific data sources: S3 files, Athena tables,
-    DynamoDB tables. Does NOT include local /tmp files.
+    Enumerate all user-non-specific data sources via the data source provider
+    registry (S3 files, Athena tables, DynamoDB tables). Does NOT include local
+    /tmp files (they're session-scoped and profiled separately).
+
+    Enumeration + scope now come from the registry providers (their discover()
+    methods, scoped by the DATASOURCE_* env vars) — the single source of truth
+    shared with the /datasources endpoints and the Data Sources panel. This
+    function just maps each generic SourceRef into the type-specific entity dict
+    shape the change-signal + profiling steps below expect.
 
     Returns a list of entity dicts: {source_id, source_type, ...type-specific fields}
     """
+    from proxy.platform.datasources import registry
+
+    refs = registry.discover_all_sync()
     entities: list[dict] = []
+    for r in refs:
+        st = r.source_type
+        extra = r.extra or {}
+        if st == "local":
+            continue  # session-scoped — handled by the local-file discovery path
 
-    # --- S3 files ---
-    try:
-        s3 = boto3.client("s3", region_name=region)
-        paginator = s3.get_paginator("list_objects_v2")
-        for prefix in S3_ENTITY_PREFIXES:
-            for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
-                for obj in page.get("Contents", []):
-                    key = obj["Key"]
-                    ext = key.rsplit(".", 1)[-1].lower() if "." in key else ""
-                    if ext not in ("csv", "parquet", "json"):
-                        continue
-                    entities.append({
-                        "source_id": f"s3://{bucket}/{key}",
-                        "source_type": "s3",
-                        "bucket": bucket,
-                        "key": key,
-                        "extension": ext,
-                    })
-    except Exception as e:
-        logger.warning(f"[entity-discovery] S3 enumeration failed: {e}")
-
-    # --- DynamoDB tables ---
-    try:
-        ddb_client = boto3.client("dynamodb", region_name=region)
-        for name in ddb_client.list_tables().get("TableNames", []):
-            if any(hint in name for hint in _DYNAMO_NAME_HINTS):
-                entities.append({
-                    "source_id": f"dynamodb.{name}",
-                    "source_type": "dynamodb",
-                    "table_name": name,
-                })
-    except Exception as e:
-        logger.warning(f"[entity-discovery] DynamoDB enumeration failed: {e}")
-
-    # --- Athena tables ---
-    # NOTE: source_id intentionally matches the VM-side data catalog's convention
-    # ({database}.{table}, e.g. "microvm_demo_db.orders" — no "athena." prefix)
-    # so step 2 can cross-reference entity docs against the catalog by exact
-    # source_id. See app/notebook/data_catalog.py's _discover_athena_table.
-    try:
-        glue = boto3.client("glue", region_name=region)
-        for t in glue.get_tables(DatabaseName=athena_db).get("TableList", []):
-            update_time = t.get("UpdateTime")
+        if st == "s3":
+            # Keep the previous extension filter (only tabular files are profiled).
+            if extra.get("extension") not in ("csv", "parquet", "json"):
+                continue
             entities.append({
-                "source_id": f"{athena_db}.{t['Name']}",
-                "source_type": "athena",
-                "database": athena_db,
-                "table_name": t["Name"],
-                "s3_location": t.get("StorageDescriptor", {}).get("Location", ""),
-                "glue_update_time": update_time.isoformat() if update_time else None,
+                "source_id": r.source_id,           # s3://bucket/key
+                "source_type": "s3",
+                "bucket": extra.get("bucket"),
+                "key": extra.get("key"),
+                "extension": extra.get("extension"),
             })
-    except Exception as e:
-        logger.warning(f"[entity-discovery] Athena/Glue enumeration failed: {e}")
+        elif st == "dynamodb":
+            # source_id must carry the "dynamodb." prefix so it matches the VM
+            # data-catalog convention used when cross-referencing entity docs.
+            name = extra.get("table_name") or extra.get("name") or r.source_id
+            entities.append({
+                "source_id": f"dynamodb.{name}",
+                "source_type": "dynamodb",
+                "table_name": name,
+            })
+        elif st == "athena":
+            entities.append({
+                "source_id": r.source_id,           # {database}.{table}
+                "source_type": "athena",
+                "database": extra.get("database"),
+                "table_name": extra.get("table_name") or extra.get("name"),
+                "s3_location": extra.get("s3_location", ""),
+                "glue_update_time": extra.get("glue_update_time"),
+            })
+        else:
+            # A newly registered source type with no profiling support yet — skip
+            # rather than fail. Add a fetch/profile branch in fetch_and_profile()
+            # to enable AI profiling for it.
+            logger.info(f"[entity-discovery] Skipping unsupported source type for profiling: {st}")
 
     return entities
 

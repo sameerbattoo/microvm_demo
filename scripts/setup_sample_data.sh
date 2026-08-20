@@ -440,19 +440,6 @@ else
 fi
 
 # ============================================================
-# Delete legacy DynamoDB table (no longer needed)
-# ============================================================
-echo "   Checking legacy DynamoDB table: $LEGACY_DYNAMO_TABLE"
-LEGACY_STATUS=$(aws dynamodb describe-table --table-name "$LEGACY_DYNAMO_TABLE" \
-  --profile "$AWS_CLI_PROFILE" --region "$AWS_REGION" \
-  --query 'Table.TableStatus' --output text 2>/dev/null || echo "NOT_FOUND")
-if [ "$LEGACY_STATUS" != "NOT_FOUND" ]; then
-  echo "   Deleting legacy table $LEGACY_DYNAMO_TABLE..."
-  aws dynamodb delete-table --table-name "$LEGACY_DYNAMO_TABLE" \
-    --profile "$AWS_CLI_PROFILE" --region "$AWS_REGION" >/dev/null 2>&1 || true
-  echo "   Legacy table deleted ✓"
-fi
-# ============================================================
 # Athena Workgroup
 # ============================================================
 ATHENA_OUTPUT="s3://${ARTIFACT_BUCKET}/${ATHENA_RESULTS_PREFIX}/"

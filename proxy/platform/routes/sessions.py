@@ -21,7 +21,9 @@ from proxy.platform.microvm_manager import AWS_REGION
 
 logger = logging.getLogger(__name__)
 
-ATHENA_DB = os.environ.get("ATHENA_DB", "microvm_demo_db")
+# Athena workgroup is surfaced in the /datasources response so the frontend can
+# show it. The Glue database + all source enumeration now live in the data source
+# provider registry (proxy/platform/datasources), not here.
 ATHENA_WORKGROUP = os.environ.get("ATHENA_WORKGROUP", "microvm-demo")
 
 router = APIRouter(tags=["sessions"])
@@ -96,78 +98,57 @@ async def delete_session(session_id: str, request: Request):
 
 @router.get("/datasources")
 async def list_datasources(request: Request):
-    """List external data sources accessible from the MicroVM."""
+    """
+    List external data sources accessible from the MicroVM.
+
+    Registry-driven: enumeration is delegated to each provider's discover().
+    Returns a generic `sources` array (+ `source_types` metadata) that the panel
+    renders generically, plus legacy grouped arrays (s3/dynamodb/athena) kept for
+    backward compatibility.
+    """
+    from proxy.platform.datasources import registry
+
     vm_manager = request.app.state.vm_manager
-    s3_files = []
-    dynamodb_tables = []
-    athena_tables = []
     bucket_name = None
-
     try:
-        s3 = boto3.client("s3", region_name=AWS_REGION)
         bucket_name = vm_manager.get_artifacts_bucket()
+    except Exception:
+        pass
 
-        if bucket_name:
-            paginator = s3.get_paginator("list_objects_v2")
-            for prefix in ["samples/", "user-data/"]:
-                for page in paginator.paginate(Bucket=bucket_name, Prefix=prefix, MaxKeys=50):
-                    for obj in page.get("Contents", []):
-                        key = obj["Key"]
-                        if key.endswith("/"):
-                            continue
-                        # Skip Athena per-table subfolders (e.g., samples/sales_data/sales_data.csv)
-                        # Only show files directly under the prefix (one level deep)
-                        relative = key[len(prefix):]
-                        if '/' in relative:
-                            continue
-                        size = obj["Size"]
-                        if size < 1024:
-                            size_str = f"{size} B"
-                        elif size < 1024 * 1024:
-                            size_str = f"{size / 1024:.1f} KB"
-                        else:
-                            size_str = f"{size / (1024 * 1024):.1f} MB"
-                        s3_files.append({
-                            "key": key,
-                            "bucket": bucket_name,
-                            "size": size_str,
-                            "size_bytes": size,
-                            "uri": f"s3://{bucket_name}/{key}",
-                        })
-    except Exception as e:
-        logger.warning(f"Failed to list S3 sources: {e}")
+    refs = await registry.discover_all()
 
-    try:
-        ddb = boto3.client("dynamodb", region_name=AWS_REGION)
-        resp = ddb.list_tables()
-        for table_name in resp.get("TableNames", []):
-            if "microvm" in table_name or "demo" in table_name or "ecommerce" in table_name:
-                desc = ddb.describe_table(TableName=table_name)
-                item_count = desc["Table"].get("ItemCount", 0)
-                dynamodb_tables.append({
-                    "name": table_name,
-                    "item_count": item_count,
-                    "region": AWS_REGION,
-                })
-    except Exception as e:
-        logger.warning(f"Failed to list DynamoDB sources: {e}")
+    # Generic, type-agnostic list (the data-driven panel consumes this).
+    sources = [r.to_dict() for r in refs]
 
-    try:
-        glue = boto3.client("glue", region_name=AWS_REGION)
-        resp = glue.get_tables(DatabaseName=ATHENA_DB)
-        for table in resp.get("TableList", []):
-            columns = table.get("StorageDescriptor", {}).get("Columns", [])
-            athena_tables.append({
-                "name": table["Name"],
-                "database": ATHENA_DB,
-                "columns": [{"name": c["Name"], "type": c["Type"]} for c in columns],
-                "column_count": len(columns),
-                "region": AWS_REGION,
+    # Legacy grouped arrays rebuilt from the same discovery results.
+    s3_files, dynamodb_tables, athena_tables = [], [], []
+    for r in refs:
+        if r.source_type == "s3":
+            s3_files.append({
+                "key": r.extra.get("key"),
+                "bucket": r.extra.get("bucket"),
+                "size": r.extra.get("size"),
+                "size_bytes": r.extra.get("size_bytes"),
+                "uri": r.extra.get("uri"),
             })
-    except Exception as e:
-        logger.warning(f"Failed to list Athena sources: {e}")
+        elif r.source_type == "dynamodb":
+            dynamodb_tables.append({
+                "name": r.extra.get("name"),
+                "item_count": r.extra.get("item_count", 0),
+                "region": r.extra.get("region"),
+            })
+        elif r.source_type == "athena":
+            athena_tables.append({
+                "name": r.extra.get("name"),
+                "database": r.extra.get("database"),
+                "columns": r.extra.get("columns", []),
+                "column_count": r.extra.get("column_count", 0),
+                "region": r.extra.get("region"),
+            })
 
     return {
+        "sources": sources,
+        "source_types": registry.provider_metadata(),
         "s3": s3_files,
         "dynamodb": dynamodb_tables,
         "athena": athena_tables,
@@ -199,13 +180,7 @@ async def get_datasource_schema(source_type: str, source_id: str, request: Reque
             "size": "13 KB"
         }
     """
-    from proxy.platform.datasources import (
-        AthenaSchemaProvider,
-        DynamoDBSchemaProvider,
-        S3SchemaProvider,
-        LocalFileSchemaProvider,
-    )
-    from dataclasses import asdict  # noqa: F401 — kept for potential downstream use
+    from proxy.platform.datasources import registry
     import httpx
 
     vm_manager = request.app.state.vm_manager
@@ -235,17 +210,25 @@ async def get_datasource_schema(source_type: str, source_id: str, request: Reque
             except Exception:
                 pass  # Fall through to direct provider
 
-    # --- Fallback: direct provider (original approach) ---
+    # --- Fallback: direct provider via the registry ---
+    meta = {m["source_type"]: m for m in registry.provider_metadata()}
+    if source_type not in meta:
+        return Response(
+            content=f'{{"error": "Unknown source type: {source_type}"}}',
+            status_code=400,
+            media_type="application/json",
+        )
 
-    # For local files, we need to execute code on the VM
-    if source_type == "local":
+    # Providers that need VM execution (local files) require a session + endpoint,
+    # so build an execute_fn that forwards code to the session's VM.
+    execute_on_vm = None
+    if meta[source_type]["requires_vm_execution"]:
         if not session_id:
             return Response(
-                content='{"error": "session_id required for local file schema"}',
+                content='{"error": "session_id required for this source type"}',
                 status_code=400,
                 media_type="application/json",
             )
-        vm_manager = request.app.state.vm_manager
         session_vm = vm_manager.get_session_vm(session_id)
         if not session_vm:
             return Response(
@@ -266,24 +249,8 @@ async def get_datasource_schema(source_type: str, source_id: str, request: Reque
                     return resp.json()
                 return None
 
-        provider = LocalFileSchemaProvider(execute_fn=execute_on_vm)
-        schema = await provider.get_schema(source_id, session_id=session_id)
-    else:
-        providers = {
-            "athena": AthenaSchemaProvider(),
-            "dynamodb": DynamoDBSchemaProvider(),
-            "s3": S3SchemaProvider(),
-        }
-
-        provider = providers.get(source_type)
-        if not provider:
-            return Response(
-                content=f'{{"error": "Unknown source type: {source_type}"}}',
-                status_code=400,
-                media_type="application/json",
-            )
-
-        schema = await provider.get_schema(source_id)
+    provider = registry.get_provider(source_type, execute_fn=execute_on_vm)
+    schema = await provider.get_schema(source_id, session_id=session_id)
     if not schema:
         return Response(
             content=f'{{"error": "Schema not found for {source_id}"}}',
@@ -491,21 +458,9 @@ async def get_datasource_snippet(source_type: str, source_id: str, language: str
     Returns:
         {"code": "...", "cell_type": "code" or "sql"}
     """
-    from proxy.platform.datasources import (
-        AthenaSchemaProvider,
-        DynamoDBSchemaProvider,
-        S3SchemaProvider,
-        LocalFileSchemaProvider,
-    )
+    from proxy.platform.datasources import registry
 
-    providers = {
-        "athena": AthenaSchemaProvider(),
-        "dynamodb": DynamoDBSchemaProvider(),
-        "s3": S3SchemaProvider(),
-        "local": LocalFileSchemaProvider(),
-    }
-
-    provider = providers.get(source_type)
+    provider = registry.get_provider(source_type)
     if not provider:
         return Response(
             content=f'{{"error": "Unknown source type: {source_type}"}}',

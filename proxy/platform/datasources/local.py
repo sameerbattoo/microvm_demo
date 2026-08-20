@@ -17,7 +17,16 @@ class LocalFileSchemaProvider(DataSourceProvider):
     
     Unlike other providers, this one needs to execute code on the VM
     to read the file header. It delegates to the MicroVM via execute_code.
+
+    Discovery is NOT done here — local /tmp files are enumerated on the VM
+    (app/notebook/data_catalog.py) and surfaced via the VM data catalog, so
+    discover() keeps the default (empty) behavior.
     """
+
+    display_name = "Sandbox Files"
+    icon = "local"
+    supports_sql = True
+    requires_vm_execution = True
 
     def __init__(self, execute_fn=None):
         """
@@ -30,6 +39,18 @@ class LocalFileSchemaProvider(DataSourceProvider):
     @property
     def source_type(self) -> str:
         return "local"
+
+    def reader_docs(self) -> list[str]:
+        return [
+            "read_local(path) -> df                          # Read /tmp/file (.csv, .parquet, .json, .xlsx)",
+        ]
+
+    def sql_syntax_docs(self) -> list[str]:
+        return [
+            "Local CSV files: SELECT * FROM '/tmp/file.csv' LIMIT 10",
+            "Local JSON files: SELECT * FROM '/tmp/file.json' LIMIT 10",
+            "Local Parquet files: SELECT * FROM '/tmp/file.parquet' LIMIT 10",
+        ]
 
     async def get_schema(self, source_id: str, session_id: str = None) -> Optional[SourceSchema]:
         """

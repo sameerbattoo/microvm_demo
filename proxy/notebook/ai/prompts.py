@@ -17,7 +17,7 @@ Think of yourself like Hex Magic: you plan the analysis and produce insertable c
 Your tools are for INSPECTION ONLY — use them to understand the user's data and context:
 - get_variables: See what DataFrames and variables exist in the notebook
 - get_notebook_state: View existing cells, outputs, and errors
-- get_available_data_sources: Discover S3 files, DynamoDB tables, Athena tables, local files
+- get_available_data_sources: Discover available data sources (__SOURCE_TYPES_LIST__)
 - install_package: Install a pip package (use BEFORE generating code that needs it)
 - execute_code: Run a QUICK inspection query (shape, dtypes, head) to inform your code generation — NOT for full analysis
 
@@ -41,14 +41,8 @@ SQL CELLS: The notebook supports SQL cells with intelligent auto-routing:
 BUILT-IN HELPER FUNCTIONS (pre-loaded in every cell execution — no import needed):
 These functions are automatically available in the user's namespace. They are injected at VM startup and handle AWS auth, region config, error handling, and return pandas DataFrames directly. ALWAYS use these instead of raw boto3/pandas boilerplate — they produce compact, readable code:
 
-Data Reading:
-  read_local(path) → df                           # Read /tmp/file.csv (.csv, .parquet, .json, .xlsx)
-  read_s3_csv(bucket, key) → df                   # Read CSV from S3
-  read_s3_parquet(bucket, key) → df               # Read Parquet from S3
-  read_s3_json(bucket, key, lines=True) → df      # Read JSON/JSONL from S3
-  read_dynamodb(table_name, limit=None) → df      # Scan DynamoDB table into DataFrame
-  read_dynamodb_query(table_name, key_condition, values) → df  # Query DynamoDB with key condition
-  read_athena(sql, database="microvm_demo_db") → df  # Run Athena SQL, return DataFrame
+Data Reading (per-source helpers auto-listed from the data source registry):
+__READER_DOCS_BLOCK__
   read_url(url, format='csv') → df                # Fetch data from a public URL
   sample_data(name=None) → df                     # Load built-in sample dataset (call with no args to list)
 
@@ -113,14 +107,7 @@ WHEN TO USE @param:
 
 SQL SYNTAX BY DATA SOURCE (for SQL cells only — Python cells must use boto3 for S3):
 - DataFrames in memory: SELECT * FROM df_name (use the variable name directly)
-- Local CSV files: SELECT * FROM '/tmp/file.csv' LIMIT 10
-- Local JSON files: SELECT * FROM '/tmp/file.json' LIMIT 10
-- Local Parquet files: SELECT * FROM '/tmp/file.parquet' LIMIT 10
-- S3 CSV files (SQL cell only): SELECT * FROM read_csv('s3://bucket/key.csv') LIMIT 10
-- S3 JSON files (SQL cell only): SELECT * FROM read_json('s3://bucket/key.json') LIMIT 10
-- S3 Parquet files (SQL cell only): SELECT * FROM read_parquet('s3://bucket/key.parquet') LIMIT 10
-- DynamoDB tables: SELECT * FROM dynamodb."table-name" LIMIT 10 (tries PartiQL server-side first, falls back to scan+DuckDB for JOINs/GROUP BY)
-- Athena tables: SELECT * FROM microvm_demo_db.table_name LIMIT 10 (uses database.table format)
+__SQL_SYNTAX_BLOCK__
 - Mixed (any combination): SELECT a.*, b.col FROM dynamodb."my-table" a JOIN '/tmp/local.csv' b ON a.id = b.id
 </capabilities>
 
@@ -274,6 +261,53 @@ Use get_available_data_sources tool for discovery — it has the complete list i
 <current_time>
 {current_time}
 </current_time>"""
+
+# --- Registry-driven per-source docs -------------------------------------------
+# The built-in reader helpers and SQL-cell syntax sections above are filled in
+# from the data source provider registry, so the assistant's knowledge of the
+# available sources stays in sync with what is actually registered. A hardcoded
+# fallback keeps the prompt intact if the registry can't be imported.
+_FALLBACK_READER_BLOCK = """  read_local(path) -> df                          # Read /tmp/file (.csv, .parquet, .json, .xlsx)
+  read_s3_csv(bucket, key) -> df                  # Read CSV from S3
+  read_s3_parquet(bucket, key) -> df              # Read Parquet from S3
+  read_s3_json(bucket, key, lines=True) -> df     # Read JSON/JSONL from S3
+  read_dynamodb(table_name, limit=None) -> df     # Scan DynamoDB table into DataFrame
+  read_dynamodb_query(table_name, key_condition, values) -> df  # Query DynamoDB with key condition
+  read_athena(sql, database="microvm_demo_db") -> df  # Run Athena SQL, return DataFrame"""
+
+_FALLBACK_SQL_BLOCK = """- Local CSV files: SELECT * FROM '/tmp/file.csv' LIMIT 10
+- Local JSON files: SELECT * FROM '/tmp/file.json' LIMIT 10
+- Local Parquet files: SELECT * FROM '/tmp/file.parquet' LIMIT 10
+- S3 CSV files (SQL cell only): SELECT * FROM read_csv('s3://bucket/key.csv') LIMIT 10
+- S3 JSON files (SQL cell only): SELECT * FROM read_json('s3://bucket/key.json') LIMIT 10
+- S3 Parquet files (SQL cell only): SELECT * FROM read_parquet('s3://bucket/key.parquet') LIMIT 10
+- DynamoDB tables: SELECT * FROM dynamodb."table-name" LIMIT 10 (tries PartiQL server-side first, falls back to scan+DuckDB for JOINs/GROUP BY)
+- Athena tables: SELECT * FROM microvm_demo_db.table_name LIMIT 10 (uses database.table format)"""
+
+_FALLBACK_SOURCE_TYPES = "S3 files, DynamoDB tables, Athena tables, local files"
+
+try:
+    from proxy.platform.datasources import registry as _ds_registry
+    _reader_block = "\n".join("  " + line for line in _ds_registry.reader_docs())
+    _sql_block = "\n".join("- " + line for line in _ds_registry.sql_syntax_docs())
+    _source_types_list = ", ".join(m["display_name"] for m in _ds_registry.provider_metadata())
+    if not _reader_block.strip():
+        _reader_block = _FALLBACK_READER_BLOCK
+    if not _sql_block.strip():
+        _sql_block = _FALLBACK_SQL_BLOCK
+    if not _source_types_list.strip():
+        _source_types_list = _FALLBACK_SOURCE_TYPES
+except Exception:
+    _reader_block = _FALLBACK_READER_BLOCK
+    _sql_block = _FALLBACK_SQL_BLOCK
+    _source_types_list = _FALLBACK_SOURCE_TYPES
+
+NOTEBOOK_AGENT_PROMPT = (
+    NOTEBOOK_AGENT_PROMPT
+    .replace("__READER_DOCS_BLOCK__", _reader_block)
+    .replace("__SQL_SYNTAX_BLOCK__", _sql_block)
+    .replace("__SOURCE_TYPES_LIST__", _source_types_list)
+)
 
 EXPLAIN_PROMPT = """<task>
 Explain this cell and its output. Return JSON with three fields:

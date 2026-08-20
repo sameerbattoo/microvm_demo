@@ -19,7 +19,6 @@ import json
 import asyncio
 import logging
 
-import boto3
 import httpx
 from fastapi import APIRouter, Request, Response
 
@@ -178,6 +177,21 @@ async def launch_microvm(request: Request):
     # Secrets & env vars (passed to /run hook for injection into os.environ)
     secrets = body.get("secrets", [])  # [{name, arn, envVar}]
     env_vars = body.get("envVars", {})  # {KEY: value}
+    # Propagate data-source config from the proxy environment into the VM so the
+    # in-VM helpers (read_athena) and SQL engine read real config values instead
+    # of falling back to defaults. Explicit request envVars win over these.
+    _config_env = {
+        "AWS_REGION": AWS_REGION,
+        "ATHENA_DB": ATHENA_DB,
+        "ATHENA_WORKGROUP": os.environ.get("ATHENA_WORKGROUP", "microvm-demo"),
+        # Discovery scope, so the VM's SQL engine recognizes db.table refs across the
+        # SAME set of Glue databases the Data Sources panel shows.
+        "DATASOURCE_ATHENA_DATABASES": os.environ.get("DATASOURCE_ATHENA_DATABASES", ""),
+    }
+    _cfg_bucket = vm_manager.get_artifacts_bucket()
+    if _cfg_bucket:
+        _config_env["ARTIFACT_BUCKET"] = _cfg_bucket
+    env_vars = {**_config_env, **env_vars}
 
     image_arn = f"{IMAGE_ARN}-{memory_mib}" if IMAGE_ARN else ""
     if not image_arn:
@@ -190,28 +204,36 @@ async def launch_microvm(request: Request):
     persistence_mode = os.environ.get("SESSION_PERSISTENCE_MODE", "checkpoint")
     logger.info(f"Launching MicroVM for: {notebook_name} (memory: {memory_mib} MiB, image: {image_arn})")
 
-    # Pre-fetch data source list to pass to VM for background schema discovery
+    # Pre-fetch the data source list to pass to the VM for background schema
+    # discovery. Single source of truth: the data source provider registry — the
+    # same enumeration + scope used by /datasources, the panel, and entity
+    # discovery. The payload shape below matches app/notebook/data_catalog.py.
     data_sources = {"s3": [], "dynamodb": [], "athena": []}
     try:
-        s3_client = boto3.client("s3", region_name=AWS_REGION)
+        from proxy.platform.datasources import registry
         bucket_name = vm_manager.get_artifacts_bucket()
         if bucket_name:
             data_sources["artifact_bucket"] = bucket_name
-            paginator = s3_client.get_paginator("list_objects_v2")
-            for prefix in ["samples/", "user-data/"]:
-                for page in paginator.paginate(Bucket=bucket_name, Prefix=prefix, MaxKeys=50):
-                    for obj in page.get("Contents", []):
-                        key = obj["Key"]
-                        if key.endswith("/") or '/' in key[len(prefix):]:
-                            continue
-                        data_sources["s3"].append({"key": key, "bucket": bucket_name, "uri": f"s3://{bucket_name}/{key}", "size_bytes": obj["Size"]})
-        ddb_client = boto3.client("dynamodb", region_name=AWS_REGION)
-        for t in ddb_client.list_tables().get("TableNames", []):
-            if "microvm" in t or "demo" in t or "ecommerce" in t:
-                data_sources["dynamodb"].append({"name": t, "region": AWS_REGION})
-        glue_client = boto3.client("glue", region_name=AWS_REGION)
-        for t in glue_client.get_tables(DatabaseName=ATHENA_DB).get("TableList", []):
-            data_sources["athena"].append({"name": t["Name"], "database": ATHENA_DB, "region": AWS_REGION})
+        for ref in registry.discover_all_sync():
+            extra = ref.extra or {}
+            if ref.source_type == "s3":
+                data_sources["s3"].append({
+                    "key": extra.get("key"),
+                    "bucket": extra.get("bucket"),
+                    "uri": extra.get("uri"),
+                    "size_bytes": extra.get("size_bytes", 0),
+                })
+            elif ref.source_type == "dynamodb":
+                data_sources["dynamodb"].append({
+                    "name": extra.get("name"),
+                    "region": extra.get("region", AWS_REGION),
+                })
+            elif ref.source_type == "athena":
+                data_sources["athena"].append({
+                    "name": extra.get("name"),
+                    "database": extra.get("database"),
+                    "region": extra.get("region", AWS_REGION),
+                })
     except Exception as e:
         logger.warning(f"Failed to pre-fetch datasources for VM: {e}")
 

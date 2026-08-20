@@ -20,8 +20,11 @@ import boto3
 import pandas as pd
 import plotly.express as px
 
-# Default AWS region from the execution role
+# Defaults sourced from the execution environment (set at VM launch / config.sh).
+# Fallbacks match the project defaults so nothing breaks if a var is unset.
 _REGION = os.environ.get("AWS_REGION", "us-west-2")
+_ATHENA_WORKGROUP = os.environ.get("ATHENA_WORKGROUP", "microvm-demo")
+_ATHENA_DB = os.environ.get("ATHENA_DB", "microvm_demo_db")
 
 
 # =============================================================================
@@ -139,7 +142,7 @@ def read_dynamodb_query(table_name: str, key_condition: str, values: dict, regio
     return pd.DataFrame(response.get('Items', []))
 
 
-def read_athena(sql: str, database: str = "microvm_demo_db", region: str = None) -> pd.DataFrame:
+def read_athena(sql: str, database: str = None, region: str = None) -> pd.DataFrame:
     """
     Run an Athena SQL query and return results as a DataFrame.
     
@@ -149,13 +152,16 @@ def read_athena(sql: str, database: str = "microvm_demo_db", region: str = None)
     """
     import time
     
-    athena = boto3.client('athena', region_name=region or _REGION)
-    bucket = f"microvm-sandbox-artifacts-{boto3.client('sts').get_caller_identity()['Account']}-{region or _REGION}"
+    region = region or _REGION
+    database = database or _ATHENA_DB
+    athena = boto3.client('athena', region_name=region)
+    bucket = os.environ.get("ARTIFACT_BUCKET") or \
+        f"microvm-sandbox-artifacts-{boto3.client('sts').get_caller_identity()['Account']}-{region}"
     
     response = athena.start_query_execution(
         QueryString=sql,
         QueryExecutionContext={'Database': database},
-        WorkGroup='microvm-demo',
+        WorkGroup=_ATHENA_WORKGROUP,
         ResultConfiguration={'OutputLocation': f's3://{bucket}/athena-results/'},
     )
     

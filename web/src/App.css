@@ -475,6 +475,99 @@
   cursor: not-allowed;
 }
 
+/* Active state for a toggled action button (e.g. Open Sample) */
+.app-empty-btn-active {
+  background: var(--accent-primary-subtle);
+  border-color: var(--accent-primary-muted);
+  color: var(--accent-primary);
+}
+
+/* ---- Sample gallery ---- */
+.app-empty-samples {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(210px, 1fr));
+  gap: var(--space-3);
+  margin-top: var(--space-4);
+  max-width: 760px;
+  width: 100%;
+  animation: sampleGalleryIn 0.22s ease;
+}
+
+@keyframes sampleGalleryIn {
+  from { opacity: 0; transform: translateY(-6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.app-empty-samples-loading {
+  grid-column: 1 / -1;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: var(--font-size-sm);
+  padding: var(--space-4);
+}
+
+.sample-card {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  text-align: left;
+  padding: var(--space-3);
+  background: var(--surface-4);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-lg);
+  cursor: pointer;
+  transition: transform var(--transition-fast), background var(--transition-fast), border-color var(--transition-fast), box-shadow var(--transition-fast);
+}
+
+.sample-card:hover {
+  background: var(--accent-primary-subtle);
+  border-color: var(--accent-primary-muted);
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-md);
+}
+
+.sample-card-icon {
+  font-size: 20px;
+  line-height: 1;
+  width: 40px;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--surface-2);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  flex-shrink: 0;
+  transition: border-color var(--transition-fast);
+}
+
+.sample-card:hover .sample-card-icon {
+  border-color: var(--accent-primary-muted);
+}
+
+.sample-card-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.sample-card-name {
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.sample-card-desc {
+  font-size: var(--font-size-xs);
+  color: var(--text-secondary);
+  line-height: 1.35;
+}
+
+@media (max-width: 720px) {
+  .app-empty-samples { grid-template-columns: repeat(2, minmax(180px, 1fr)); }
+}
+
 .app-empty-hint {
   display: flex;
   align-items: center;

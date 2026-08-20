@@ -63,37 +63,63 @@ _glue_cache_ts: float = 0    # Unix timestamp of last fetch
 GLUE_CACHE_TTL = 300         # 5 minutes
 
 
-def _get_athena_catalog(athena_db: str, aws_region: str) -> set[str]:
+def _resolve_athena_databases(aws_region: str) -> list[str]:
     """
-    Get table names from the Glue catalog (cached with 5-min TTL).
-    Returns a set of bare table names for the given database.
+    Resolve which Glue databases SQL-cell routing should recognize.
+
+    Mirrors the proxy-side AthenaSchemaProvider discovery scope so SQL cells and
+    the Data Sources panel agree on which databases are "known":
+      - explicit DATASOURCE_ATHENA_DATABASES allowlist (comma-separated) wins;
+      - otherwise auto-list every Glue database the role can access;
+      - falling back to the single ATHENA_DB default if listing isn't permitted.
     """
-    global _glue_cache, _glue_cache_ts
+    explicit = [d.strip() for d in os.environ.get("DATASOURCE_ATHENA_DATABASES", "").split(",") if d.strip()]
+    if explicit:
+        return explicit
+    default_db = os.environ.get("ATHENA_DB", "microvm_demo_db")
+    try:
+        import boto3
+        glue = boto3.client("glue", region_name=aws_region)
+        dbs = []
+        for page in glue.get_paginator("get_databases").paginate():
+            dbs.extend(d["Name"] for d in page.get("DatabaseList", []))
+        return dbs or [default_db]
+    except Exception as e:
+        logger.warning(f"Could not list Glue databases; using ATHENA_DB only: {e}")
+        return [default_db]
+
+
+def _get_athena_catalogs(databases: list[str], aws_region: str) -> dict[str, set[str]]:
+    """
+    Get table names from the Glue catalog for each database (cached with 5-min TTL).
+    Returns { database: {bare table names} }.
+    """
+    global _glue_cache_ts
     import boto3
 
     now = _time.time()
-    if athena_db in _glue_cache and (now - _glue_cache_ts) < GLUE_CACHE_TTL:
-        return _glue_cache[athena_db]
-
-    try:
-        glue = boto3.client("glue", region_name=aws_region)
-        tables = set()
-        paginator = glue.get_paginator("get_tables")
-        for page in paginator.paginate(DatabaseName=athena_db):
-            for t in page.get("TableList", []):
-                tables.add(t["Name"])
-        _glue_cache[athena_db] = tables
-        _glue_cache_ts = now
-        logger.info(f"Glue catalog refreshed: {athena_db} ({len(tables)} tables)")
-        return tables
-    except Exception as e:
-        logger.warning(f"Could not fetch Athena catalog: {e}")
-        return _glue_cache.get(athena_db, set())
+    stale = (now - _glue_cache_ts) >= GLUE_CACHE_TTL
+    need = [db for db in databases if stale or db not in _glue_cache]
+    if need:
+        try:
+            glue = boto3.client("glue", region_name=aws_region)
+            for db in need:
+                tables = set()
+                paginator = glue.get_paginator("get_tables")
+                for page in paginator.paginate(DatabaseName=db):
+                    for t in page.get("TableList", []):
+                        tables.add(t["Name"])
+                _glue_cache[db] = tables
+                logger.info(f"Glue catalog refreshed: {db} ({len(tables)} tables)")
+            _glue_cache_ts = now
+        except Exception as e:
+            logger.warning(f"Could not fetch Athena catalog: {e}")
+    return {db: _glue_cache.get(db, set()) for db in databases}
 
 
 # ─── Source Detection ─────────────────────────────────────────────────────────
 
-def _classify_sources(sql: str, athena_db: str, athena_tables: set[str], namespace_dataframes: set[str]) -> list[SourceRef]:
+def _classify_sources(sql: str, athena_catalogs: dict[str, set[str]], namespace_dataframes: set[str]) -> list[SourceRef]:
     """
     Parse the SQL and classify every FROM/JOIN source into its type.
 
@@ -163,20 +189,26 @@ def _classify_sources(sql: str, athena_db: str, athena_tables: set[str], namespa
             table_name=table_name,
         ))
 
-    # 4. Detect Athena tables: database.table_name (must match Glue catalog)
-    athena_pattern = re.compile(
-        r'(?:FROM|JOIN)\s+(' + re.escape(athena_db) + r'\.([a-zA-Z_]\w*))',
-        re.IGNORECASE
-    )
-    for m in athena_pattern.finditer(sql_clean):
-        full_ref = m.group(1)   # e.g. "microvm_demo_db.sales_data"
-        bare_name = m.group(2)  # e.g. "sales_data"
-        if bare_name in athena_tables:
-            sources.append(SourceRef(
-                source_type=SourceType.ATHENA,
-                full_ref=full_ref,
-                table_name=bare_name,
-            ))
+    # 4. Detect Athena tables: <database>.<table> for ANY configured Glue database
+    #    (must match that database's Glue catalog).
+    if athena_catalogs:
+        db_alt = "|".join(re.escape(db) for db in athena_catalogs.keys())
+        athena_pattern = re.compile(
+            r'(?:FROM|JOIN)\s+((' + db_alt + r')\.([a-zA-Z_]\w*))',
+            re.IGNORECASE
+        )
+        for m in athena_pattern.finditer(sql_clean):
+            full_ref = m.group(1)   # e.g. "microvm_demo_db.sales_data"
+            db_part = m.group(2)    # e.g. "microvm_demo_db"
+            bare_name = m.group(3)  # e.g. "sales_data"
+            # Resolve the matched database case-insensitively, then confirm the table exists.
+            tables = next((t for db, t in athena_catalogs.items() if db.lower() == db_part.lower()), None)
+            if tables and bare_name in tables:
+                sources.append(SourceRef(
+                    source_type=SourceType.ATHENA,
+                    full_ref=full_ref,
+                    table_name=bare_name,
+                ))
 
     # 5. Detect DataFrames: bare identifier after FROM/JOIN (not already classified)
     # Excludes: paths, function calls, dynamodb., database.table
@@ -240,16 +272,16 @@ async def execute_sql(request: Request):
     start = _time.perf_counter()
     try:
         # --- Configuration ---
-        athena_db = os.environ.get("ATHENA_DB", "microvm_demo_db")
         athena_workgroup = os.environ.get("ATHENA_WORKGROUP", "microvm-demo")
         aws_region = os.environ.get("AWS_REGION", "us-west-2")
 
-        # --- Step 1: Get Athena catalog (cached) ---
-        athena_tables = _get_athena_catalog(athena_db, aws_region)
+        # --- Step 1: Get Athena catalog(s) for every configured database (cached) ---
+        athena_databases = _resolve_athena_databases(aws_region)
+        athena_catalogs = _get_athena_catalogs(athena_databases, aws_region)
 
         # --- Step 2: Classify all sources in the SQL ---
         namespace_dataframes = {k for k, v in executor._namespace.items() if isinstance(v, pd.DataFrame)}
-        sources = _classify_sources(sql, athena_db, athena_tables, namespace_dataframes)
+        sources = _classify_sources(sql, athena_catalogs, namespace_dataframes)
 
         # Group by type
         source_types = {s.source_type for s in sources}
@@ -303,8 +335,11 @@ async def execute_sql(request: Request):
             if athena_sources:
                 engine_parts.append("athena")
                 for src in athena_sources:
-                    athena_sql = f"SELECT * FROM {athena_db}.{src.table_name}"
-                    safe_alias = f"_athena_{src.table_name}"
+                    # Use the source's OWN database (full_ref = db.table), not a single default,
+                    # so tables from any configured database materialize correctly.
+                    athena_sql = f"SELECT * FROM {src.full_ref}"
+                    # Alias includes the db so identically-named tables in different DBs don't collide.
+                    safe_alias = "_athena_" + re.sub(r'\W', '_', src.full_ref)
                     materialized[safe_alias] = await _run_athena_query(athena_sql, athena_workgroup, aws_region)
                     rewritten_sql = re.sub(r'\b' + re.escape(src.full_ref) + r'\b', safe_alias, rewritten_sql)
 

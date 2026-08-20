@@ -1,12 +1,16 @@
 .connection-panel {
-  position: absolute;
+  /* Viewport-level overlay so it sits on top of ALL panels — including the
+     bottom panel (Logs/Intel/Terminal) and the AI chat — not just the notebook
+     area. (Was position:absolute, which trapped it inside the notebook region.)
+     z-index stays below the true modals (Intel/confirm at 9999–10000). */
+  position: fixed;
   inset: 0;
   display: flex;
   align-items: flex-start;
   justify-content: center;
   background: rgba(0, 0, 0, 0.6);
   backdrop-filter: blur(6px);
-  z-index: 100;
+  z-index: 500;
   padding: var(--space-6);
   animation: fadeIn 0.2s ease;
   overflow-y: auto;
