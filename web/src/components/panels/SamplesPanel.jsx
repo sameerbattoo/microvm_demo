@@ -19,16 +19,25 @@ export default function SamplesPanel({ onLoadSample, onClose }) {
         <button className="sidebar-panel-close" onClick={onClose} title="Close panel"><IconX width={12} height={12} /></button>
       </div>
       <div className="sidebar-panel-body">
-        {samples.map(sample => (
-          <div
-            key={sample.id}
-            className="sidebar-item sidebar-sample-item"
-            onClick={() => onLoadSample(`/samples/${sample.file}`, sample.name)}
-          >
-            <span className="sidebar-file-icon">{sample.icon}</span>
-            <span className="sidebar-item-label">{sample.name}</span>
-          </div>
-        ))}
+        {samples.length === 0 && (
+          <div className="app-empty-samples-loading">Loading samples…</div>
+        )}
+        <div className="sidebar-samples-list">
+          {samples.map(sample => (
+            <button
+              key={sample.id}
+              className="sample-card"
+              onClick={() => onLoadSample(`/samples/${sample.file}`, sample.name)}
+              title={sample.description || sample.name}
+            >
+              <span className="sample-card-icon">{sample.icon}</span>
+              <span className="sample-card-text">
+                <span className="sample-card-name">{sample.name}</span>
+                {sample.description && <span className="sample-card-desc">{sample.description}</span>}
+              </span>
+            </button>
+          ))}
+        </div>
       </div>
     </div>
   )

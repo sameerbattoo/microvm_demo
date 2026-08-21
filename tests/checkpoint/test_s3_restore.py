@@ -72,15 +72,52 @@ def wait_for_terminated(microvm_id, timeout=90):
     raise TimeoutError(f"MicroVM {microvm_id} did not terminate in {timeout}s")
 
 
-def execute_code(session_id, code, timeout=60):
-    """Execute code on the MicroVM via the proxy using session_id only."""
+def execute_code(session_id, code, timeout=60, cell_id=None):
+    """Execute code on the MicroVM via the proxy using session_id only.
+    Pass cell_id to record variable provenance (which cell created/modified vars)."""
+    body = {"code": code}
+    if cell_id is not None:
+        body["cell_id"] = cell_id
     resp = requests.post(
         f"{PROXY_URL}/proxy/execute",
         headers={
             "Content-Type": "application/json",
             "X-Session-Id": session_id,
         },
-        json={"code": code},
+        json=body,
+        timeout=timeout,
+    )
+    return resp.json()
+
+
+def get_variables(session_id, timeout=30):
+    """Fetch the namespace variables (incl. provenance) via the proxy."""
+    resp = requests.get(
+        f"{PROXY_URL}/proxy/variables",
+        headers={"X-Session-Id": session_id},
+        timeout=timeout,
+    )
+    return resp.json().get("variables", {})
+
+
+def install_package(session_id, package, timeout=120):
+    """Install a package via /install. Returns JSON incl. `installed_spec`
+    (resolved name==version, persisted for reproducible restore)."""
+    resp = requests.post(
+        f"{PROXY_URL}/proxy/install",
+        headers={"Content-Type": "application/json", "X-Session-Id": session_id},
+        json={"package": package},
+        timeout=timeout,
+    )
+    return resp.json()
+
+
+def uninstall_package(session_id, package, timeout=60):
+    """Uninstall a package via /install (recorded so it is NOT reinstalled on restore)."""
+    resp = requests.post(
+        f"{PROXY_URL}/proxy/install",
+        headers={"Content-Type": "application/json", "X-Session-Id": session_id},
+        json={"package": package, "uninstall": True},
         timeout=timeout,
     )
     return resp.json()
@@ -193,7 +230,7 @@ matrix = np.random.rand(10, 10)
 print(f"Created: x={x}, message='{message}', len(numbers)={len(numbers)}")
 print(f"DataFrame shape: {df.shape}")
 print(f"Matrix shape: {matrix.shape}")
-""")
+""", cell_id="cell-setup")
     assert result.get("success"), f"Execution failed: {result.get('error')}"
     log(f"  Variables created: {result.get('output', '').strip()}")
 
@@ -228,6 +265,21 @@ print(f"File exists: {os.path.exists('/tmp/test_products.csv')}")
 print(f"File size: {os.path.getsize('/tmp/test_products.csv')} bytes")
 """)
     log(f"  State verification: {result.get('output', '').strip()}")
+
+    # Install a package (pinned to its resolved version) + install-then-uninstall a
+    # throwaway one, to exercise version pinning and uninstall tracking across restore.
+    log("  Installing tabulate (pinned) + install/uninstall humanize...")
+    ir = install_package(session_id, "tabulate")
+    assert ir.get("success"), f"tabulate install failed: {ir.get('error')}"
+    installed_spec = ir.get("installed_spec", "")
+    assert installed_spec.startswith("tabulate=="), \
+        f"Expected pinned spec 'tabulate==x.y.z', got {installed_spec!r}"
+    installed_pkg_version = installed_spec.split("==", 1)[1]
+    log(f"    Install spec: {installed_spec!r}")
+    hr = install_package(session_id, "humanize")
+    assert hr.get("success"), f"humanize install failed: {hr.get('error')}"
+    ur = uninstall_package(session_id, "humanize")
+    assert ur.get("success"), f"humanize uninstall failed: {ur.get('error')}"
 
     log(f"  Session ID: {session_id}")
     restore_session_id = session_id
@@ -415,6 +467,53 @@ print(f"File size: {os.path.getsize('/tmp/test_products.csv')} bytes")
         checks_passed += 1
     else:
         log(f"  ❌ Numpy array 'matrix' NOT restored: {result.get('error') or result.get('output')}")
+
+    # Check package restore: installed pkg present + version pinned; uninstalled pkg absent.
+    result = execute_code(restore_session_id_new,
+        "try:\n"
+        "    import tabulate\n"
+        "    print(f'tabulate_ok=True, version={tabulate.__version__}')\n"
+        "except ImportError as e:\n"
+        "    print(f'tabulate_ok=False, error={e}')"
+    )
+    pkg_out = result.get("output", "")
+    checks_total += 1
+    if result.get("success") and "tabulate_ok=True" in pkg_out:
+        log("  ✅ Package 'tabulate' restored")
+        checks_passed += 1
+    else:
+        log(f"  ❌ Package 'tabulate' NOT restored: {result.get('error') or pkg_out}")
+    checks_total += 1
+    if f"version={installed_pkg_version}" in pkg_out:
+        log(f"  ✅ Package version pinned on restore: {installed_pkg_version}")
+        checks_passed += 1
+    else:
+        log(f"  ❌ Package version NOT pinned: expected {installed_pkg_version}, got {pkg_out.strip()}")
+
+    result = execute_code(restore_session_id_new,
+        "try:\n"
+        "    import humanize\n"
+        "    print('humanize_present=True')\n"
+        "except ImportError:\n"
+        "    print('humanize_present=False')"
+    )
+    checks_total += 1
+    if result.get("success") and "humanize_present=False" in result.get("output", ""):
+        log("  ✅ Uninstalled package 'humanize' correctly NOT restored")
+        checks_passed += 1
+    else:
+        log(f"  ❌ Uninstalled package reappeared: {result.get('error') or result.get('output')}")
+
+    # Check variable provenance (defined_by) survived the checkpoint/restore
+    vars_meta = get_variables(restore_session_id_new)
+    checks_total += 1
+    x_defined_by = (vars_meta.get("x") or {}).get("defined_by")
+    df_defined_by = (vars_meta.get("df") or {}).get("defined_by")
+    if x_defined_by == "cell-setup" and df_defined_by == "cell-setup":
+        log("  ✅ Provenance restored: x & df defined_by='cell-setup'")
+        checks_passed += 1
+    else:
+        log(f"  ❌ Provenance NOT restored: x.defined_by={x_defined_by!r}, df.defined_by={df_defined_by!r}")
 
     # Check local file
     result = execute_code(restore_session_id_new, """

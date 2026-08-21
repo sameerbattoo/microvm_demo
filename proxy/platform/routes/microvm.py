@@ -28,8 +28,6 @@ from proxy.platform.microvm_manager import (
     INGRESS_CONNECTOR, SHELL_INGRESS_CONNECTOR, EGRESS_CONNECTOR,
 )
 
-ATHENA_DB = os.environ.get("ATHENA_DB", "microvm_demo_db")
-
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["microvm"])
@@ -177,21 +175,11 @@ async def launch_microvm(request: Request):
     # Secrets & env vars (passed to /run hook for injection into os.environ)
     secrets = body.get("secrets", [])  # [{name, arn, envVar}]
     env_vars = body.get("envVars", {})  # {KEY: value}
-    # Propagate data-source config from the proxy environment into the VM so the
-    # in-VM helpers (read_athena) and SQL engine read real config values instead
-    # of falling back to defaults. Explicit request envVars win over these.
-    _config_env = {
-        "AWS_REGION": AWS_REGION,
-        "ATHENA_DB": ATHENA_DB,
-        "ATHENA_WORKGROUP": os.environ.get("ATHENA_WORKGROUP", "microvm-demo"),
-        # Discovery scope, so the VM's SQL engine recognizes db.table refs across the
-        # SAME set of Glue databases the Data Sources panel shows.
-        "DATASOURCE_ATHENA_DATABASES": os.environ.get("DATASOURCE_ATHENA_DATABASES", ""),
-    }
-    _cfg_bucket = vm_manager.get_artifacts_bucket()
-    if _cfg_bucket:
-        _config_env["ARTIFACT_BUCKET"] = _cfg_bucket
-    env_vars = {**_config_env, **env_vars}
+    # Propagate config-sourced runtime values from the proxy environment (config.sh)
+    # into the VM so in-VM helpers (read_athena), the SQL engine, and the executor
+    # read real config values instead of falling back to defaults. Single source of
+    # truth: vm_manager.launch_env_vars(). Explicit request envVars win over these.
+    env_vars = {**vm_manager.launch_env_vars(), **env_vars}
 
     image_arn = f"{IMAGE_ARN}-{memory_mib}" if IMAGE_ARN else ""
     if not image_arn:

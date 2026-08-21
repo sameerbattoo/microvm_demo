@@ -3,12 +3,20 @@ import { marked } from 'marked'
 import { sanitizeMarkdown } from '../services/sanitize'
 import MarkdownCell from './MarkdownCell'
 import CellEditor from './CellEditor'
-import { IconPlay, IconPlus, IconTrash, IconX, IconStop, IconChevronDown, IconChevronRight, IconGripVertical, IconEraser, IconCode, IconDatabase, IconZap, IconPencil } from './Icons'
+import { IconPlay, IconTrash, IconX, IconStop, IconChevronDown, IconChevronRight, IconGripVertical, IconEraser, IconCode, IconDatabase, IconPencil } from './Icons'
 import ParamWidgets from './ParamWidgets'
 import CellOutput from './CellOutput'
+import VariableDetailModal from './VariableDetailModal'
 import { useCellAI } from '../hooks/useCellAI'
 import './Cell.css'
 import './CellEditor.css'
+
+// Compact type icons for the per-cell "variables defined here" chips.
+const VAR_TYPE_ICONS = {
+  DataFrame: '📊', Series: '📈', ndarray: '🔢', list: '[ ]', dict: '{ }',
+  tuple: '( )', str: 'abc', int: '#', float: '#.', bool: '⊘', NoneType: '∅',
+}
+function getVarTypeIcon(type) { return VAR_TYPE_ICONS[type] || '◇' }
 
 // Derive a default variable name from SQL (based on the primary table being queried)
 function deriveSqlVarName(sql) {
@@ -71,13 +79,63 @@ export default memo(function Cell({
   sessionId,
   aiAvailable,
   variables = {},
+  microvmEndpoint,
   dataSources = null,
 }) {
   const [codeCollapsed, setCodeCollapsed] = useState(false)
   const [outputCollapsed, setOutputCollapsed] = useState(false)
+  const [varsCollapsed, setVarsCollapsed] = useState(false)
+  // Inline editing of the AI comment (✨ note). When saved with changes we mark the
+  // cell aiExplanationEdited so a "Manually edited" badge shows next to the AI badge.
+  const [editingExplain, setEditingExplain] = useState(false)
+  const [explainDraft, setExplainDraft] = useState('')
 
   // Variable names for autocomplete
   const variableNames = useMemo(() => Object.keys(variables || {}), [variables])
+
+  // --- Per-cell variables (Option A): what this cell defined/modified. ---
+  // Derived from provenance (defined_by / modified_by / last_cell) so it survives
+  // reload/restore and stays consistent with the Variables panel. A chip is
+  // "openable" only when this cell still owns the variable's current value
+  // (last_cell === cell.id); otherwise the value was replaced by a later cell, so
+  // we grey it out and show a jump link to the cell that owns the value now.
+  const [cellViewerVar, setCellViewerVar] = useState(null)
+
+  const cellIndexById = useMemo(() => {
+    const m = new Map()
+    ;(notebookContext || []).forEach((c, i) => m.set(String(c.id), i))
+    return m
+  }, [notebookContext])
+
+  const cellVars = useMemo(() => {
+    if (cell.type === 'sql' || cell.type === 'markdown') return []
+    const cid = String(cell.id)
+    const out = []
+    for (const [name, info] of Object.entries(variables || {})) {
+      const definedHere = String(info.defined_by) === cid
+      const modifiedHere = Array.isArray(info.modified_by) && info.modified_by.some(c => String(c) === cid)
+      const ownsNow = String(info.last_cell) === cid
+      if (!definedHere && !modifiedHere && !ownsNow) continue
+      const ownerIdx = cellIndexById.get(String(info.last_cell))
+      out.push({
+        name,
+        type: info.type,
+        shape: info.shape,
+        kind: definedHere ? 'defined' : 'modified',
+        ownsNow,
+        replacedById: info.last_cell,
+        replacedByLabel: ownsNow || ownerIdx == null ? null : `Cell ${ownerIdx + 1}`,
+      })
+    }
+    // Defined first, then modified; alphabetical within each group.
+    out.sort((a, b) => (a.kind === b.kind ? a.name.localeCompare(b.name) : (a.kind === 'defined' ? -1 : 1)))
+    return out
+  }, [variables, cell.id, cell.type, cellIndexById])
+
+  const jumpToCell = (targetId) => {
+    const el = document.querySelector(`[data-cell-id="${targetId}"]`)
+    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+  }
 
   // Datasource identifiers for autocomplete (table names, file paths, schemas)
   const dataSourceNames = useMemo(() => {
@@ -162,11 +220,11 @@ export default memo(function Cell({
   // AI + execution routing (smart execute / explain / fix / generate) lives in a hook.
   const {
     aiResult, setAiResult, generating, editorVersion,
-    smartExecute, handleAiExplain, handleAiFix, handleAiCancel, handleApplyFix,
+    smartExecute, handleAiFix, handleAiCancel, handleApplyFix,
   } = useCellAI({
     cell, index, isConnected, aiAvailable, microvmId, sessionId,
     variables, dataSources, notebookContext,
-    onExecute, onCodeChange, onClearOutput, onInsertAbove, onSetAiExplanation,
+    onExecute, onCodeChange, onClearOutput, onInsertAbove,
   })
 
   const statusColor =
@@ -259,23 +317,23 @@ export default memo(function Cell({
             onExecute={smartExecute}
           />
         )}
+        {/* SQL result-variable bar — full-width row above the editor */}
+        {!codeCollapsed && cell.type === 'sql' && (
+          <div className="sql-output-var">
+            <span className="sql-output-var-label">→</span>
+            <input
+              className="sql-output-var-input"
+              type="text"
+              value={cell.outputVariable || ''}
+              onChange={(e) => onOutputVarChange && onOutputVarChange(e.target.value)}
+              placeholder={deriveSqlVarName(cell.code)}
+              title="Variable name for the query result (accessible in subsequent cells)"
+              spellCheck={false}
+            />
+          </div>
+        )}
         {!codeCollapsed && (
           <div className="cell-input">
-            {/* SQL output variable name */}
-            {cell.type === 'sql' && (
-              <div className="sql-output-var">
-                <span className="sql-output-var-label">→</span>
-                <input
-                  className="sql-output-var-input"
-                  type="text"
-                  value={cell.outputVariable || ''}
-                  onChange={(e) => onOutputVarChange && onOutputVarChange(e.target.value)}
-                  placeholder={deriveSqlVarName(cell.code)}
-                  title="Variable name for the query result (accessible in subsequent cells)"
-                  spellCheck={false}
-                />
-              </div>
-            )}
             <CellEditor
               key={editorVersion}
               code={cell.code}
@@ -323,34 +381,14 @@ export default memo(function Cell({
               <button className="cell-action-btn cell-delete-btn" onClick={(e) => { e.stopPropagation(); onDelete() }} title="Delete cell">
                 <IconTrash width={14} height={14} />
               </button>
-              {aiAvailable && cell.code?.trim() && (() => {
-                if (cell.error) {
-                  return (
-                    <button
-                      className="cell-action-btn cell-ai-action-btn cell-ai-fix-btn"
-                      onClick={(e) => { e.stopPropagation(); handleAiFix() }}
-                      disabled={aiResult?.loading}
-                      title="Fix error with AI"
-                    >🔧</button>
-                  )
-                }
-                // Show explain button only when connected and content looks like actual code/SQL
-                if (!isConnected) return null
-                const code = cell.code.trim()
-                const looksLikeCode = /^(import |from |def |class |for |while |if |#|[a-zA-Z_]\w*\s*[=([]|print\(|plt\.|pd\.|np\.)/.test(code) || code.includes('=') || code.includes('(')
-                const looksLikeSql = /^(SELECT|INSERT|UPDATE|DELETE|CREATE|DROP|ALTER|WITH|SHOW|DESCRIBE|EXPLAIN)\b/i.test(code) || code.trimStart().startsWith('--')
-                if (looksLikeCode || looksLikeSql) {
-                  return (
-                    <button
-                      className="cell-action-btn cell-ai-action-btn"
-                      onClick={(e) => { e.stopPropagation(); handleAiExplain() }}
-                      disabled={aiResult?.loading}
-                      title="Auto-annotate cell with AI explanation"
-                    ><IconZap width={12} height={12} /></button>
-                  )
-                }
-                return null
-              })()}
+              {aiAvailable && cell.code?.trim() && cell.error && (
+                <button
+                  className="cell-action-btn cell-ai-action-btn cell-ai-fix-btn"
+                  onClick={(e) => { e.stopPropagation(); handleAiFix() }}
+                  disabled={aiResult?.loading}
+                  title="Fix error with AI"
+                >🔧</button>
+              )}
             </div>
           </div>
         )}
@@ -381,6 +419,7 @@ export default memo(function Cell({
                           const filename = `${(notebookName || 'notebook').replace(/\s+/g, '-')}-cell-${index + 1}-output.html`
                           let htmlContent = `<html><head><meta charset="UTF-8"><title>${notebookName || 'Notebook'} — Cell ${index + 1}</title><style>body{font-family:system-ui;padding:20px;max-width:900px;margin:0 auto}table{border-collapse:collapse;width:100%}th,td{border:1px solid #ddd;padding:8px;text-align:left}th{background:#f5f5f5;font-weight:600}pre{background:#f5f5f5;padding:12px;border-radius:4px;overflow-x:auto;font-size:13px}details{margin-bottom:16px;border:1px solid #e0e0e0;border-radius:4px}summary{padding:8px 12px;cursor:pointer;font-weight:600;font-size:13px;color:#555}details pre{margin:0;border-radius:0 0 4px 4px;border-top:1px solid #e0e0e0}img{max-width:100%}h3{color:#333;margin-top:0}</style></head><body>`
                           htmlContent += `<h3>${notebookName || 'Notebook'} — Cell ${index + 1} Output</h3>`
+                          htmlContent += `<p style="color:#888;font-size:12px">Generated: ${new Date().toLocaleString()}</p>`
                           htmlContent += `<details><summary>Code</summary><pre>${(cell.code || '').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</pre></details>`
                           if (cell.output) htmlContent += `<pre>${cell.output}</pre>`
                           if (cell.html) htmlContent += cell.html
@@ -396,6 +435,7 @@ export default memo(function Cell({
                         <button onClick={() => {
                           const filename = `${(notebookName || 'notebook').replace(/\s+/g, '-')}-cell-${index + 1}-output.md`
                           let md = `# ${notebookName || 'Notebook'} — Cell ${index + 1}\n\n`
+                          md += `*Generated: ${new Date().toLocaleString()}*\n\n`
                           md += `<details><summary>Code</summary>\n\n\`\`\`python\n${cell.code || ''}\n\`\`\`\n</details>\n\n`
                           md += `## Output\n\n`
                           if (cell.output) md += `\`\`\`\n${cell.output}\n\`\`\`\n\n`
@@ -435,6 +475,70 @@ export default memo(function Cell({
           </div>
         )}
 
+        {/* Variables this cell defined/modified (code cells only). Clicking an
+            owned variable opens the full tabular viewer; a variable whose value
+            was later replaced is greyed with a jump link to the owning cell. */}
+        {cellVars.length > 0 && (
+          <div className={`cell-output ${varsCollapsed ? 'cell-output-collapsed' : ''}`}>
+            {varsCollapsed ? (
+              <div className="cell-output-collapse-bar" onClick={() => setVarsCollapsed(false)}>
+                <IconChevronRight width={10} height={10} />
+                <span>Variables hidden — click to expand</span>
+              </div>
+            ) : (
+              <>
+                <div className="cell-output-collapse-bar" onClick={() => setVarsCollapsed(true)}>
+                  <IconChevronDown width={10} height={10} />
+                  <span>Variables</span>
+                </div>
+                <div className="cell-vars-chips">
+                  {cellVars.map(v => (
+                v.ownsNow ? (
+                  <button
+                    key={v.name}
+                    className={`cell-var-chip cell-var-${v.kind}`}
+                    onClick={(e) => { e.stopPropagation(); setCellViewerVar(v.name) }}
+                    title={`${v.kind === 'defined' ? 'Defined' : 'Modified'} here${v.type ? ` · ${v.type}` : ''}${v.shape ? ` · ${v.shape}` : ''} — click to inspect`}
+                  >
+                    <span className="cell-var-chip-icon">{getVarTypeIcon(v.type)}</span>
+                    <span className="cell-var-chip-name">{v.name}</span>
+                  </button>
+                ) : (
+                  <span
+                    key={v.name}
+                    className={`cell-var-chip cell-var-${v.kind} cell-var-replaced`}
+                    title={`${v.name} was set here, but its current value was later replaced${v.replacedByLabel ? ` in ${v.replacedByLabel}` : ''}`}
+                  >
+                    <span className="cell-var-chip-icon">{getVarTypeIcon(v.type)}</span>
+                    <span className="cell-var-chip-name">{v.name}</span>
+                    {v.replacedByLabel && (
+                      <>
+                        <span className="cell-var-replaced-arrow">→</span>
+                        <button
+                          className="cell-var-replaced-link"
+                          onClick={(e) => { e.stopPropagation(); jumpToCell(v.replacedById) }}
+                          title={`Current value of ${v.name} is set in ${v.replacedByLabel} — jump there`}
+                        >{v.replacedByLabel}</button>
+                      </>
+                    )}
+                  </span>
+                )
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
+        )}
+
+        {cellViewerVar && (
+          <VariableDetailModal
+            name={cellViewerVar}
+            endpoint={microvmEndpoint}
+            sessionId={sessionId}
+            onClose={() => setCellViewerVar(null)}
+          />
+        )}
+
         {/* AI Result (explain or fix preview) — shown outside output section */}
         {aiResult?.loading && (
           <div className="cell-ai-result cell-ai-loading">
@@ -447,12 +551,63 @@ export default memo(function Cell({
           <div className={`cell-ai-result cell-ai-result-${aiResult.type}`}>
             <div className="cell-ai-result-header">
               <span className="cell-ai-badge">✨ AI</span>
-              <button className="cell-ai-dismiss" onClick={() => { setAiResult(null); if (onSetAiExplanation) onSetAiExplanation(null) }}>
-                <IconX width={10} height={10} />
-              </button>
+              {aiResult.type === 'explain' && cell.aiExplanationEdited && (
+                <span className="cell-ai-badge cell-ai-badge-edited" title="This comment was manually edited">
+                  <IconPencil width={9} height={9} /> Manually edited
+                </span>
+              )}
+              <div className="cell-ai-header-actions">
+                {aiResult.type === 'explain' && !editingExplain && (
+                  <button
+                    className="cell-ai-edit"
+                    title="Edit comment"
+                    onClick={() => { setExplainDraft(aiResult.content || ''); setEditingExplain(true) }}
+                  >
+                    <IconPencil width={11} height={11} />
+                  </button>
+                )}
+                <button className="cell-ai-dismiss" onClick={() => { setEditingExplain(false); setAiResult(null); if (onSetAiExplanation) onSetAiExplanation(null) }}>
+                  <IconX width={10} height={10} />
+                </button>
+              </div>
             </div>
             {aiResult.type === 'explain' && (
-              <div className="cell-ai-explain-text" dangerouslySetInnerHTML={{ __html: sanitizeMarkdown(marked.parse(aiResult.content, { breaks: true })) }} />
+              editingExplain ? (
+                <div className="cell-ai-explain-edit">
+                  <textarea
+                    className="cell-ai-explain-textarea"
+                    value={explainDraft}
+                    onChange={(e) => setExplainDraft(e.target.value)}
+                    autoFocus
+                    rows={Math.min(12, Math.max(3, explainDraft.split('\n').length + 1))}
+                    placeholder="Describe this cell… (Markdown supported)"
+                    onKeyDown={(e) => {
+                      if (e.key === 'Escape') { e.preventDefault(); setEditingExplain(false) }
+                      if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+                        e.preventDefault()
+                        const text = explainDraft.trim()
+                        const changed = text !== (aiResult.content || '').trim()
+                        setEditingExplain(false)
+                        if (onSetAiExplanation) onSetAiExplanation(text || null, text ? (changed || !!cell.aiExplanationEdited) : false)
+                      }
+                    }}
+                  />
+                  <div className="cell-ai-explain-edit-actions">
+                    <button
+                      className="cell-ai-apply-btn"
+                      onClick={() => {
+                        const text = explainDraft.trim()
+                        const changed = text !== (aiResult.content || '').trim()
+                        setEditingExplain(false)
+                        if (onSetAiExplanation) onSetAiExplanation(text || null, text ? (changed || !!cell.aiExplanationEdited) : false)
+                      }}
+                    >Save</button>
+                    <button className="cell-ai-dismiss-btn" onClick={() => setEditingExplain(false)}>Cancel</button>
+                  </div>
+                </div>
+              ) : (
+                <div className="cell-ai-explain-text" dangerouslySetInnerHTML={{ __html: sanitizeMarkdown(marked.parse(aiResult.content, { breaks: true })) }} />
+              )
             )}
             {aiResult.type === 'fix' && aiResult.content && (
               <div className="cell-ai-fix-preview">

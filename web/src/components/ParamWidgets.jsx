@@ -28,13 +28,17 @@ export function parseParams(code) {
     const match = line.match(/^#\s*@param\s*(\{.+\})\s*$/)
     if (!match) continue
 
-    // Parse the JSON-like config (allow single quotes → convert to double)
+    // Parse the JSON config. Prefer strict JSON (preserves apostrophes in custom
+    // labels); fall back to single-quote→double-quote for author-written configs.
     let config
     try {
-      const jsonStr = match[1].replace(/'/g, '"')
-      config = JSON.parse(jsonStr)
+      config = JSON.parse(match[1])
     } catch {
-      continue
+      try {
+        config = JSON.parse(match[1].replace(/'/g, '"'))
+      } catch {
+        continue
+      }
     }
 
     // Next non-empty line should be the variable assignment
@@ -92,6 +96,7 @@ function parsePythonValue(valueStr, type) {
 export default function ParamWidgets({ code, onCodeChange, onExecute }) {
   const params = useMemo(() => parseParams(code), [code])
   const [values, setValues] = useState({})
+  const [editingLabel, setEditingLabel] = useState(null)  // varName whose label is being renamed
   const userChanging = useRef(false)  // guard: true while a widget-initiated change propagates
   const executeTimer = useRef(null)   // debounce auto-execution
 
@@ -131,11 +136,44 @@ export default function ParamWidgets({ code, onCodeChange, onExecute }) {
     executeTimer.current = setTimeout(() => onExecute(), 400)
   }
 
+  // Rename a param's display label — persists into the @param JSON as `label`.
+  // Purely cosmetic, so it does NOT trigger a re-run.
+  const changeLabel = (param, rawLabel) => {
+    const lines = code.split('\n')
+    const cfg = { ...param.config }
+    const next = (rawLabel || '').trim()
+    if (next && next !== param.varName) cfg.label = next
+    else delete cfg.label  // reset to the variable name
+    const indent = (lines[param.paramLineIndex] || '').match(/^(\s*)/)?.[1] || ''
+    lines[param.paramLineIndex] = `${indent}# @param ${JSON.stringify(cfg)}`
+    onCodeChange(lines.join('\n'))
+  }
+
   return (
     <div className="param-widgets-bar">
       {params.map(param => (
         <div key={param.varName} className="param-widget">
-          <label className="param-label">{param.varName}</label>
+          {editingLabel === param.varName ? (
+            <input
+              className="param-label-input"
+              autoFocus
+              defaultValue={param.config.label || param.varName}
+              onClick={(e) => e.stopPropagation()}
+              onBlur={(e) => { changeLabel(param, e.target.value); setEditingLabel(null) }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') { changeLabel(param, e.target.value); setEditingLabel(null) }
+                else if (e.key === 'Escape') { setEditingLabel(null) }
+              }}
+            />
+          ) : (
+            <label
+              className="param-label"
+              title="Double-click to rename"
+              onDoubleClick={() => setEditingLabel(param.varName)}
+            >
+              {param.config.label || param.varName}
+            </label>
+          )}
           {param.type === 'slider' && (
             <div className="param-slider-group">
               <input

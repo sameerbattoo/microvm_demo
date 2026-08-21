@@ -400,7 +400,7 @@ proxy/                        # Runs on your machine (hides all VM internals)
 │   │   ├── sessions.py       # Agent session management
 │   │   └── tools/            # Agent tools (execute_code, get_variables, etc.)
 │   └── routes/
-│       ├── ai.py             # /ai/chat, /ai/explain, /ai/fix endpoints
+│       ├── ai.py             # /ai/chat, /ai/annotate, /ai/fix endpoints
 │       ├── intel.py          # /workbook-intel (GET/POST) endpoints
 │       ├── notebooks.py      # Notebook CRUD
 │       └── logs.py           # CloudWatch log streaming

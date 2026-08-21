@@ -18,9 +18,9 @@ from strands.models import BedrockModel
 from strands.models.bedrock import CacheConfig
 from strands.agent.conversation_manager import SlidingWindowConversationManager
 
-from .prompts import NOTEBOOK_AGENT_PROMPT, EXPLAIN_PROMPT, FIX_ERROR_PROMPT
+from .prompts import NOTEBOOK_AGENT_PROMPT, FIX_ERROR_PROMPT
 from .sessions import get_session, save_session, clear_session
-from .constants import AGENT_TEMPERATURE, AGENT_MAX_TOKENS, FIX_MAX_TOKENS, EXPLAIN_MAX_TOKENS, AGENT_CONVERSATION_WINDOW_SIZE
+from .constants import AGENT_TEMPERATURE, AGENT_MAX_TOKENS, FIX_MAX_TOKENS, AGENT_CONVERSATION_WINDOW_SIZE
 from .tools.execution_tools import (
     execute_code, get_variables, get_notebook_state, set_execution_context,
     install_package, get_available_data_sources
@@ -260,48 +260,71 @@ async def chat_stream(session_id: str, message: str, context: dict):
                     pass
 
 
-def explain(code: str, output: str, context: dict) -> dict:
+def annotate_notebook(cells: list) -> dict:
     """
-    One-shot: explain a cell's output.
-    Returns {"summary": "short heading", "description": "detailed description", "explanation": "insights"}
+    One-shot: document a whole notebook in a single pass. Returns
+      {"root": str|None,
+       "sections": [{"before_index": int, "markdown": str}],
+       "comments": [{"index": int, "comment": str}]}
+    Cells are referenced by their position in the input list.
     """
-    from .prompts import EXPLAIN_PROMPT
+    from .prompts import ANNOTATE_PROMPT
     import json as json_mod
 
-    prompt = EXPLAIN_PROMPT.format(code=code, output=output)
+    # Build an index-addressable, compact view of the notebook.
+    lines = []
+    for i, c in enumerate(cells or []):
+        ctype = (c.get("type") or "code").lower()
+        code = (c.get("code") or "").strip()
+        if ctype == "markdown":
+            lines.append(f"[{i}] MARKDOWN\n{code[:400]}")
+        else:
+            out = (c.get("output") or "").strip()
+            snippet = f"\n(output: {out[:200]})" if out else ""
+            lines.append(f"[{i}] {ctype.upper()}\n{code[:800]}{snippet}")
+    cells_repr = "\n\n".join(lines) if lines else "(empty notebook)"
+
+    prompt = ANNOTATE_PROMPT.format(cells=cells_repr)
     client = _get_direct_client()
 
     response = client.converse(
         modelId=AI_MODEL_ID,
         messages=[{"role": "user", "content": [{"text": prompt}]}],
-        inferenceConfig={"maxTokens": EXPLAIN_MAX_TOKENS, "temperature": AGENT_TEMPERATURE},
+        inferenceConfig={"maxTokens": AGENT_MAX_TOKENS, "temperature": AGENT_TEMPERATURE},
     )
+    text = response["output"]["message"]["content"][0]["text"].strip()
 
-    response_text = response["output"]["message"]["content"][0]["text"].strip()
+    # Strip markdown fences if present
+    if text.startswith("```json"):
+        text = text.split("```json", 1)[1].rsplit("```", 1)[0].strip()
+    elif text.startswith("```"):
+        _l = text.split("\n")
+        text = "\n".join(_l[1:-1] if _l[-1].strip() == "```" else _l[1:]).strip()
 
-    # Strip markdown code fences if present (e.g. ```json ... ``` or ``` ... ```)
-    if response_text.startswith("```json"):
-        response_text = response_text.split("```json", 1)[1].rsplit("```", 1)[0].strip()
-    elif response_text.startswith("```"):
-        lines = response_text.split("\n")
-        response_text = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:]).strip()
-
-    # Parse JSON response
     try:
-        result = json_mod.loads(response_text)
-        return {
-            "summary": result.get("summary", ""),
-            "description": result.get("description", ""),
-            "explanation": result.get("explanation", response_text),
-        }
+        data = json_mod.loads(text)
     except (json_mod.JSONDecodeError, TypeError):
-        # Fallback: use first sentence as summary, full text as explanation
-        first_sentence = response_text.split('.')[0].strip() + '.'
-        return {
-            "summary": first_sentence[:60],
-            "description": "",
-            "explanation": response_text,
-        }
+        import re as _re
+        m = _re.search(r'\{[\s\S]*\}', text)
+        try:
+            data = json_mod.loads(m.group(0)) if m else {}
+        except (json_mod.JSONDecodeError, TypeError):
+            data = {}
+
+    n = len(cells or [])
+    sections = [
+        {"before_index": s["before_index"], "markdown": s["markdown"]}
+        for s in (data.get("sections") or [])
+        if isinstance(s, dict) and isinstance(s.get("before_index"), int)
+        and 0 <= s["before_index"] <= n and s.get("markdown")
+    ]
+    comments = [
+        {"index": c["index"], "comment": c["comment"]}
+        for c in (data.get("comments") or [])
+        if isinstance(c, dict) and isinstance(c.get("index"), int)
+        and 0 <= c["index"] < n and c.get("comment")
+    ]
+    return {"root": data.get("root") or None, "sections": sections, "comments": comments}
 
 
 def fix_error(code: str, error: str, context: dict) -> str:

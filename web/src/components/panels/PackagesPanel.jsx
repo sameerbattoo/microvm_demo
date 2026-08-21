@@ -6,6 +6,7 @@ import { fetchWithTimeout } from '../../services/fetchWithTimeout'
 export default function PackagesPanel({
   packages,
   pkgLoading,
+  pkgFetched,
   activeTab,
   fetchPackages,
   onInstallPackage,
@@ -48,16 +49,41 @@ export default function PackagesPanel({
 
   const handleInstallPkg = async () => {
     if (!installPkg.trim() || !activeTab?.microvmEndpoint) return
-    setInstallStatus('installing')
-    setInstallMessage('')
     const pkgName = installPkg.trim()
+    const hasVersion = /[<>=!~]/.test(pkgName)
+    const baseName = pkgName.split(/[<>=!~[]/)[0].trim()
+    const baseLower = baseName.toLowerCase()
+
+    // Already installed? Skip the slow pip call unless a specific version is asked for.
+    const existing = packages.find(p => p.name.toLowerCase() === baseLower)
+    if (existing && !hasVersion) {
+      setInstallStatus('success')
+      setInstallMessage(`${existing.name} is already installed (v${existing.version})`)
+      setInstallPkg('')
+      setTimeout(() => setInstallStatus(null), 5000)
+      return
+    }
+
+    // Soft typo pre-check against PyPI — avoids a slow, doomed install. Skipped
+    // silently if blocked (CORS) or offline; pip still validates authoritatively.
+    try {
+      const probe = await fetch(`https://pypi.org/pypi/${encodeURIComponent(baseName)}/json`)
+      if (probe.status === 404) {
+        setInstallStatus('error')
+        setInstallMessage(`"${baseName}" not found on PyPI — check the name`)
+        setTimeout(() => setInstallStatus(null), 6000)
+        return
+      }
+    } catch { /* pre-check unavailable — let pip decide */ }
+
+    setInstallStatus('installing')
+    setInstallMessage(`Installing ${pkgName}… (can take a minute)`)
     const result = await onInstallPackage(pkgName)
     if (result.success) {
       setInstallStatus('success')
-      setInstallMessage(`Installed ${pkgName}`)
+      setInstallMessage(`Installed ${result.installed_spec || pkgName}`)
       setInstallPkg('')
       // Notify proxy to track + classify the install
-      const baseName = pkgName.split('==')[0].split('>=')[0].split('[')[0]
       try {
         const resp = await fetchWithTimeout(`${PROXY_URL}/track-install`, {
           method: 'POST',
@@ -195,6 +221,7 @@ export default function PackagesPanel({
           {installStatus === 'installing' ? '...' : '+'}
         </button>
       </div>
+      {installStatus === 'installing' && <div className="pkg-sidebar-msg pkg-msg-installing">{installMessage}</div>}
       {installStatus === 'success' && <div className="pkg-sidebar-msg pkg-msg-success">{installMessage}</div>}
       {installStatus === 'error' && <div className="pkg-sidebar-msg pkg-msg-error">{installMessage}</div>}
 
@@ -213,10 +240,10 @@ export default function PackagesPanel({
         {!activeTab?.microvmEndpoint && (
           <div className="sidebar-empty">Connect to a MicroVM to manage packages.</div>
         )}
-        {activeTab?.microvmEndpoint && pkgLoading && (
+        {activeTab?.microvmEndpoint && (pkgLoading || (!pkgFetched && packages.length === 0)) && (
           <div className="sidebar-empty">Loading packages...</div>
         )}
-        {activeTab?.microvmEndpoint && !pkgLoading && packages.length === 0 && (
+        {activeTab?.microvmEndpoint && pkgFetched && !pkgLoading && packages.length === 0 && (
           <div className="sidebar-empty">No packages found.</div>
         )}
 

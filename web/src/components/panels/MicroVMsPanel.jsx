@@ -18,7 +18,9 @@ export default function MicroVMsPanel({
   const [localInstances, setLocalInstances] = useState({})
   const [vmLoading, setVmLoading] = useState(false)
   const [vmFetched, setVmFetched] = useState(false)
-  const [persistenceMode, setPersistenceMode] = useState('eternal')
+  // null = not yet known. Avoids briefly showing a misleading mode badge before
+  // the /instances fetch reports the proxy's actual persistence_mode.
+  const [persistenceMode, setPersistenceMode] = useState(null)
   const [expandedVmId, setExpandedVmId] = useState(null)
   const [vmActionInProgress, setVmActionInProgress] = useState(new Set())
 
@@ -112,9 +114,11 @@ export default function MicroVMsPanel({
       <div className="sidebar-panel-header">
         <span className="sidebar-panel-title">MicroVMs</span>
         <span className="sidebar-panel-count">{Object.keys(vmInstances).length}</span>
-        <span className={`vm-mode-badge vm-mode-${persistenceMode}`}>
-          {persistenceMode === 'eternal' ? '∞ eternal' : '💾 checkpoint'}
-        </span>
+        {persistenceMode && (
+          <span className={`vm-mode-badge vm-mode-${persistenceMode}`}>
+            {persistenceMode === 'eternal' ? '∞ eternal' : '💾 checkpoint'}
+          </span>
+        )}
         <button className="sidebar-panel-action" onClick={() => { setVmFetched(false); fetchVmInstances() }} title="Refresh">
           <IconRefresh width={14} height={14} />
         </button>

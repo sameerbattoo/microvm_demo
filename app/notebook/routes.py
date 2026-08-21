@@ -6,6 +6,7 @@ Part of: app.notebook (application layer)
 Endpoints:
   POST /install            - Install a pip package
   GET  /variables          - List namespace variables
+  POST /variable-detail    - Rich detail for one variable (schema + full table)
   POST /introspect         - Get attributes/methods of a variable (for autocomplete)
   POST /reset              - Clear namespace
   POST /interrupt          - Interrupt running execution
@@ -52,6 +53,8 @@ async def install_package(request: Request):
             )
             if result.returncode == 0:
                 logger.info(f"  ✓ Uninstalled {package}")
+                # Drop it from the checkpoint list so it doesn't reappear on restore.
+                request.app.state.checkpoint_manager.record_package_uninstall(package)
                 return {"success": True, "output": result.stdout.strip()}
             else:
                 logger.warning(f"  ✗ Uninstall failed: {package} — {result.stderr.strip()[:100]}")
@@ -63,14 +66,20 @@ async def install_package(request: Request):
         logger.info(f"📦 Installing package: {package}")
         result = executor.install_package(package)
 
-        # Track the installed package for checkpoint
+        # Track the installed package (pinned to the resolved version) for checkpoint.
         if result.success:
-            logger.info(f"  ✓ Installed {package}")
-            request.app.state.checkpoint_manager.record_package_install(package)
+            spec = result.installed_spec or package
+            logger.info(f"  ✓ Installed {spec}")
+            request.app.state.checkpoint_manager.record_package_install(spec)
         else:
             logger.warning(f"  ✗ Install failed: {package} — {result.error[:100]}")
 
-        return {"success": result.success, "output": result.output, "error": result.error}
+        return {
+            "success": result.success,
+            "output": result.output,
+            "error": result.error,
+            "installed_spec": result.installed_spec,
+        }
 
 
 @router.get("/variables")
@@ -138,6 +147,213 @@ async def introspect_variable(request: Request):
             break
 
     return {"completions": completions}
+
+
+@router.post("/variable-detail")
+async def variable_detail(request: Request):
+    """
+    Lazy, on-demand rich detail for ONE variable (Variables panel viewer).
+    Request body: { "name": "df" }
+
+    For a DataFrame/Series: returns a column schema (name/dtype/null%/unique) and a
+    full head(N) table_html (N = NOTEBOOK_MAX_DISPLAY_ROWS) the UI renders in a grid.
+    For ndarray: shape/dtype + a table for 1D/2D. Other types: a longer repr.
+    """
+    from .executor import max_display_rows
+    from .dtypes import normalize_dtype
+
+    executor = request.app.state.executor
+    body = await request.json()
+    name = body.get("name", "")
+    ns = executor._namespace
+    if not name or name not in ns:
+        return JSONResponse(status_code=404, content={"error": f"Variable not found: {name}"})
+
+    obj = ns[name]
+    try:
+        max_rows = max_display_rows()
+        type_name = type(obj).__name__
+        module = getattr(type(obj), "__module__", "") or ""
+        result = {"name": name, "type": type_name}
+
+        if "pandas" in module and type_name == "DataFrame":
+            total_rows, total_cols = int(obj.shape[0]), int(obj.shape[1])
+            result["total_rows"] = total_rows
+            result["total_cols"] = total_cols
+            # nunique can be expensive on very large frames — skip beyond a threshold.
+            compute_unique = total_rows <= 100_000
+            try:
+                null_counts = obj.isnull().sum()
+            except Exception:
+                null_counts = None
+            schema = []
+            for col in obj.columns:
+                nnull = 0
+                if null_counts is not None:
+                    try:
+                        nnull = int(null_counts[col])
+                    except Exception:
+                        nnull = 0
+                nunique = None
+                if compute_unique:
+                    try:
+                        nunique = int(obj[col].nunique(dropna=True))
+                    except Exception:
+                        nunique = None
+                schema.append({
+                    "column": str(col),
+                    "dtype": str(obj[col].dtype),
+                    "display_dtype": normalize_dtype(str(obj[col].dtype)),
+                    "null_count": nnull,
+                    "null_pct": round(nnull / total_rows * 100, 1) if total_rows else 0.0,
+                    "unique": nunique,
+                })
+            result["schema"] = schema
+            # Show the index when it's meaningful (named / MultiIndex).
+            df_disp = obj
+            try:
+                if obj.index.name or (hasattr(obj.index, "names") and any(n for n in obj.index.names if n)):
+                    df_disp = obj.reset_index()
+            except Exception:
+                pass
+            result["table_html"] = df_disp.head(max_rows).to_html(classes="df-table", max_rows=max_rows, max_cols=50)
+            result["truncated"] = total_rows > max_rows
+
+        elif "pandas" in module and type_name == "Series":
+            total_rows = int(len(obj))
+            result["total_rows"] = total_rows
+            result["total_cols"] = 1
+            try:
+                nnull = int(obj.isnull().sum())
+            except Exception:
+                nnull = 0
+            result["schema"] = [{
+                "column": str(obj.name) if obj.name is not None else "value",
+                "dtype": str(obj.dtype),
+                "display_dtype": normalize_dtype(str(obj.dtype)),
+                "null_count": nnull,
+                "null_pct": round(nnull / total_rows * 100, 1) if total_rows else 0.0,
+                "unique": int(obj.nunique(dropna=True)) if total_rows <= 100_000 else None,
+            }]
+            # Render as a clean 2-column table: the (named) index becomes a real
+            # column and the values get a sensible column name — instead of pandas'
+            # default "0" for an unnamed Series plus an awkward index-name header
+            # (common for groupby().size() results indexed by e.g. product_id).
+            _value_name = str(obj.name) if obj.name is not None else "value"
+            _series_frame = obj.head(max_rows).rename(_value_name).reset_index()
+            result["table_html"] = _series_frame.to_html(classes="df-table", index=False, max_rows=max_rows)
+            result["truncated"] = total_rows > max_rows
+
+        elif "numpy" in module and hasattr(obj, "shape"):
+            result["shape"] = str(obj.shape)
+            result["dtype"] = str(getattr(obj, "dtype", ""))
+            try:
+                import pandas as pd
+                if getattr(obj, "ndim", None) == 1:
+                    result["table_html"] = pd.DataFrame(obj[:max_rows], columns=["value"]).to_html(classes="df-table")
+                    result["total_rows"] = int(obj.shape[0])
+                    result["truncated"] = int(obj.shape[0]) > max_rows
+                elif getattr(obj, "ndim", None) == 2:
+                    result["table_html"] = pd.DataFrame(obj[:max_rows]).to_html(classes="df-table", max_cols=50)
+                    result["total_rows"] = int(obj.shape[0])
+                    result["truncated"] = int(obj.shape[0]) > max_rows
+                else:
+                    result["text"] = repr(obj)[:5000]
+            except Exception:
+                result["text"] = repr(obj)[:5000]
+
+        elif module.startswith("plotly") and type_name == "Figure":
+            # Don't dump the huge figure spec — the chart is already in the cell output.
+            try:
+                traces = list(getattr(obj, "data", []) or [])
+                kinds = ", ".join(sorted({(getattr(t, "type", None) or "?") for t in traces})) or "—"
+                summary = f"Plotly Figure · {len(traces)} trace(s) · {kinds}"
+                try:
+                    title = (obj.layout.title.text or "") if (obj.layout and obj.layout.title) else ""
+                except Exception:
+                    title = ""
+                if title:
+                    summary += f"\nTitle: {title}"
+                result["text"] = summary + "\n\nThe chart is rendered in the cell's output."
+            except Exception:
+                result["text"] = "Plotly Figure\n\nThe chart is rendered in the cell's output."
+
+        elif module.startswith("matplotlib") and type_name == "Figure":
+            result["text"] = "Matplotlib Figure\n\nThe chart is rendered in the cell's output."
+
+        elif "pandas" in module and type_name.endswith("Index"):
+            # Index types (Index, DatetimeIndex, RangeIndex, MultiIndex, ...) are
+            # 1-D sequences — render as a compact table, not a wrapped repr.
+            import pandas as pd
+            total = int(len(obj))
+            result["total_rows"] = total
+            result["total_cols"] = 1
+            try:
+                result["dtype"] = str(obj.dtype)
+            except Exception:
+                pass
+            _freq = getattr(obj, "freqstr", None)
+            if _freq:
+                result["index_freq"] = _freq
+            try:
+                if type_name == "MultiIndex":
+                    _frame = obj[:max_rows].to_frame(index=False)
+                    result["total_cols"] = int(_frame.shape[1])
+                else:
+                    _col = str(obj.name) if obj.name is not None else "value"
+                    _frame = pd.DataFrame({_col: obj[:max_rows]})
+                result["table_html"] = _frame.to_html(classes="df-table", index=False, max_rows=max_rows)
+                result["truncated"] = total > max_rows
+            except Exception:
+                result["text"] = repr(obj)[:5000]
+
+        elif isinstance(obj, (dict, list, tuple)):
+            # Nested containers → a bounded, JSON-safe structure for a collapsible
+            # tree view on the frontend. Depth/element/string caps keep it cheap.
+            def _to_json_safe(value, depth=0):
+                _MAX_DEPTH, _MAX_ITEMS, _MAX_STR = 6, 200, 500
+                if depth >= _MAX_DEPTH:
+                    return "… (max depth)"
+                if value is None or isinstance(value, bool) or isinstance(value, (int, float)):
+                    return value
+                if isinstance(value, str):
+                    return value if len(value) <= _MAX_STR else value[:_MAX_STR] + "…"
+                if isinstance(value, dict):
+                    out = {}
+                    for i, (k, v) in enumerate(value.items()):
+                        if i >= _MAX_ITEMS:
+                            out["…"] = f"({len(value) - _MAX_ITEMS} more keys)"
+                            break
+                        out[str(k)] = _to_json_safe(v, depth + 1)
+                    return out
+                if isinstance(value, (list, tuple, set, frozenset)):
+                    seq = list(value)
+                    out = []
+                    for i, v in enumerate(seq):
+                        if i >= _MAX_ITEMS:
+                            out.append(f"… ({len(seq) - _MAX_ITEMS} more items)")
+                            break
+                        out.append(_to_json_safe(v, depth + 1))
+                    return out
+                try:
+                    return str(value)[:_MAX_STR]
+                except Exception:
+                    return f"<{type(value).__name__}>"
+
+            result["json_tree"] = _to_json_safe(obj)
+            result["json_root_type"] = "object" if isinstance(obj, dict) else "array"
+
+        else:
+            try:
+                result["text"] = repr(obj)[:5000]
+            except Exception:
+                result["text"] = f"<{type_name}>"
+
+        return result
+    except Exception as e:
+        import traceback
+        logger.error(f"variable-detail failed for {name}: {e}\n{traceback.format_exc()}")
+        return JSONResponse(status_code=500, content={"error": str(e)})
 
 
 @router.post("/reset")

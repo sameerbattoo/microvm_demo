@@ -29,6 +29,8 @@ export function useTabsPersistence({ tabs, setTabs, activeTabId, setActiveTabId 
         executionTime: c.executionTime || null,
         lastExecutedCode: c.lastExecutedCode || null,
         aiExplanation: c.aiExplanation || null,
+        aiExplanationEdited: c.aiExplanationEdited || false,
+        generated: c.generated || null,
       }))
       return { ...tab, _cells: cells.length > 0 ? cells : undefined }
     })
@@ -61,6 +63,8 @@ export function useTabsPersistence({ tabs, setTabs, activeTabId, setActiveTabId 
           html: c.html || null,
           image: c.image || null,
           aiExplanation: c.aiExplanation || null,
+          aiExplanationEdited: c.aiExplanationEdited || false,
+          generated: c.generated || null,
         }))
         apiSaveNotebook({
           id: String(tab.id),

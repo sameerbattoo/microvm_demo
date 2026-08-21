@@ -108,6 +108,7 @@ export default function SortableTable({ html, sanitizer }) {
 
   return (
     <div className="output-html">
+      <div className="df-table-scroll">
       <table>
         <thead>
           <tr>
@@ -143,6 +144,10 @@ export default function SortableTable({ html, sanitizer }) {
           ))}
         </tbody>
       </table>
+      </div>
+      {sortedRows.length > 0 && (
+        <div className="df-row-count">Showing {sortedRows.length} row{sortedRows.length === 1 ? '' : 's'}</div>
+      )}
       {tableData.truncNote && (
         <div className="df-truncation-note" dangerouslySetInnerHTML={{ __html: tableData.truncNote }} />
       )}

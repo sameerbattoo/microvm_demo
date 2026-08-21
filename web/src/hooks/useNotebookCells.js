@@ -315,8 +315,8 @@ export function useNotebookCells({ tab, onUpdateTab, onMarkVmRunning, onRefreshM
           ? `${tab.microvmEndpoint}/execute-sql`
           : `${tab.microvmEndpoint}/execute`
         const body = isSql
-          ? JSON.stringify({ sql: cell.code, output_variable: cell.outputVariable || _deriveSqlVarName(cell.code) })
-          : JSON.stringify({ code: cell.code })
+          ? JSON.stringify({ sql: cell.code, output_variable: cell.outputVariable || _deriveSqlVarName(cell.code), cell_id: cellId })
+          : JSON.stringify({ code: cell.code, cell_id: cellId })
 
         const response = await fetch(url, {
           method: 'POST',

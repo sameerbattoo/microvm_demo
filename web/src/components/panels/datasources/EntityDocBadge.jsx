@@ -67,7 +67,8 @@ export default function EntityDocBadge({ sourceId, businessDescription, qualityF
 
   // Export the full entity profile (raw markdown, incl. Data Quality section) as .md
   const exportEntityMarkdown = () => {
-    let md = fullDoc?.markdown || ''
+    let md = `*Generated: ${new Date().toLocaleString()}*\n\n`
+    md += fullDoc?.markdown || ''
     md += `\n\n---\n\n*Lambda MicroVM Notebook — Developed by the AWS Startup SA Team*\n`
     const blob = new Blob([md], { type: 'text/markdown' })
     const url = URL.createObjectURL(blob)
@@ -80,7 +81,8 @@ export default function EntityDocBadge({ sourceId, businessDescription, qualityF
   const exportEntityHtml = () => {
     const bodyHtml = marked(fullDoc?.markdown || '')
     const footer = `<hr style="margin-top:32px;border:none;border-top:1px solid #333"><footer style="text-align:center;padding:12px;color:#666;font-size:11px"><strong>Lambda MicroVM Notebook</strong><br>Developed by the AWS Startup SA Team<br>&copy; ${new Date().getFullYear()} Amazon Web Services, Inc.</footer>`
-    const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${entityName()} — Entity Profile</title><style>body{font-family:-apple-system,sans-serif;max-width:800px;margin:40px auto;padding:0 20px;line-height:1.6;color:#e0e0e0;background:#1a1a2e}h1,h2,h3{color:#fff}code{background:#2d2d44;padding:2px 6px;border-radius:3px}pre{background:#2d2d44;padding:12px;border-radius:6px;overflow-x:auto}li{margin-bottom:8px}em{color:#aaa}table{width:100%;border-collapse:collapse;margin:12px 0;font-size:13px}th{text-align:left;padding:6px 10px;background:#2d2d44;color:#fff;border:1px solid #3d3d5c}td{padding:5px 10px;border:1px solid #3d3d5c}tr:nth-child(even){background:#1f1f35}</style></head><body>${bodyHtml}${footer}</body></html>`
+    const genMeta = `<p style="color:#888;font-size:12px">Generated: ${new Date().toLocaleString()}</p>`
+    const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${entityName()} — Entity Profile</title><style>body{font-family:-apple-system,sans-serif;max-width:800px;margin:40px auto;padding:0 20px;line-height:1.6;color:#e0e0e0;background:#1a1a2e}h1,h2,h3{color:#fff}code{background:#2d2d44;padding:2px 6px;border-radius:3px}pre{background:#2d2d44;padding:12px;border-radius:6px;overflow-x:auto}li{margin-bottom:8px}em{color:#aaa}table{width:100%;border-collapse:collapse;margin:12px 0;font-size:13px}th{text-align:left;padding:6px 10px;background:#2d2d44;color:#fff;border:1px solid #3d3d5c}td{padding:5px 10px;border:1px solid #3d3d5c}tr:nth-child(even){background:#1f1f35}</style></head><body>${genMeta}${bodyHtml}${footer}</body></html>`
     const blob = new Blob([html], { type: 'text/html' })
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')

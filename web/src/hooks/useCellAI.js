@@ -24,7 +24,6 @@ export function useCellAI({
   onCodeChange,
   onClearOutput,
   onInsertAbove,
-  onSetAiExplanation,
 }) {
   const [aiResult, setAiResult] = useState(
     cell.aiExplanation ? { type: 'explain', content: cell.aiExplanation, loading: false } : null
@@ -35,10 +34,17 @@ export function useCellAI({
   const [editorVersion, setEditorVersion] = useState(0)
   const aiAbortRef = useRef(null)
 
-  // Sync aiResult when cell.aiExplanation changes externally (e.g. from Annotate button)
+  // Sync aiResult when cell.aiExplanation changes externally (e.g. from Annotate /
+  // Clear annotations). When it's set, show/refresh the note; when it's cleared to
+  // null, remove the note — but only if it's an 'explain' note, so a Fix result the
+  // user is actively viewing isn't wiped out.
   useEffect(() => {
-    if (cell.aiExplanation && (!aiResult || aiResult.content !== cell.aiExplanation)) {
-      setAiResult({ type: 'explain', content: cell.aiExplanation, loading: false })
+    if (cell.aiExplanation) {
+      if (!aiResult || aiResult.content !== cell.aiExplanation) {
+        setAiResult({ type: 'explain', content: cell.aiExplanation, loading: false })
+      }
+    } else if (aiResult?.type === 'explain') {
+      setAiResult(null)
     }
   }, [cell.aiExplanation])
 
@@ -65,43 +71,6 @@ export function useCellAI({
       }
     }
     onExecute()
-  }
-
-  const handleAiExplain = async () => {
-    setAiResult({ type: 'explain', content: '', loading: true })
-    const controller = new AbortController()
-    aiAbortRef.current = controller
-    try {
-      const resp = await fetchWithTimeout(`${PROXY_URL}/ai/explain`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        signal: controller.signal,
-        timeout: AI_TIMEOUT_MS,
-        body: JSON.stringify({
-          code: cell.code || '',
-          output: (cell.output || '') + (cell.html ? ' [table output]' : ''),
-          microvm_id: microvmId || '',
-          session_id: sessionId || '',
-        }),
-      })
-      if (resp.ok) {
-        const data = await resp.json()
-        const explanation = data.explanation || 'No explanation'
-        setAiResult({ type: 'explain', content: explanation, loading: false })
-        if (onSetAiExplanation) onSetAiExplanation(explanation)
-        // Insert a short markdown summary above if no markdown cell exists above
-        if (onInsertAbove && data.summary) {
-          const desc = data.description ? `\n\n${data.description}` : ''
-          onInsertAbove(data.summary + desc)
-        }
-      } else {
-        setAiResult({ type: 'explain', content: 'Failed to get explanation', loading: false })
-      }
-    } catch (err) {
-      if (err.name !== 'AbortError') {
-        setAiResult({ type: 'explain', content: `Error: ${err.message}`, loading: false })
-      }
-    }
   }
 
   const handleAiFix = async () => {
@@ -225,7 +194,6 @@ export function useCellAI({
     generating,
     editorVersion,
     smartExecute,
-    handleAiExplain,
     handleAiFix,
     handleAiCancel,
     handleApplyFix,

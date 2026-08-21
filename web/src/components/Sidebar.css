@@ -339,8 +339,10 @@
 }
 
 .outline-item-icon {
-  width: 20px;
+  min-width: 20px;
   height: 20px;
+  padding: 0 4px;
+  box-sizing: border-box;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -350,14 +352,22 @@
   flex-shrink: 0;
 }
 
+/* Fixed blue (matches the in-cell PY badge) so PY stays distinct from the SQL
+   orange in every theme — otherwise in the Ember theme both use the orange accent. */
 .outline-icon-code {
-  background: var(--accent-primary-subtle);
-  color: var(--accent-primary);
+  background: rgba(79, 139, 255, 0.12);
+  color: #4f8bff;
 }
 
 .outline-icon-markdown {
   background: var(--accent-purple-subtle, rgba(203, 166, 247, 0.1));
   color: #cba6f7;
+}
+
+/* SQL cells — match the in-cell .cell-type-sql orange badge. */
+.outline-icon-sql {
+  background: rgba(224, 108, 29, 0.15);
+  color: #e06c1d;
 }
 
 .outline-item-label {
@@ -1205,6 +1215,7 @@
 
 .pkg-msg-success { color: var(--accent-success); }
 .pkg-msg-error { color: var(--accent-danger); }
+.pkg-msg-installing { color: var(--accent-primary); }
 
 .pkg-sidebar-filter {
   padding: var(--space-2) var(--space-3);
@@ -2859,4 +2870,264 @@
   color: var(--text-muted);
   margin-top: 1px;
   padding-left: 16px;
+}
+
+/* ============================================================
+   VARIABLES PANEL — controls, column schema, data viewer (P1)
+   ============================================================ */
+
+.var-controls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px var(--space-3);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.var-search {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--surface-2, rgba(0, 0, 0, 0.2));
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: 3px 8px;
+  color: var(--text-muted);
+}
+
+.var-search-input {
+  flex: 1;
+  min-width: 0;
+  background: none;
+  border: none;
+  outline: none;
+  color: var(--text-primary);
+  font-size: var(--font-size-xs);
+}
+
+.var-search-input::placeholder { color: var(--text-muted); }
+
+.var-search-clear {
+  display: inline-flex;
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 0;
+}
+.var-search-clear:hover { color: var(--text-primary); }
+
+.var-sort-select {
+  background: var(--surface-2, rgba(0, 0, 0, 0.2));
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  color: var(--text-secondary);
+  font-size: var(--font-size-xs);
+  padding: 3px 6px;
+  cursor: pointer;
+  outline: none;
+}
+
+.var-group-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--surface-2, rgba(0, 0, 0, 0.2));
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  color: var(--text-muted);
+  padding: 4px 6px;
+  cursor: pointer;
+}
+.var-group-btn:hover { color: var(--text-primary); }
+.var-group-btn.active {
+  color: var(--accent-primary);
+  border-color: var(--accent-primary);
+  background: var(--accent-primary-subtle);
+}
+
+.var-group-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px var(--space-3) 4px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+.var-group-count {
+  background: var(--surface-3);
+  color: var(--text-secondary);
+  border-radius: 8px;
+  padding: 0 6px;
+  font-size: 9px;
+}
+
+/* Column schema block (DataFrame/Series) */
+.var-schema {
+  margin-top: var(--space-2);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+.var-schema-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  background: var(--surface-3);
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+}
+.var-schema-count {
+  background: var(--surface-4, var(--surface-2));
+  border-radius: 8px;
+  padding: 0 6px;
+  color: var(--text-secondary);
+}
+.var-schema-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 0.8fr);
+  grid-template-areas: "col dtype" "meta meta";
+  gap: 0 8px;
+  padding: 4px 8px;
+  border-top: 1px solid var(--border-subtle);
+  font-size: 11px;
+}
+.var-schema-col {
+  grid-area: col;
+  font-family: var(--font-mono);
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.var-schema-dtype {
+  grid-area: dtype;
+  text-align: right;
+  font-family: var(--font-mono);
+  color: var(--accent-primary);
+  white-space: nowrap;
+}
+.var-schema-meta {
+  grid-area: meta;
+  color: var(--text-muted);
+  font-size: 10px;
+}
+.var-schema-more, .var-schema-loading {
+  padding: 6px 8px;
+  font-size: 10px;
+  color: var(--text-muted);
+  font-style: italic;
+}
+.var-schema-more { border-top: 1px solid var(--border-subtle); }
+
+.var-action-view {
+  border-color: var(--accent-primary) !important;
+  color: var(--accent-primary) !important;
+}
+
+/* Full data-grid viewer modal — widen the shared modal card for a table */
+.modal-card:has(.var-viewer) {
+  max-width: 920px;
+  width: 92%;
+}
+.var-viewer-status {
+  padding: 16px;
+  color: var(--text-muted);
+  font-size: var(--font-size-sm);
+}
+.var-viewer-error { color: var(--accent-danger); }
+.var-viewer-note {
+  margin-top: 8px;
+  font-size: var(--font-size-xs);
+  color: var(--text-muted);
+}
+.var-viewer-text {
+  margin: 0;
+  max-height: 60vh;
+  overflow: auto;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  white-space: pre-wrap;
+  color: var(--text-secondary);
+}
+
+/* Samples panel: reuse the start-page .sample-card look, stacked in the sidebar. */
+.sidebar-samples-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2, 8px);
+  padding: var(--space-2, 8px);
+}
+/* Clamp the description so each card stays compact in the narrow rail. */
+.sidebar-samples-list .sample-card-desc {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* Variable provenance: new/changed badge dots + jump-to-cell link */
+.var-badge-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  margin-left: 2px;
+}
+.var-badge-new {
+  background: var(--accent-success, #a6e3a1);
+  box-shadow: 0 0 6px 1px rgba(166, 227, 161, 0.6);
+}
+.var-badge-changed {
+  background: #f9c74f;
+  box-shadow: 0 0 6px 1px rgba(249, 199, 79, 0.55);
+}
+
+.var-prov-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 1px 8px;
+  cursor: pointer;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+  font-weight: 600;
+  line-height: 1.5;
+  color: var(--accent-primary);
+  background: color-mix(in srgb, var(--accent-primary) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent-primary) 38%, transparent);
+  border-radius: 5px;
+  text-decoration: none;
+  transition: background 0.12s ease, border-color 0.12s ease, box-shadow 0.12s ease, transform 0.06s ease;
+}
+/* Small "jump" arrow so it reads unmistakably as a navigable link. */
+.var-prov-link::after {
+  content: '↗';
+  font-size: 0.95em;
+  opacity: 0.65;
+}
+.var-prov-link:hover {
+  background: color-mix(in srgb, var(--accent-primary) 24%, transparent);
+  border-color: var(--accent-primary);
+  box-shadow: 0 0 10px color-mix(in srgb, var(--accent-primary) 22%, transparent);
+  text-decoration: none;
+}
+.var-prov-link:hover::after {
+  opacity: 1;
+}
+.var-prov-link:active {
+  transform: translateY(0.5px);
+}
+.var-prov-link:focus-visible {
+  outline: 2px solid var(--accent-primary);
+  outline-offset: 1px;
 }

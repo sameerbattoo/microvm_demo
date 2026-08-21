@@ -60,11 +60,16 @@ _EXCLUDED_MODULE_PREFIXES = (
 )
 
 
-def _is_excluded_from_checkpoint(value) -> bool:
+def _is_excluded_from_checkpoint(value, _depth: int = 0) -> bool:
     """
     Check if a value should be excluded from checkpoint serialization.
     Returns True for transient display objects (matplotlib figures, PIL images, etc.)
     that are expensive to serialize and not essential for state continuity.
+
+    Also recurses (bounded) into containers so nested display objects are caught —
+    e.g. `fig, axes = plt.subplots(2, 2)` makes `axes` an object-dtype ndarray of
+    Axes, and `axs = [fig.add_subplot(...) for ...]` makes a list of Axes. Neither
+    is matplotlib-typed at the top level, so a shallow check would let them through.
     """
     type_name = type(value).__name__
     module = getattr(type(value), "__module__", "") or ""
@@ -76,6 +81,37 @@ def _is_excluded_from_checkpoint(value) -> bool:
     # Module-based check: anything from matplotlib.* or PIL.*
     if module.startswith(_EXCLUDED_MODULE_PREFIXES):
         return True
+
+    # Bounded recursion into containers. Depth + element caps keep this cheap and
+    # cycle-safe; we only need to spot a display object, so first hit wins.
+    if _depth >= 2:
+        return False
+    _MAX_ELEMS = 64
+    try:
+        if type_name == "ndarray":
+            # Only object-dtype arrays can hold Python objects like Axes; numeric
+            # arrays can't, so skip them (avoids scanning large numeric arrays).
+            if getattr(value, "dtype", None) is not None and value.dtype == object:
+                for i, elem in enumerate(value.flat):
+                    if i >= _MAX_ELEMS:
+                        break
+                    if _is_excluded_from_checkpoint(elem, _depth + 1):
+                        return True
+        elif isinstance(value, (list, tuple, set, frozenset)):
+            for i, elem in enumerate(value):
+                if i >= _MAX_ELEMS:
+                    break
+                if _is_excluded_from_checkpoint(elem, _depth + 1):
+                    return True
+        elif isinstance(value, dict):
+            for i, elem in enumerate(value.values()):
+                if i >= _MAX_ELEMS:
+                    break
+                if _is_excluded_from_checkpoint(elem, _depth + 1):
+                    return True
+    except Exception:
+        # Never let the exclusion probe crash a checkpoint save.
+        pass
 
     return False
 
@@ -100,10 +136,32 @@ class CheckpointManager:
         self.last_checkpoint_at: float = 0  # Unix timestamp of last successful save
 
     def record_package_install(self, package: str):
-        """Track a user-installed package (called by /install endpoint on success)."""
-        if package and package not in self._user_installed_packages:
-            self._user_installed_packages.append(package)
-            logger.info(f"   Recorded user package install: {package} (total: {len(self._user_installed_packages)})")
+        """Track a user-installed package (called by /install on success). Keyed by
+        base name so a re-install/upgrade replaces the prior pin instead of adding a
+        duplicate (which would otherwise install two conflicting specs on restore)."""
+        if not package:
+            return
+        base = self._pkg_base(package)
+        self._user_installed_packages = [p for p in self._user_installed_packages if self._pkg_base(p) != base]
+        self._user_installed_packages.append(package)
+        logger.info(f"   Recorded user package install: {package} (total: {len(self._user_installed_packages)})")
+
+    def record_package_uninstall(self, package: str):
+        """Drop a package from the tracked list (called by /install uninstall on
+        success) so an uninstalled package doesn't reappear after rotation/restore."""
+        if not package:
+            return
+        base = self._pkg_base(package)
+        before = len(self._user_installed_packages)
+        self._user_installed_packages = [p for p in self._user_installed_packages if self._pkg_base(p) != base]
+        if len(self._user_installed_packages) != before:
+            logger.info(f"   Recorded user package uninstall: {package} (total: {len(self._user_installed_packages)})")
+
+    @staticmethod
+    def _pkg_base(spec: str) -> str:
+        """Base distribution name from a spec like 'pandas==2.0' or 'reqs[all]>=1'."""
+        import re as _re
+        return _re.split(r'[<>=!~\[]', (spec or "").strip(), maxsplit=1)[0].strip().lower()
 
     @property
     def bucket(self) -> str:
@@ -264,6 +322,21 @@ class CheckpointManager:
             logger.info(f"   Data catalog: saved ({len(catalog_data)} bytes)")
         step_timings["data_catalog"] = _time.perf_counter() - t0
 
+        # 6. Save variable provenance (which cell created/modified each variable) so
+        # "jump to defining cell" survives rotation/restore.
+        try:
+            provenance = self._executor.get_var_provenance()
+            if provenance:
+                s3.put_object(
+                    Bucket=self.bucket,
+                    Key=f"{prefix}/provenance.json",
+                    Body=json.dumps(provenance),
+                    ContentType="application/json",
+                )
+                logger.info(f"   Provenance: saved ({len(provenance)} vars)")
+        except Exception as e:
+            logger.warning(f"   Provenance save warning: {e}")
+
         total_time = sum(step_timings.values())
         logger.info(f"   ✅ Checkpoint complete: s3://{self.bucket}/{prefix}/ ({total_time*1000:.0f}ms total)")
         logger.info(f"   ⏱  Breakdown: serialize={step_timings['serialize']*1000:.0f}ms, upload_pkl={step_timings['upload_pkl']*1000:.0f}ms, archive={step_timings['archive_files']*1000:.0f}ms, packages={step_timings['packages']*1000:.0f}ms, metadata={step_timings['metadata']*1000:.0f}ms")
@@ -336,10 +409,32 @@ class CheckpointManager:
                 packages = [p.strip() for p in requirements.strip().split('\n') if p.strip()]
                 if packages:
                     logger.info(f"   Installing {len(packages)} user packages: {', '.join(packages)}")
-                    subprocess.run(
-                        [sys.executable, "-m", "pip", "install", "--quiet"] + packages,
-                        timeout=60
-                    )
+                    # Scale the timeout with package count, and fall back to a
+                    # per-package best-effort pass so one heavy or conflicting pin
+                    # doesn't block the rest. (The batch timeout was a fixed 60s —
+                    # shorter than a single interactive install's 120s — so a heavy
+                    # package could checkpoint successfully yet fail to restore.)
+                    batch_timeout = min(900, 180 + 120 * len(packages))
+                    batch_ok = False
+                    try:
+                        proc = subprocess.run(
+                            [sys.executable, "-m", "pip", "install", "--quiet"] + packages,
+                            capture_output=True, text=True, timeout=batch_timeout,
+                        )
+                        batch_ok = proc.returncode == 0
+                        if not batch_ok:
+                            logger.warning(f"   Batch install returned {proc.returncode} — retrying per-package")
+                    except subprocess.TimeoutExpired:
+                        logger.warning(f"   Batch install timed out after {batch_timeout}s — retrying per-package")
+                    if not batch_ok:
+                        for _pkg in packages:
+                            try:
+                                subprocess.run(
+                                    [sys.executable, "-m", "pip", "install", "--quiet", _pkg],
+                                    timeout=180,
+                                )
+                            except Exception as _pe:
+                                logger.warning(f"   Package restore: {_pkg} failed — {_pe}")
                     # Track them in our list for future checkpoints
                     self._user_installed_packages = packages
                     logger.info(f"   ✓ Installed {len(packages)} packages")
@@ -378,6 +473,17 @@ class CheckpointManager:
         except Exception as e:
             logger.warning(f"   Data catalog restore warning: {e}")
             step_timings["data_catalog"] = 0
+
+        # 5. Restore variable provenance (defined_by/modified_by per variable)
+        try:
+            resp = s3.get_object(Bucket=self.bucket, Key=f"{prefix}/provenance.json")
+            provenance = json.loads(resp["Body"].read().decode("utf-8"))
+            self._executor.set_var_provenance(provenance)
+            logger.info(f"   Provenance: restored ({len(provenance)} vars)")
+        except s3.exceptions.NoSuchKey:
+            logger.info("   No provenance found (skipping)")
+        except Exception as e:
+            logger.warning(f"   Provenance restore warning: {e}")
 
         total_time = sum(step_timings.values())
         logger.info(f"   ✅ Session restored from: {session_id} ({total_time*1000:.0f}ms total)")

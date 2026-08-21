@@ -6,6 +6,7 @@
   display: flex;
   gap: 0;
   margin-bottom: 12px;
+  scroll-margin-top: 12px; /* leave a small gap when scrolled to via the Outline */
   border: 1px solid var(--cell-border);
   border-left: 3px solid rgba(79, 139, 255, 0.6);
   border-radius: var(--radius-lg);
@@ -542,7 +543,7 @@
 .cell-ai-result-header {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  gap: 6px;
   margin-bottom: 6px;
 }
 
@@ -554,6 +555,69 @@
   padding: 2px 8px;
   border-radius: 8px;
   letter-spacing: 0.3px;
+}
+
+/* "Manually edited" badge — shown alongside the ✨ AI badge once the user edits the note */
+.cell-ai-badge-edited {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  color: #f9c74f;
+  background: rgba(249, 199, 79, 0.12);
+}
+
+.cell-ai-header-actions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.cell-ai-edit {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 2px;
+  border-radius: 4px;
+}
+
+.cell-ai-edit:hover {
+  color: var(--text-primary);
+  background: var(--surface-3);
+}
+
+.cell-ai-explain-edit {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.cell-ai-explain-textarea {
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+  background: var(--surface-2, rgba(0, 0, 0, 0.2));
+  border: 1px solid rgba(203, 166, 247, 0.35);
+  border-radius: 6px;
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 1.5;
+  padding: 8px 10px;
+  outline: none;
+}
+
+.cell-ai-explain-textarea:focus {
+  border-color: rgba(203, 166, 247, 0.7);
+}
+
+.cell-ai-explain-edit-actions {
+  display: flex;
+  gap: 8px;
 }
 
 .cell-ai-result .cell-ai-dismiss {
@@ -674,6 +738,21 @@
   width: auto;
 }
 
+/* Bound the table to ~15 rows then scroll within (sticky header stays put).
+   Short tables stay their natural height since this is a max, not a fixed height. */
+.df-table-scroll {
+  max-height: 400px;
+  overflow: auto;
+}
+
+/* Row-count footer under the table, e.g. "Showing 50 rows" */
+.df-row-count {
+  padding: 6px 10px;
+  font-size: var(--font-size-xs);
+  color: var(--text-muted);
+  border-top: 1px solid var(--border-subtle);
+}
+
 .output-html th {
   background: var(--surface-3);
   color: var(--accent-primary);
@@ -684,7 +763,14 @@
   white-space: nowrap;
   cursor: pointer;
   user-select: none;
-  position: relative;
+  /* Sticky so the header stays visible while scrolling the bounded table body.
+     sticky still establishes a containing block for the ⇅ ::after indicator.
+     border-collapse drops the header's bottom border while stuck, so we redraw
+     it with an inset box-shadow. */
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  box-shadow: inset 0 -1px 0 var(--border-subtle);
   padding-right: 22px;
   transition: background 0.15s;
 }
@@ -1279,7 +1365,7 @@
   padding: 5px 12px;
   font-size: 10px;
   font-weight: 600;
-  color: var(--accent-success, #00c9a7);
+  color: var(--accent-primary);
   text-transform: uppercase;
   letter-spacing: 0.5px;
   cursor: pointer;
@@ -1290,6 +1376,7 @@
 }
 
 .cell-sql .cell-output-collapse-bar {
+  color: #e06c1d;
   border-left-color: rgba(224, 108, 29, 0.5);
   border-bottom-color: rgba(224, 108, 29, 0.3);
 }
@@ -1520,8 +1607,9 @@
 }
 
 .cell-type-text {
-  background: rgba(130, 130, 130, 0.12);
-  color: #888;
+  /* Purple, matching the outline panel's markdown (M-N) badge. */
+  background: rgba(203, 166, 247, 0.12);
+  color: #cba6f7;
   font-size: 10px;
   font-weight: 700;
 }
@@ -1552,7 +1640,9 @@
   font-size: 12px;
   font-weight: 600;
   padding: 1px 5px;
-  width: 120px;
+  flex: 1;
+  min-width: 0;
+  max-width: 420px;
   outline: none;
   transition: border-color 0.15s;
 }
@@ -1592,6 +1682,20 @@
   color: var(--text-secondary);
   font-family: var(--font-mono);
   min-width: fit-content;
+  cursor: text;
+}
+
+.param-label-input {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  background: var(--bg-primary, #111);
+  border: 1px solid var(--accent-primary);
+  border-radius: 4px;
+  padding: 1px 5px;
+  width: 130px;
+  outline: none;
 }
 
 .param-slider-group {
@@ -1657,3 +1761,100 @@
   outline: none;
   border-color: var(--accent-primary);
 }
+
+/* --- Per-cell "variables defined here" chips (Option A) --- */
+/* The Variables section reuses the OUTPUT header CSS (.cell-output +
+   .cell-output-collapse-bar) for an identical, collapsible band. The chips sit
+   inside that padded band, so they only need a little top gap under the header. */
+.cell-vars-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+  margin-top: 8px;
+}
+.cell-var-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 8px;
+  border-radius: 5px;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs, 11px);
+  line-height: 1.5;
+  background: var(--surface-2, rgba(255, 255, 255, 0.04));
+  border: 1px solid var(--border-default, rgba(255, 255, 255, 0.1));
+  color: var(--text-primary);
+  cursor: pointer;
+  transition: background 0.12s ease, border-color 0.12s ease, box-shadow 0.12s ease, transform 0.06s ease;
+}
+/* Leading dot signals defined (green) vs modified (amber). */
+.cell-var-chip::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.cell-var-defined::before { background: var(--accent-success, #a6e3a1); }
+.cell-var-modified::before { background: #f9c74f; }
+button.cell-var-chip:hover {
+  border-color: var(--accent-primary);
+  background: color-mix(in srgb, var(--accent-primary) 14%, transparent);
+  box-shadow: 0 0 8px color-mix(in srgb, var(--accent-primary) 18%, transparent);
+}
+button.cell-var-chip:active { transform: translateY(0.5px); }
+button.cell-var-chip:focus-visible { outline: 2px solid var(--accent-primary); outline-offset: 1px; }
+.cell-var-chip-icon { font-size: 11px; line-height: 1; }
+.cell-var-chip-name { font-weight: 600; }
+
+/* Replaced: value was set here but later overwritten elsewhere — greyed, not openable. */
+.cell-var-replaced {
+  cursor: default;
+  background: transparent;
+  border-style: dashed;
+}
+/* Grey only the (replaced) icon + name, so the jump-link pill stays fully
+   actionable at full opacity — matching the Variables panel treatment. */
+.cell-var-replaced .cell-var-chip-icon { opacity: 0.5; }
+.cell-var-replaced .cell-var-chip-name {
+  color: var(--text-muted, #888);
+  text-decoration: line-through;
+  text-decoration-thickness: 1px;
+}
+.cell-var-replaced-arrow {
+  color: var(--text-muted, #888);
+  opacity: 0.7;
+  font-size: 11px;
+}
+/* Jump-link styled identically to the Variables panel's .var-prov-link pill. */
+.cell-var-replaced-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 1px 8px;
+  cursor: pointer;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs, 11px);
+  font-weight: 600;
+  line-height: 1.5;
+  color: var(--accent-primary);
+  background: color-mix(in srgb, var(--accent-primary) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent-primary) 38%, transparent);
+  border-radius: 5px;
+  text-decoration: none;
+  transition: background 0.12s ease, border-color 0.12s ease, box-shadow 0.12s ease, transform 0.06s ease;
+}
+.cell-var-replaced-link::after {
+  content: '↗';
+  font-size: 0.95em;
+  opacity: 0.65;
+}
+.cell-var-replaced-link:hover {
+  background: color-mix(in srgb, var(--accent-primary) 24%, transparent);
+  border-color: var(--accent-primary);
+  box-shadow: 0 0 10px color-mix(in srgb, var(--accent-primary) 22%, transparent);
+}
+.cell-var-replaced-link:hover::after { opacity: 1; }
+.cell-var-replaced-link:active { transform: translateY(0.5px); }
+.cell-var-replaced-link:focus-visible { outline: 2px solid var(--accent-primary); outline-offset: 1px; }

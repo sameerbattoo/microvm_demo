@@ -237,6 +237,30 @@ class MicrovmManager:
     # VM ROTATION HELPERS
     # ============================================================
 
+    def launch_env_vars(self) -> dict:
+        """Config values propagated into EVERY MicroVM's os.environ at launch, via
+        runHookPayload.env_vars → the /run hook's injection loop. Single source of
+        truth so the main launch and rotation launch stay consistent — add new VM
+        runtime knobs here (and to config.sh) and both paths pick them up.
+
+        All values are sourced from the proxy's environment (i.e. config.sh), with
+        defaults matching the project defaults so nothing breaks if a var is unset.
+        The in-VM code MUST read these at call time (not module import), because the
+        /run hook fires AFTER the app is imported into the Firecracker snapshot.
+        """
+        env = {
+            "AWS_REGION": os.environ.get("AWS_REGION", "us-west-2"),
+            "ATHENA_DB": os.environ.get("ATHENA_DB", "microvm_demo_db"),
+            "ATHENA_WORKGROUP": os.environ.get("ATHENA_WORKGROUP", "microvm-demo"),
+            "DATASOURCE_ATHENA_DATABASES": os.environ.get("DATASOURCE_ATHENA_DATABASES", ""),
+            "NOTEBOOK_MAX_DISPLAY_ROWS": os.environ.get("NOTEBOOK_MAX_DISPLAY_ROWS", "50"),
+            "EXECUTION_TIMEOUT_SECONDS": os.environ.get("EXECUTION_TIMEOUT_SECONDS", "60"),
+        }
+        bucket = self.get_artifacts_bucket()
+        if bucket:
+            env["ARTIFACT_BUCKET"] = bucket
+        return env
+
     def launch_for_rotation(self, image_arn: str, memory_mib: int, idle_timeout_sec: int, notebook_name: str, session_id: str) -> tuple:
         """
         Launch a bare VM for rotation (no restore payload — state applied separately).
@@ -255,6 +279,8 @@ class MicrovmManager:
             "checkpoint_enabled": True,
             "persistence_mode": "checkpoint",
             "artifacts_bucket": bucket,
+            # Same runtime knobs as the main launch so rotated VMs stay consistent.
+            "env_vars": self.launch_env_vars(),
         })
 
         params = {

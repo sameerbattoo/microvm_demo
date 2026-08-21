@@ -101,7 +101,11 @@ export default function OutlinePanel({
   // Markdown cells with # headings define the tree; their heading level (1-6)
   // drives nesting. Code/SQL/plain-markdown cells attach to the current section.
   const cellOutlineItems = useMemo(() => {
-    let codeCounter = 0
+    // Independent per-type counters → PY-1, SQL-1, M-1 badges (matches the in-cell
+    // PY / SQL / MD type badges).
+    let pyCounter = 0
+    let sqlCounter = 0
+    let mdCounter = 0
     const sectionStack = []            // [{ id, level }] — currently-open heading sections
     const headingCounters = [0, 0, 0, 0, 0, 0]  // for 1 / 1.1 / 1.2 numbering
 
@@ -120,14 +124,15 @@ export default function OutlinePanel({
         } else {
           label = firstLine.slice(0, 60) || '(text)'
         }
-        icon = 'M'
+        mdCounter++
+        icon = `M-${mdCounter}`
       } else if (cellType === 'sql') {
-        codeCounter++
+        sqlCounter++
         const lines = (cell.code || '').split('\n').filter(l => l.trim() && !l.trim().startsWith('--'))
         label = lines.length > 0 ? lines[0].trim().slice(0, 50) : '(empty)'
-        icon = `S${codeCounter}`
+        icon = `SQL-${sqlCounter}`
       } else {
-        codeCounter++
+        pyCounter++
         const lines = (cell.code || '').split('\n').filter(l => l.trim())
         const meaningfulLine = lines.find(l => !l.trim().startsWith('import ') && !l.trim().startsWith('from ') && !l.trim().startsWith('#'))
         if (meaningfulLine) {
@@ -140,7 +145,7 @@ export default function OutlinePanel({
         } else {
           label = '(empty)'
         }
-        icon = `${codeCounter}`
+        icon = `PY-${pyCounter}`
       }
 
       // Compute hierarchy: depth, ancestor section ids, and section number
@@ -464,7 +469,7 @@ export default function OutlinePanel({
           : <span className="outline-chevron-spacer" />
       )}
       <span className={`outline-item-icon outline-icon-${item.cellType}`}>
-        {item.cellType === 'markdown' ? 'M' : <>{item.icon}</>}
+        {item.icon}
       </span>
       {item.isSection && item.sectionNumber && !isFiltering && (
         <span className="outline-section-number">{item.sectionNumber}</span>

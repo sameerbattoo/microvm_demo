@@ -199,16 +199,20 @@ export default function Sidebar({
 
   // --- Package fetching ---
   const fetchPackages = useCallback(async () => {
-    if (!activeTab?.microvmEndpoint || activeTab?.status !== 'connected') return
+    if (!activeTab?.microvmEndpoint || activeTab?.status !== 'connected') return false
     setPkgLoading(true)
+    let ok = false
     try {
       const headers = { 'Content-Type': 'application/json' }
       if (activeTab.sessionId) {
         headers['X-Session-Id'] = activeTab.sessionId
       }
+      // `pip list` is a slow subprocess and a freshly launched VM may still be
+      // cold-starting, so allow a generous timeout.
       const resp = await fetchWithTimeout(`${activeTab.microvmEndpoint}/packages`, {
         method: 'GET',
         headers,
+        timeout: 45000,
       })
       if (resp.ok) {
         const data = await resp.json()
@@ -216,23 +220,40 @@ export default function Sidebar({
           const pkgList = data.packages.map(p => ({ name: p.name, version: p.version }))
           setPackages(pkgList)
           if (onSyncPackages) onSyncPackages(pkgList)
+          ok = pkgList.length > 0
         }
       }
     } catch {}
     setPkgLoading(false)
-    setPkgFetched(true)
+    // Only latch "fetched" on success — a cold-start miss must be retried, not
+    // stuck at "No packages found".
+    if (ok) setPkgFetched(true)
+    return ok
   }, [activeTab?.microvmEndpoint, activeTab?.sessionId, activeTab?.status])
 
-  // Load packages when connected
+  // Clear package state when the VM disconnects.
   useEffect(() => {
-    if (!pkgFetched && activeTab?.microvmEndpoint && activeTab?.status === 'connected') {
-      fetchPackages()
-    }
     if (!activeTab?.microvmEndpoint || activeTab?.status !== 'connected') {
       setPackages([])
       setPkgFetched(false)
     }
-  }, [pkgFetched, activeTab?.microvmEndpoint, activeTab?.status])
+  }, [activeTab?.microvmEndpoint, activeTab?.status])
+
+  // Load packages once connected, retrying with backoff — a newly launched VM is
+  // cold and its first /packages call can be slow or briefly fail. Cancels on
+  // success, disconnect, or tab switch.
+  useEffect(() => {
+    if (pkgFetched || !activeTab?.microvmEndpoint || activeTab?.status !== 'connected') return
+    let cancelled = false
+    ;(async () => {
+      for (let attempt = 1; attempt <= 8 && !cancelled; attempt++) {
+        const ok = await fetchPackages()
+        if (ok || cancelled) return
+        await new Promise(r => setTimeout(r, Math.min(2000 + attempt * 1000, 8000)))
+      }
+    })()
+    return () => { cancelled = true }
+  }, [pkgFetched, activeTab?.microvmEndpoint, activeTab?.status, fetchPackages])
 
   // Reset package state when switching tabs
   useEffect(() => {
@@ -255,7 +276,7 @@ export default function Sidebar({
       const result = await resp.json()
       if (result.success) {
         setPkgFetched(false) // trigger re-fetch
-        return { success: true }
+        return { success: true, installed_spec: result.installed_spec }
       } else {
         return { success: false, error: result.error || 'Install failed' }
       }
@@ -463,6 +484,8 @@ export default function Sidebar({
             <VariablesPanel
               variables={variables}
               activeTab={activeTab}
+              cells={cells}
+              onScrollToCell={onScrollToCell}
               onInsertCode={onInsertCode}
               onDeleteVariable={handleDeleteVariable}
               onClose={() => setActivePanel(null)}
@@ -473,6 +496,7 @@ export default function Sidebar({
             <PackagesPanel
               packages={packages}
               pkgLoading={pkgLoading}
+              pkgFetched={pkgFetched}
               activeTab={activeTab}
               fetchPackages={() => { setPkgFetched(false); fetchPackages() }}
               onInstallPackage={handleInstallPackage}

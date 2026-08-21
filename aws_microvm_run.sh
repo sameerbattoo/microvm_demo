@@ -196,7 +196,22 @@ done
 
 if [ "$NEEDS_BUILD" = "true" ]; then
   echo "   Some images missing — building all tiers..."
-  bash "$ROOT_DIR/scripts/build_all_images.sh"
+  # Retry the build once on failure. The build is idempotent (existing CREATED
+  # tiers are skipped, missing/failed ones are rebuilt), so a retry cheaply
+  # recovers from transient image-service errors instead of aborting the launch.
+  build_ok=false
+  for build_attempt in 1 2; do
+    if bash "$ROOT_DIR/scripts/build_all_images.sh"; then
+      build_ok=true
+      break
+    fi
+    echo "   ⚠ Image build attempt ${build_attempt} failed — retrying in 10s (idempotent: existing tiers skipped)..."
+    sleep 10
+  done
+  if [ "$build_ok" = "false" ]; then
+    echo "   ❌ Image build failed after 2 attempts. Aborting."
+    exit 1
+  fi
 else
   echo "   All image tiers ready ✓"
 fi

@@ -410,7 +410,7 @@ export default function App() {
             if (cell) {
               setTimeout(() => {
                 const el = document.querySelector(`[data-cell-id="${cell.id}"]`)
-                if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+                if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' })
               }, 50)
             }
           }}

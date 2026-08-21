@@ -319,33 +319,32 @@ NOTEBOOK_AGENT_PROMPT = (
     .replace("__SOURCE_TYPES_LIST__", _source_types_list)
 )
 
-EXPLAIN_PROMPT = """<task>
-Explain this cell and its output. Return JSON with three fields:
-1. "summary" — bold heading, under 8 words (e.g. "Load Sales Data from S3")
-2. "description" — 1-2 sentence explanation of what the cell does and why, with key details.
-   Use markdown: bold for important terms, `code` for variable/function names, bullet points for multi-step cells.
-3. "explanation" — 2-3 sentences focusing on data insights from the output, not code mechanics
+ANNOTATE_PROMPT = """<task>
+Document this data notebook so it reads like a polished, shareable report. You are given the notebook's cells in order, each labeled with an integer index. Return documentation as a single JSON object.
 </task>
 
-<cell_code>
-{code}
-</cell_code>
+<notebook_cells>
+{cells}
+</notebook_cells>
 
-<cell_output>
-{output}
-</cell_output>
+<output_format>
+Return ONLY valid JSON (no markdown fences, no prose) shaped exactly like:
+{{"root": "# Title\\n\\nShort intro paragraph.", "sections": [{{"before_index": 3, "markdown": "## Step 1 · Load the data\\n\\nOne or two sentences."}}], "comments": [{{"index": 3, "comment": "What this cell does and why."}}]}}
+</output_format>
 
-<instructions>
-- Return ONLY valid JSON: {{"summary": "...", "description": "...", "explanation": "..."}}
-- Summary: short verb + object (e.g. "Load Sales Data from S3", "Merge All 3 Sources")
-- Description: explain the approach briefly. Use `code` backticks for identifiers. Use bullet points (•) for multi-step cells.
-  Examples:
-  - "Read the CSV from the S3 bucket using `boto3` and convert to a pandas DataFrame."
-  - "Join the data:\n• **Sales** (S3) enriched with **product ratings** (DynamoDB) via keyword matching\n• Then merged with **customer demographics** (Athena) on `customer_id`"
-  - "Scan the product catalog table. DynamoDB returns `Decimal` types which we convert to float for pandas compatibility."
-- Explanation: focus on output insights (row counts, patterns, distributions)
-- No output yet: describe what the code will produce when run
-</instructions>"""
+<house_style>
+Emulate this documentation style:
+- root: a single H1 with a real, product-style title (never literally "Notebook"), then ONE short paragraph (2-4 sentences) stating what the workbook does and the decision or answer it delivers. If the FIRST input cell is already a markdown cell whose text starts with "# " (an authored title), set "root" to null — do not add a second title.
+- sections: split the code/SQL cells into logical clusters (a "step"). Before the FIRST cell of each cluster, emit ONE section with a "## " heading and a 1-2 sentence intro. Prefer numbered, action-oriented headings like "## Step 1 · Demand & margin" or "## Customer sentiment". Do NOT emit a section before a cell that already has a markdown cell immediately above it.
+- comments: exactly one per code/SQL cell that is worth explaining, keyed by that cell's index. 1-2 plain sentences on what the cell does and why. Use `backticks` for identifiers. Skip trivial cells (bare imports) if there is nothing useful to say.
+</house_style>
+
+<rules>
+- Reference cells only by the integer index shown in the input.
+- "before_index" and "index" MUST be valid indices from the input.
+- Keep it concise — this documents the notebook, it is not a tutorial.
+- Output the JSON object and nothing else.
+</rules>"""
 
 FIX_ERROR_PROMPT = """<task>
 Fix this Python code. Return ONLY the corrected code — no explanations, no markdown fences.

@@ -8,7 +8,6 @@ Endpoints:
   POST   /ai/chat               - Conversational chat (SSE streaming)
   POST   /ai/chat/sync          - Conversational chat (JSON response)
   DELETE /ai/chat/{session_id}  - Clear conversation history
-  POST   /ai/explain            - Explain cell output
   POST   /ai/fix                - Fix cell error
   POST   /ai/suggest-tag        - Suggest notebook category tag
 """
@@ -29,7 +28,7 @@ from proxy.notebook.ai.constants import (
 from proxy.notebook.ai.notebook_agent import (
     chat as agent_chat,
     chat_stream as agent_chat_stream,
-    explain as agent_explain,
+    annotate_notebook as agent_annotate,
     fix_error as agent_fix_error,
     suggest_shell_command as agent_suggest_shell,
     new_thread as agent_new_thread,
@@ -170,35 +169,27 @@ async def ai_clear_chat(session_id: str):
     return {"status": "cleared", "session_id": session_id}
 
 
-@router.post("/ai/explain")
-async def ai_explain_output(request: Request):
-    """Explain a cell's output in plain language."""
+@router.post("/ai/annotate")
+async def ai_annotate_notebook(request: Request):
+    """Document a whole notebook in one pass: root title/intro, section headers,
+    and per-cell comments. Returns {root, sections[], comments[]} keyed by cell index."""
     body = await request.json()
-    code = body.get("code", "")
-    output = body.get("output", "")
-    microvm_id = body.get("microvm_id", "")
-    microvm_endpoint = body.get("microvm_endpoint", "")
+    cells = body.get("cells", [])
+    if not cells:
+        return Response(status_code=400, content='{"error": "cells required"}', media_type="application/json")
 
-    if not code and not output:
-        return Response(status_code=400, content='{"error": "code and/or output required"}', media_type="application/json")
-
-    context = {
-        "proxy_url": f"http://localhost:{os.environ.get('PROXY_PORT', '8081')}",
-        "microvm_id": microvm_id,
-        "microvm_endpoint": microvm_endpoint,
-    }
-
+    logger.info(f"AI annotate: {len(cells)} cells")
     try:
-        result = await asyncio.to_thread(agent_explain, code, output, context)
-        # agent_explain returns {"summary": str, "description": str, "explanation": str}
-        return {
-            "summary": result.get("summary", "") if isinstance(result, dict) else "",
-            "description": result.get("description", "") if isinstance(result, dict) else "",
-            "explanation": result.get("explanation", str(result)) if isinstance(result, dict) else str(result),
-        }
+        result = await asyncio.to_thread(agent_annotate, cells)
+        logger.info(
+            f"AI annotate done: root={'yes' if result.get('root') else 'no'}, "
+            f"sections={len(result.get('sections', []))}, comments={len(result.get('comments', []))}"
+        )
+        return result
     except Exception as e:
-        logger.error(f"AI explain error: {e}")
-        return Response(status_code=500, content=f'{{"error": "Explain failed: {str(e)}"}}', media_type="application/json")
+        import traceback
+        logger.error(f"AI annotate error: {e}\n{traceback.format_exc()}")
+        return Response(status_code=500, content=f'{{"error": "Annotate failed: {str(e)}"}}', media_type="application/json")
 
 
 @router.post("/ai/fix")

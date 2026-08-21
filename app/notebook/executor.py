@@ -10,6 +10,7 @@ AI-generated code runs here, accumulating state like a notebook kernel.
 
 import io
 import os
+import ast
 import sys
 import ctypes
 import threading
@@ -19,9 +20,30 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
-# Maximum time (seconds) a single cell execution is allowed to run before
-# being forcefully interrupted. Configurable via environment variable.
-EXECUTION_TIMEOUT_SECONDS = int(os.environ.get("EXECUTION_TIMEOUT_SECONDS", "60"))
+# VM runtime knobs injected by the proxy at launch (config.sh → runHookPayload
+# env_vars → /run hook → os.environ). These MUST be read at CALL time, not module
+# import: this module is imported into the Firecracker snapshot at image-build time,
+# which is BEFORE the /run hook injects the launch env vars. Reading at import would
+# freeze the build-time defaults (the old EXECUTION_TIMEOUT_SECONDS bug).
+DEFAULT_EXECUTION_TIMEOUT_SECONDS = 60
+DEFAULT_MAX_DISPLAY_ROWS = 50
+
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.environ.get(name, default))
+    except (TypeError, ValueError):
+        return default
+
+
+def execution_timeout_seconds() -> int:
+    """Max seconds a single cell may run before it's forcefully interrupted."""
+    return _env_int("EXECUTION_TIMEOUT_SECONDS", DEFAULT_EXECUTION_TIMEOUT_SECONDS)
+
+
+def max_display_rows() -> int:
+    """Max DataFrame/SQL rows to render for the UI."""
+    return _env_int("NOTEBOOK_MAX_DISPLAY_ROWS", DEFAULT_MAX_DISPLAY_ROWS)
 
 
 @dataclass
@@ -34,6 +56,7 @@ class ExecutionResult:
     execution_time_ms: float = 0.0
     html: str = ""      # HTML table output (for DataFrames)
     image: str = ""     # Base64 PNG image (for matplotlib plots)
+    installed_spec: str = ""  # For install_package: resolved "name==version" pin
 
 
 class SandboxExecutor:
@@ -51,6 +74,12 @@ class SandboxExecutor:
         self._namespace: dict[str, Any] = {}
         self._execution_count: int = 0
         self._history: list[dict] = []
+        # Variable provenance: name → {defined_by, defined_at, modified_by[], last_cell, last_exec}.
+        # cell_* fields hold the frontend cell id; *_at/_exec use a monotonic _prov_clock
+        # that advances on every code execute AND SQL write, so recency is unambiguous
+        # even when cells are re-run out of order.
+        self._var_provenance: dict[str, dict] = {}
+        self._prov_clock: int = 0
         self._created_at = datetime.now(timezone.utc)
         self._exec_thread: threading.Thread | None = None
         self._exec_thread_id: int | None = None
@@ -93,6 +122,133 @@ class SandboxExecutor:
         except ImportError:
             pass
 
+    # ---- Variable provenance (which cell created / modified each variable) ----
+
+    @staticmethod
+    def _var_fingerprint(obj) -> tuple:
+        """Cheap change-signature: object identity + shape/len. id() catches
+        reassignment (new object); shape/len catches in-place ops that change size."""
+        try:
+            shape = getattr(obj, "shape", None)
+            if shape is not None:
+                sig = tuple(shape)
+            elif hasattr(obj, "__len__"):
+                sig = len(obj)
+            else:
+                sig = None
+        except Exception:
+            sig = None
+        return (id(obj), sig)
+
+    @staticmethod
+    def _assigned_targets(code: str) -> set:
+        """Names a cell assigns at the top level (via AST). Covers `x =`, `x += `,
+        `x: T = `, walrus, `for x in`, `with ... as x`, imports, def/class, and the
+        base object of subscript/attribute assigns (`df['c'] = `, `df.col = ` → `df`)."""
+        names: set = set()
+
+        def _collect(target):
+            if isinstance(target, ast.Name):
+                names.add(target.id)
+            elif isinstance(target, (ast.Tuple, ast.List)):
+                for e in target.elts:
+                    _collect(e)
+            elif isinstance(target, ast.Starred):
+                _collect(target.value)
+            elif isinstance(target, (ast.Subscript, ast.Attribute)):
+                base = target
+                while isinstance(base, (ast.Subscript, ast.Attribute)):
+                    base = base.value
+                if isinstance(base, ast.Name):
+                    names.add(base.id)
+
+        try:
+            tree = ast.parse(code)
+        except SyntaxError:
+            return names
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Assign):
+                for t in node.targets:
+                    _collect(t)
+            elif isinstance(node, (ast.AnnAssign, ast.AugAssign, ast.NamedExpr)):
+                _collect(node.target)
+            elif isinstance(node, (ast.For, ast.AsyncFor)):
+                _collect(node.target)
+            elif isinstance(node, ast.comprehension):
+                _collect(node.target)
+            elif isinstance(node, ast.withitem):
+                if node.optional_vars is not None:
+                    _collect(node.optional_vars)
+            elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                names.add(node.name)
+            elif isinstance(node, (ast.Import, ast.ImportFrom)):
+                for alias in node.names:
+                    names.add((alias.asname or alias.name).split(".")[0])
+        return names
+
+    def _update_provenance(self, cell_id, created, modified, deleted):
+        """Record which cell created/modified/deleted variables in this execution."""
+        self._prov_clock += 1
+        clock = self._prov_clock
+        cid = cell_id or ""
+        for name in deleted:
+            self._var_provenance.pop(name, None)
+        for name in created:
+            self._var_provenance[name] = {
+                "defined_by": cid, "defined_at": clock,
+                "modified_by": [], "last_cell": cid, "last_exec": clock,
+            }
+        for name in modified:
+            if name in created:
+                continue
+            p = self._var_provenance.get(name)
+            if p is None:
+                # Existed but untracked (e.g. restored from checkpoint) — treat this
+                # touch as its definition point so it still gets a jump target.
+                self._var_provenance[name] = {
+                    "defined_by": cid, "defined_at": clock,
+                    "modified_by": [], "last_cell": cid, "last_exec": clock,
+                }
+            else:
+                if not p["modified_by"] or p["modified_by"][-1] != cid:
+                    p["modified_by"].append(cid)
+                p["last_cell"] = cid
+                p["last_exec"] = clock
+
+    def record_var_write(self, name: str, cell_id):
+        """Record a variable write that didn't go through execute() — e.g. the SQL
+        engine storing its result DataFrame directly into the namespace."""
+        if not name:
+            return
+        self._prov_clock += 1
+        clock = self._prov_clock
+        cid = cell_id or ""
+        p = self._var_provenance.get(name)
+        if p is None:
+            self._var_provenance[name] = {
+                "defined_by": cid, "defined_at": clock,
+                "modified_by": [], "last_cell": cid, "last_exec": clock,
+            }
+        else:
+            if not p["modified_by"] or p["modified_by"][-1] != cid:
+                p["modified_by"].append(cid)
+            p["last_cell"] = cid
+            p["last_exec"] = clock
+
+    def get_var_provenance(self) -> dict:
+        """Provenance map (for checkpoint save)."""
+        return self._var_provenance
+
+    def set_var_provenance(self, data: dict):
+        """Restore provenance map (from checkpoint) and advance the clock past it."""
+        if not isinstance(data, dict):
+            return
+        self._var_provenance = data
+        try:
+            self._prov_clock = max([0] + [int(v.get("last_exec", 0)) for v in data.values()])
+        except Exception:
+            self._prov_clock = 0
+
     def interrupt(self) -> bool:
         """
         Interrupt a running execution by raising KeyboardInterrupt in the exec thread.
@@ -108,12 +264,15 @@ class SandboxExecutor:
         )
         return res > 0
 
-    def execute(self, code: str) -> ExecutionResult:
+    def execute(self, code: str, cell_id=None) -> ExecutionResult:
         """
         Execute Python code in the persistent namespace.
 
         All variables defined will be available in subsequent executions.
         This is how AI agents build up state across multi-step tasks.
+
+        cell_id (optional): the frontend cell id, recorded as provenance so the
+        Variables panel can show which cell created/modified each variable.
         """
         self._execution_count += 1
         start = datetime.now(timezone.utc)
@@ -128,6 +287,8 @@ class SandboxExecutor:
         sys.stderr = stderr_capture
 
         variables_before = set(self._namespace.keys())
+        # Snapshot fingerprints of existing vars so we can detect which were modified.
+        before_fps = {k: self._var_fingerprint(self._namespace[k]) for k in variables_before}
 
         # Provide a display() function (like Jupyter's IPython.display.display)
         # that allows users to explicitly render objects from anywhere in the code
@@ -165,7 +326,8 @@ class SandboxExecutor:
                     ctypes.py_object(KeyboardInterrupt)
                 )
 
-        timer = threading.Timer(EXECUTION_TIMEOUT_SECONDS, _timeout_trigger)
+        timeout_s = execution_timeout_seconds()
+        timer = threading.Timer(timeout_s, _timeout_trigger)
         timer.start()
 
         try:
@@ -178,7 +340,7 @@ class SandboxExecutor:
         except KeyboardInterrupt:
             success = False
             if timed_out.is_set():
-                error = f"Execution timed out after {EXECUTION_TIMEOUT_SECONDS}s — possible infinite loop or long-running computation"
+                error = f"Execution timed out after {timeout_s}s — possible infinite loop or long-running computation"
             else:
                 error = "Execution interrupted by user"
         except Exception as e:
@@ -203,6 +365,25 @@ class SandboxExecutor:
         elapsed_ms = (datetime.now(timezone.utc) - start).total_seconds() * 1000
         variables_after = set(self._namespace.keys())
         new_vars = list(variables_after - variables_before)
+
+        # Provenance: attribute created/modified/deleted vars to this cell.
+        # created = new keys; deleted = removed keys; modified = surviving vars whose
+        # fingerprint changed (reassignment or shape-changing in-place op) UNION the
+        # AST-assigned targets that still exist (catches in-place subscript/attr writes
+        # like df['c'] = ... that don't change shape). Only track on success.
+        if success:
+            deleted_vars = variables_before - variables_after
+            modified_vars = set()
+            common = variables_before & variables_after
+            for name in common:
+                if before_fps.get(name) != self._var_fingerprint(self._namespace.get(name)):
+                    modified_vars.add(name)
+            for name in self._assigned_targets(code):
+                if name in variables_after and name not in variables_before:
+                    continue  # already counted as created
+                if name in variables_after:
+                    modified_vars.add(name)
+            self._update_provenance(cell_id, created=new_vars, modified=modified_vars, deleted=deleted_vars)
 
         output = stdout_capture.getvalue()
         if stderr_capture.getvalue():
@@ -280,7 +461,7 @@ class SandboxExecutor:
 
             # Check for pandas DataFrame or Series
             if 'pandas' in module and type_name in ('DataFrame', 'Series'):
-                MAX_DISPLAY_ROWS = 50
+                MAX_DISPLAY_ROWS = max_display_rows()
                 total_rows = len(val)
 
                 if type_name == 'DataFrame' and hasattr(val, 'columns'):
@@ -300,7 +481,7 @@ class SandboxExecutor:
 
             # Check for polars DataFrame
             if 'polars' in module and type_name in ('DataFrame', 'LazyFrame'):
-                MAX_DISPLAY_ROWS = 50
+                MAX_DISPLAY_ROWS = max_display_rows()
                 total_rows = len(val) if hasattr(val, '__len__') else 0
                 if hasattr(val, 'head') and total_rows > MAX_DISPLAY_ROWS:
                     display_val = val.head(MAX_DISPLAY_ROWS)
@@ -412,7 +593,7 @@ class SandboxExecutor:
 
                 # Pandas DataFrame/Series
                 if 'pandas' in module and type_name in ('DataFrame', 'Series'):
-                    MAX_DISPLAY_ROWS = 50
+                    MAX_DISPLAY_ROWS = max_display_rows()
                     total_rows = len(obj)
                     if type_name == 'DataFrame' and hasattr(obj, 'columns'):
                         if hasattr(obj.columns, 'nlevels') and obj.columns.nlevels > 1:
@@ -570,9 +751,21 @@ class SandboxExecutor:
                 timeout=120,
             )
             if result.returncode == 0:
+                # Resolve the actual installed version so we can persist a pinned
+                # spec (name==x.y.z) — this makes checkpoint/restore reproducible
+                # instead of re-resolving loosely from PyPI on every restore.
+                base = re.split(r'[<>=!~\[]', package, maxsplit=1)[0].strip()
+                spec = package
+                try:
+                    import importlib.metadata as _md
+                    version = _md.version(base)
+                    spec = f"{base}=={version}"
+                except Exception:
+                    spec = package  # fall back to whatever the user typed
                 return ExecutionResult(
                     success=True,
-                    output=f"Successfully installed {package}",
+                    output=f"Successfully installed {spec}",
+                    installed_spec=spec,
                 )
             else:
                 return ExecutionResult(
@@ -677,6 +870,7 @@ class SandboxExecutor:
                 elif isinstance(value, str) and len(value) > 50:
                     shape = f"{len(value)} chars"
 
+                prov = self._var_provenance.get(name)
                 variables[name] = {
                     "type": type_name,
                     "value": val_repr,
@@ -684,6 +878,11 @@ class SandboxExecutor:
                     "shape": shape,
                     "preview": preview,
                     "preview_type": preview_type,
+                    "defined_by": prov.get("defined_by") if prov else None,
+                    "defined_at": prov.get("defined_at") if prov else None,
+                    "modified_by": prov.get("modified_by", []) if prov else [],
+                    "last_cell": prov.get("last_cell") if prov else None,
+                    "last_exec": prov.get("last_exec") if prov else None,
                 }
             except Exception:
                 variables[name] = {
@@ -700,6 +899,8 @@ class SandboxExecutor:
         self._namespace.clear()
         self._execution_count = 0
         self._history.clear()
+        self._var_provenance.clear()
+        self._prov_clock = 0
 
     def get_stats(self) -> dict:
         """Return executor statistics."""

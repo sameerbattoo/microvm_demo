@@ -240,7 +240,7 @@ export default function AiChatPanel({ activeTab, uploadedFiles = [], onClose, on
     const nbName = activeTab?.name || 'Notebook'
     let html = `<html><head><meta charset="UTF-8"><title>${nbName} — AI Chat</title><style>body{font-family:system-ui;padding:20px;max-width:900px;margin:0 auto;background:#1a1a2e;color:#e0e0e0}.msg{margin:12px 0;padding:12px;border-radius:8px}.user{background:#2d3a5c;text-align:right}.assistant{background:#1e2a3a}table{border-collapse:collapse;width:100%;margin:8px 0}th,td{border:1px solid #444;padding:6px 10px;text-align:left}th{background:#2a2a4a}pre{background:#0d1117;padding:10px;border-radius:4px;overflow-x:auto}code{font-size:13px}img{max-width:100%}h1,h2,h3{color:#89b4fa}strong{color:#cdd6f4}</style></head><body>`
     html += `<h2>${nbName} — AI Chat History</h2>`
-    html += `<p style="color:#888">Exported: ${new Date().toLocaleString()}</p>`
+    html += `<p style="color:#888">Generated: ${new Date().toLocaleString()}</p>`
     messages.forEach(msg => {
       const cls = msg.role === 'user' ? 'user' : 'assistant'
       const time = msg.timestamp ? new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''
@@ -260,7 +260,7 @@ export default function AiChatPanel({ activeTab, uploadedFiles = [], onClose, on
   const handleExportMD = () => {
     const nbName = activeTab?.name || 'Notebook'
     let md = `# ${nbName} — AI Chat History\n\n`
-    md += `*Exported: ${new Date().toLocaleString()}*\n\n---\n\n`
+    md += `*Generated: ${new Date().toLocaleString()}*\n\n---\n\n`
     messages.forEach(msg => {
       const time = msg.timestamp ? new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''
       if (msg.role === 'user') {

@@ -37,6 +37,20 @@ export ARTIFACT_KEY="images/${IMAGE_NAME}.zip"
 # Polling interval for MicroVM state refresh (milliseconds)
 export POLL_INTERVAL_MS="10000"
 
+# ------------------------------------------------------------
+# MicroVM runtime knobs — injected into EVERY VM's os.environ at launch
+# (proxy reads these → runHookPayload.env_vars → /run hook → os.environ).
+# Single source of truth: vm_manager.launch_env_vars(). The in-VM code reads
+# each at CALL time (not import), so changing a value here takes effect on the
+# next VM launch — no image rebuild needed (rebuild only needed the first time
+# the in-VM read site is added).
+# ------------------------------------------------------------
+# Max DataFrame/SQL result rows the VM renders for the UI (shown in a bounded,
+# scrollable table — see .df-table-scroll).
+export NOTEBOOK_MAX_DISPLAY_ROWS="100"
+# Max seconds a single cell may run before it's forcefully interrupted.
+export EXECUTION_TIMEOUT_SECONDS="60"
+
 # Storage backend configuration
 # Supported: "sqlite", "mysql", "postgres" (only sqlite implemented currently)
 export STORAGE_BACKEND="sqlite"

@@ -10,7 +10,7 @@ import { useState, useEffect, useMemo, useRef } from 'react'
  * Returns search state + setters, next/prev navigation, and the two derived
  * lookups the cell list consumes (searchMatchCellIds, searchActiveOccurrenceMap).
  */
-export function useNotebookSearch(cells, setActiveCellId) {
+export function useNotebookSearch(cells, setActiveCellId, enabled = true) {
   const [showSearch, setShowSearch] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
   const [searchMatches, setSearchMatches] = useState([]) // [{cellId, pos}]
@@ -24,9 +24,21 @@ export function useNotebookSearch(cells, setActiveCellId) {
     }, 50)
   }
 
-  // Cmd+F to open search
+  // When notebook find is disabled (e.g. App view), make sure any open search
+  // bar is closed — the browser's native Cmd+F then searches the rendered app.
+  useEffect(() => {
+    if (!enabled && showSearch) {
+      setShowSearch(false)
+      setSearchQuery('')
+      setSearchMatches([])
+    }
+  }, [enabled])  // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Cmd+F to open search — only when enabled (notebook view). In App view we let
+  // the browser's native find run over the rendered content instead.
   useEffect(() => {
     const handleKeyDown = (e) => {
+      if (!enabled) return
       if ((e.metaKey || e.ctrlKey) && e.key === 'f') {
         e.preventDefault()
         setShowSearch(true)
@@ -40,7 +52,7 @@ export function useNotebookSearch(cells, setActiveCellId) {
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [showSearch])
+  }, [showSearch, enabled])
 
   // Update matches when query changes
   useEffect(() => {

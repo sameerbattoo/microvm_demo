@@ -1,19 +1,36 @@
-import { useState, useCallback, useRef, useEffect, useMemo } from 'react'
+import { useState, useCallback, useEffect } from 'react'
 import { createPortal } from 'react-dom'
 import Cell from './Cell'
 import ConnectionPanel from './ConnectionPanel'
-import { IconPlus, IconPlayAll, IconPlay, IconTrash, IconSave, IconFolderOpen, IconStop, IconFile, IconSearch, IconChevronUp, IconChevronDown, IconX, IconZap, IconSun, IconMoon, IconFlame, IconCode, IconNotebook, IconEraser, IconDatabase } from './Icons'
+import { IconSearch, IconChevronUp, IconChevronDown, IconX } from './Icons'
 import { PROXY_URL } from '../config'
-import { buildNativeNotebook, buildNotebookHTML, buildNotebookMarkdown, buildIPYNB, downloadTextFile } from '../services/notebookExport'
+import { buildNativeNotebook, buildNotebookHTML, buildNotebookMarkdown, buildIPYNB, buildAppHTML, buildAppMarkdown, downloadTextFile } from '../services/notebookExport'
 import NotebookToolbar from './NotebookToolbar'
+import AppView from './AppView'
 import { useNotebookSearch } from '../hooks/useNotebookSearch'
 import { useNotebookCells } from '../hooks/useNotebookCells'
 import './Notebook.css'
 
+// A markdown cell produced by Auto-document. Tagged generated:'annotate' so re-run
+// refreshes them (and "Clear annotations" can remove them) without touching authored cells.
+function makeGeneratedMarkdown(code) {
+  return {
+    id: Date.now() + Math.random(),
+    type: 'markdown',
+    code,
+    output: null, error: null, html: null, image: null,
+    status: 'idle', executionNumber: null, executionTime: null, lastExecutedCode: null,
+    aiExplanation: null,
+    generated: 'annotate',
+  }
+}
+
 export default function Notebook({ tab, instances = {}, onUpdateTab, onMarkVmRunning, onNewNotebook, onCloseTab, onRefreshMetrics, attachedIds = [], theme, onToggleTheme, aiAvailable = false }) {
   const [showConnection, setShowConnection] = useState(tab.status !== 'connected' && !tab.microvmId)
   const [isAnnotating, setIsAnnotating] = useState(false)
-  const [showExportMenu, setShowExportMenu] = useState(false)
+  // Per-workbook view: 'notebook' (editor) or 'app' (consumer preview). Local state
+  // is per-tab because Notebook is keyed by tab.id in App.jsx (remounts per tab).
+  const [viewMode, setViewMode] = useState('notebook')
   const [saveMenuPos, setSaveMenuPos] = useState(null)
   const [exportMenuPos, setExportMenuPos] = useState(null)
 
@@ -21,8 +38,8 @@ export default function Notebook({ tab, instances = {}, onUpdateTab, onMarkVmRun
   const {
     cells, setCells, activeCellId, setActiveCellId, dragOverId,
     variables, isExecuting, runProgress,
-    executeCell, executeAllCells, runActiveCell, interruptExecution,
-    clearAllOutputs, deleteActiveCell,
+    executeCell, executeAllCells, interruptExecution,
+    clearAllOutputs,
     updateCellCode, updateCellOutputVar, addCellBelow, addCellAtEnd, changeCellType,
     handleDragStart, handleDragOver, handleDrop, handleDragEnd, deleteCell,
   } = useNotebookCells({ tab, onUpdateTab, onMarkVmRunning, onRefreshMetrics })
@@ -64,7 +81,7 @@ export default function Notebook({ tab, instances = {}, onUpdateTab, onMarkVmRun
     searchInputRef,
     searchNext, searchPrev,
     searchMatchCellIds, searchActiveOccurrenceMap,
-  } = useNotebookSearch(cells, setActiveCellId)
+  } = useNotebookSearch(cells, setActiveCellId, viewMode !== 'app')
 
   const handleConnect = useCallback((endpoint) => {
     onUpdateTab({
@@ -74,54 +91,78 @@ export default function Notebook({ tab, instances = {}, onUpdateTab, onMarkVmRun
     setShowConnection(false)
   }, [onUpdateTab])
 
-  // Auto-document: explain all code cells that don't have an AI explanation yet
+  // Auto-document: ONE notebook-aware pass that (re)generates a root title + intro,
+  // "## section" markdown cells between logical clusters, and a per-cell ✨ comment.
+  // Idempotent: previously auto-generated markdown is dropped and prior AI comments
+  // cleared before regenerating (generated cells are tagged generated:'annotate').
   const autoDocumentNotebook = useCallback(async () => {
-    // Only annotate cells that don't already have an AI explanation AND don't have a markdown summary above
-    const codeCells = cells.filter((c, idx) => {
-      if (c.type === 'markdown' || !c.code?.trim()) return false
-      if (c.aiExplanation) return false
-      // Check if the cell above is already a markdown annotation
-      if (idx > 0 && cells[idx - 1].type === 'markdown') return false
-      return true
-    })
-    if (codeCells.length === 0) return
-
+    if (!aiAvailable) return
     setIsAnnotating(true)
-    // Process cells sequentially to avoid rate limiting
-    for (const cell of codeCells) {
-      try {
-        const resp = await fetch(`${PROXY_URL}/ai/explain`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            code: cell.code || '',
-            output: (cell.output || '') + (cell.html ? ' [table output]' : ''),
-            microvm_id: tab.microvmId || '',
-            session_id: tab.sessionId || '',
-          }),
-        })
-        if (resp.ok) {
-          const data = await resp.json()
-          if (data.explanation) {
-            setCells(prev => prev.map(c => c.id === cell.id ? { ...c, aiExplanation: data.explanation } : c))
-          }
-          // Insert markdown summary above
-          if (data.summary) {
-            setCells(prev => {
-              const idx = prev.findIndex(c => c.id === cell.id)
-              if (idx < 0) return prev
-              const mdText = data.summary.startsWith('#') || data.summary.startsWith('**') ? data.summary : `**${data.summary}**`
-              const descLine = data.description ? `\n\n${data.description}` : ''
-              const newCells = [...prev]
-              newCells.splice(idx, 0, { id: Date.now() + Math.random(), type: 'markdown', code: mdText + descLine, output: null, error: null, html: null, image: null })
-              return newCells
-            })
-          }
+    try {
+      // Base = current notebook minus prior auto-generated markdown, comments cleared.
+      const base = cells
+        .filter(c => c.generated !== 'annotate')
+        .map(c => (c.aiExplanation ? { ...c, aiExplanation: null, aiExplanationEdited: false } : c))
+
+      const payloadCells = base.map((c, i) => ({
+        index: i,
+        type: c.type || 'code',
+        code: (c.code || '').slice(0, 2000),
+        output: ((c.output || '') + (c.html ? ' [table]' : '')).slice(0, 300),
+      }))
+
+      const resp = await fetch(`${PROXY_URL}/ai/annotate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ cells: payloadCells }),
+      })
+      if (!resp.ok) {
+        console.warn('[annotate] request failed:', resp.status)
+        return
+      }
+      const data = await resp.json()
+
+      // Attach per-cell comments (keyed by base index).
+      const commentByIdx = new Map((data.comments || []).map(c => [c.index, c.comment]))
+      const withComments = base.map((c, i) => (commentByIdx.has(i) ? { ...c, aiExplanation: commentByIdx.get(i) } : c))
+
+      // Group section markdown by the base index it should precede.
+      const sectionsByBefore = new Map()
+      for (const s of (data.sections || [])) {
+        if (!sectionsByBefore.has(s.before_index)) sectionsByBefore.set(s.before_index, [])
+        sectionsByBefore.get(s.before_index).push(s.markdown)
+      }
+
+      const authoredH1 = withComments[0]?.type === 'markdown' && /^\s*#\s+/.test(withComments[0].code || '')
+      const out = []
+      if (data.root && !authoredH1) out.push(makeGeneratedMarkdown(data.root))
+      withComments.forEach((c, i) => {
+        const prevIsMarkdown = i > 0 && withComments[i - 1].type === 'markdown'
+        if (sectionsByBefore.has(i) && !prevIsMarkdown) {
+          for (const md of sectionsByBefore.get(i)) out.push(makeGeneratedMarkdown(md))
         }
-      } catch {}
+        out.push(c)
+      })
+      if (sectionsByBefore.has(withComments.length)) {
+        for (const md of sectionsByBefore.get(withComments.length)) out.push(makeGeneratedMarkdown(md))
+      }
+
+      setCells(out)
+    } catch (err) {
+      console.warn('[annotate] failed:', err?.message)
+    } finally {
+      setIsAnnotating(false)
     }
-    setIsAnnotating(false)
-  }, [cells, tab.microvmId, tab.sessionId])
+  }, [cells, aiAvailable])
+
+  // Remove all AI documentation: generated markdown cells + per-cell comments.
+  const clearAnnotations = useCallback(() => {
+    setCells(prev => prev
+      .filter(c => c.generated !== 'annotate')
+      .map(c => (c.aiExplanation ? { ...c, aiExplanation: null, aiExplanationEdited: false } : c)))
+  }, [])
+
+  const hasAnnotations = cells.some(c => c.generated === 'annotate' || c.aiExplanation)
 
   const saveNotebook = useCallback(() => {
     downloadTextFile(buildNativeNotebook(tab, cells))
@@ -134,13 +175,15 @@ export default function Notebook({ tab, instances = {}, onUpdateTab, onMarkVmRun
     return () => window.removeEventListener('notebook-save', handler)
   }, [saveNotebook])
 
+  // In App view, export the consumer app (inputs + rendered content, no code);
+  // in Notebook view, export the full workbook.
   const exportNotebookHTML = useCallback(() => {
-    downloadTextFile(buildNotebookHTML(tab, cells))
-  }, [tab.name, tab.description, cells])
+    downloadTextFile(viewMode === 'app' ? buildAppHTML(tab, cells) : buildNotebookHTML(tab, cells))
+  }, [tab.name, tab.description, cells, viewMode])
 
   const exportNotebookMD = useCallback(() => {
-    downloadTextFile(buildNotebookMarkdown(tab, cells))
-  }, [tab.name, tab.description, cells])
+    downloadTextFile(viewMode === 'app' ? buildAppMarkdown(tab, cells) : buildNotebookMarkdown(tab, cells))
+  }, [tab.name, tab.description, cells, viewMode])
 
   const saveAsIPYNB = useCallback(() => {
     downloadTextFile(buildIPYNB(tab, cells))
@@ -242,14 +285,12 @@ export default function Notebook({ tab, instances = {}, onUpdateTab, onMarkVmRun
           instances={instances}
           cells={cells}
           vmAlive={vmAlive}
-          activeCellId={activeCellId}
+          viewMode={viewMode}
+          setViewMode={setViewMode}
           isExecuting={isExecuting}
           runProgress={runProgress}
-          runActiveCell={runActiveCell}
           interruptExecution={interruptExecution}
           executeAllCells={executeAllCells}
-          addCellAtEnd={addCellAtEnd}
-          deleteActiveCell={deleteActiveCell}
           onNewNotebook={onNewNotebook}
           loadNotebook={loadNotebook}
           saveMenuPos={saveMenuPos}
@@ -261,6 +302,8 @@ export default function Notebook({ tab, instances = {}, onUpdateTab, onMarkVmRun
           aiAvailable={aiAvailable}
           autoDocumentNotebook={autoDocumentNotebook}
           isAnnotating={isAnnotating}
+          clearAnnotations={clearAnnotations}
+          hasAnnotations={hasAnnotations}
           clearAllOutputs={clearAllOutputs}
           onCloseTab={onCloseTab}
           setShowConnection={setShowConnection}
@@ -275,7 +318,7 @@ export default function Notebook({ tab, instances = {}, onUpdateTab, onMarkVmRun
         </>
       )}
 
-      {showSearch && (
+      {showSearch && viewMode !== 'app' && (
         <div className="notebook-search-bar">
           <div className="notebook-search-field">
             <IconSearch width={13} height={13} className="notebook-search-icon" />
@@ -314,6 +357,16 @@ export default function Notebook({ tab, instances = {}, onUpdateTab, onMarkVmRun
         </div>
       )}
 
+      {viewMode === 'app' ? (
+        <AppView
+          tab={tab}
+          cells={cells}
+          isConnected={vmAlive}
+          isExecuting={isExecuting}
+          onRunAll={executeAllCells}
+          updateCellCode={updateCellCode}
+        />
+      ) : (
       <div className="notebook-body">
       <div className="cells-container">
         {cells.map((cell, index) => (
@@ -343,8 +396,10 @@ export default function Notebook({ tab, instances = {}, onUpdateTab, onMarkVmRun
                 })
               }
             }}
-            onSetAiExplanation={(explanation) => {
-              setCells(prev => prev.map(c => c.id === cell.id ? { ...c, aiExplanation: explanation } : c))
+            onSetAiExplanation={(explanation, edited = false) => {
+              setCells(prev => prev.map(c => c.id === cell.id
+                ? { ...c, aiExplanation: explanation, aiExplanationEdited: explanation ? edited : false }
+                : c))
             }}
             onTypeChange={(newType) => changeCellType(cell.id, newType)}
             onDelete={() => deleteCell(cell.id)}
@@ -358,6 +413,7 @@ export default function Notebook({ tab, instances = {}, onUpdateTab, onMarkVmRun
             notebookContext={cells}
             notebookName={tab.name}
             microvmId={tab.microvmId}
+            microvmEndpoint={tab.microvmEndpoint}
             sessionId={tab.sessionId}
             aiAvailable={aiAvailable}
             variables={variables}
@@ -378,6 +434,7 @@ export default function Notebook({ tab, instances = {}, onUpdateTab, onMarkVmRun
       </div>
 
       </div>
+      )}
     </div>
     {saveMenuPos && createPortal(
       <div className="toolbar-portal-menu" style={{ position: 'fixed', top: saveMenuPos.top, left: saveMenuPos.left, zIndex: 9999 }}>
@@ -393,8 +450,8 @@ export default function Notebook({ tab, instances = {}, onUpdateTab, onMarkVmRun
       <div className="toolbar-portal-menu" style={{ position: 'fixed', top: exportMenuPos.top, left: exportMenuPos.left, zIndex: 9999 }}>
         <div className="toolbar-portal-backdrop" onClick={() => setExportMenuPos(null)} />
         <div className="toolbar-portal-options">
-          <button onClick={() => { exportNotebookHTML(); setExportMenuPos(null) }}>HTML</button>
-          <button onClick={() => { exportNotebookMD(); setExportMenuPos(null) }}>Markdown</button>
+          <button onClick={() => { exportNotebookHTML(); setExportMenuPos(null) }}>{viewMode === 'app' ? 'App view — HTML' : 'Notebook — HTML'}</button>
+          <button onClick={() => { exportNotebookMD(); setExportMenuPos(null) }}>{viewMode === 'app' ? 'App view — Markdown' : 'Notebook — Markdown'}</button>
         </div>
       </div>,
       document.body

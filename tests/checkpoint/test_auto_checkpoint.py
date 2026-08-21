@@ -35,6 +35,9 @@ import hashlib
 # --- Configuration ---
 PROXY_URL = "http://localhost:8081"
 MEMORY_MIB = 2048
+# Short per-launch VM lifetime (seconds) requested via /launch maxDurationSeconds,
+# so the VM auto-terminates quickly for this test regardless of the proxy default.
+TEST_LIFETIME_SECONDS = 180
 
 
 def log(msg):
@@ -55,22 +58,37 @@ def timed(label):
     return Timer()
 
 
-def execute_code(session_id, code, timeout=120):
-    """Execute code on the MicroVM via the proxy using session_id only."""
+def execute_code(session_id, code, timeout=120, cell_id=None):
+    """Execute code on the MicroVM via the proxy using session_id only.
+    Pass cell_id to record variable provenance (which cell created/modified vars)."""
+    body = {"code": code}
+    if cell_id is not None:
+        body["cell_id"] = cell_id
     resp = requests.post(
         f"{PROXY_URL}/proxy/execute",
         headers={
             "Content-Type": "application/json",
             "X-Session-Id": session_id,
         },
-        json={"code": code},
+        json=body,
         timeout=timeout,
     )
     return resp.json()
 
 
+def get_variables(session_id, timeout=30):
+    """Fetch the namespace variables (incl. provenance) via the proxy."""
+    resp = requests.get(
+        f"{PROXY_URL}/proxy/variables",
+        headers={"X-Session-Id": session_id},
+        timeout=timeout,
+    )
+    return resp.json().get("variables", {})
+
+
 def install_package(session_id, package, timeout=120):
-    """Install a package via the /install endpoint (tracked for checkpoint)."""
+    """Install a package via the /install endpoint (tracked for checkpoint).
+    Returns the JSON, which includes `installed_spec` (the resolved name==version)."""
     resp = requests.post(
         f"{PROXY_URL}/proxy/install",
         headers={
@@ -83,12 +101,17 @@ def install_package(session_id, package, timeout=120):
     return resp.json()
 
 
-def get_variables(session_id):
-    """Get variables from the MicroVM."""
-    resp = requests.get(
-        f"{PROXY_URL}/proxy/variables",
-        headers={"X-Session-Id": session_id},
-        timeout=15,
+def uninstall_package(session_id, package, timeout=60):
+    """Uninstall a package via the /install endpoint (recorded so it is NOT
+    reinstalled on restore)."""
+    resp = requests.post(
+        f"{PROXY_URL}/proxy/install",
+        headers={
+            "Content-Type": "application/json",
+            "X-Session-Id": session_id,
+        },
+        json={"package": package, "uninstall": True},
+        timeout=timeout,
     )
     return resp.json()
 
@@ -149,20 +172,23 @@ def main():
         return
 
     persistence_mode = health.get("persistence_mode", "unknown")
-    max_lifetime = health.get("max_lifetime_seconds", 0)
+    proxy_max_lifetime = health.get("max_lifetime_seconds", 0)
 
     if persistence_mode != "checkpoint":
         log(f"  ❌ ERROR: This test requires persistence_mode='checkpoint', got '{persistence_mode}'")
         log(f"  Start the proxy with SESSION_PERSISTENCE_MODE=checkpoint")
         return
 
-    if max_lifetime <= 0 or max_lifetime > 300:
-        log(f"  ❌ ERROR: max_lifetime_seconds={max_lifetime} — expected 120-180 for testing")
-        log(f"  Set MAX_LIFETIME_SECONDS=180 for this test")
-        return
+    # Request a SHORT per-launch lifetime via maxDurationSeconds (the /launch endpoint
+    # honors it, capped at 8h) so this test runs against ANY proxy without restarting
+    # it with a small MAX_LIFETIME_SECONDS. If the proxy default is already shorter,
+    # use that instead.
+    max_lifetime = TEST_LIFETIME_SECONDS
+    if proxy_max_lifetime and proxy_max_lifetime < max_lifetime:
+        max_lifetime = proxy_max_lifetime
 
     log(f"  ✓ Persistence mode: {persistence_mode}")
-    log(f"  ✓ Max lifetime: {max_lifetime}s")
+    log(f"  ✓ Test VM lifetime: {max_lifetime}s (per-launch maxDurationSeconds; proxy default {proxy_max_lifetime}s)")
     log(f"  ✓ Checkpoint fires at: /terminate hook (when VM reaches max_lifetime)")
     log("")
 
@@ -181,6 +207,7 @@ def main():
             "idleTimeoutSeconds": 600,
             "checkpointEnabled": True,
             "sessionId": session_id,
+            "maxDurationSeconds": max_lifetime,
         }, timeout=120)
         assert resp.status_code == 200, f"Launch failed: {resp.status_code} {resp.text}"
         data = resp.json()
@@ -227,7 +254,8 @@ def main():
             "df_checksum = hashlib.md5(df.to_csv().encode()).hexdigest()\n"
             "\n"
             "print(f'State: marker={checkpoint_marker}, counter={counter}, secret={secret}')\n"
-            "print(f'DataFrame: {df.shape}, checksum={df_checksum}')"
+            "print(f'DataFrame: {df.shape}, checksum={df_checksum}')",
+            cell_id="cell-state",
         )
     timings["create_vars"] = t.elapsed
     assert result.get("success"), f"Create vars failed: {result.get('error')}"
@@ -251,10 +279,31 @@ def main():
         result = install_package(session_id, "tabulate")
     timings["install_pkg"] = t.elapsed
     assert result.get("success"), f"Install failed: {result.get('error')}"
-    # Verify importable
+    # Version pinning: /install resolves + returns a pinned spec (name==version).
+    installed_spec = result.get("installed_spec", "")
+    log(f"  Install spec: {installed_spec!r}")
+    assert installed_spec.startswith("tabulate=="), \
+        f"Expected a pinned spec like 'tabulate==x.y.z', got {installed_spec!r}"
+    installed_pkg_version = installed_spec.split("==", 1)[1]
+    # Verify importable + capture the runtime version (must match the pinned spec).
     verify = execute_code(session_id, "import tabulate; print(f'tabulate installed: {tabulate.__version__}')")
     assert verify.get("success"), f"Import failed: {verify.get('error')}"
     log(f"  {verify['output'].strip()}")
+    assert installed_pkg_version in verify.get("output", ""), \
+        f"Pinned version {installed_pkg_version} does not match runtime: {verify.get('output', '').strip()}"
+
+    # Uninstall tracking: install a throwaway package then uninstall it. It must
+    # NOT reappear after restore (uninstall is now recorded in the checkpoint list).
+    with timed("Install + uninstall package (humanize)") as t:
+        ir = install_package(session_id, "humanize")
+        assert ir.get("success"), f"humanize install failed: {ir.get('error')}"
+        ur = uninstall_package(session_id, "humanize")
+        assert ur.get("success"), f"humanize uninstall failed: {ur.get('error')}"
+    timings["uninstall_pkg"] = t.elapsed
+    gone = execute_code(session_id,
+        "try:\n    import humanize\n    print('humanize_present=True')\n"
+        "except ImportError:\n    print('humanize_present=False')")
+    log(f"  humanize after uninstall (pre-checkpoint): {gone.get('output', '').strip()}")
 
     with timed("Generate matplotlib chart") as t:
         result = execute_code(session_id,
@@ -367,8 +416,22 @@ def main():
     log("━" * 70)
 
     with timed("Check sessions endpoint") as t:
-        resp = requests.get(f"{PROXY_URL}/sessions", timeout=15)
-        sessions = resp.json().get("sessions", [])
+        # The proxy may be busy writing the S3 checkpoint (pickle + tarball uploads)
+        # right after termination, so /sessions can be slow. Retry with a generous
+        # timeout instead of failing on a single 15s read timeout.
+        sessions = []
+        last_err = None
+        for attempt in range(6):
+            try:
+                resp = requests.get(f"{PROXY_URL}/sessions", timeout=30)
+                sessions = resp.json().get("sessions", [])
+                break
+            except requests.exceptions.RequestException as e:
+                last_err = e
+                log(f"  ⏳ /sessions not ready (attempt {attempt + 1}/6): {type(e).__name__}; retrying...")
+                time.sleep(5)
+        else:
+            log(f"  ❌ /sessions endpoint never responded: {last_err}")
     timings["check_sessions"] = t.elapsed
 
     our_session = None
@@ -497,6 +560,16 @@ def main():
         checks.append(("DataFrame", False))
         log(f"  ❌ DataFrame check failed: {result.get('error')}")
 
+    # Check variable provenance (defined_by) survived the checkpoint/restore
+    with timed("Verify provenance") as t:
+        vars_meta = get_variables(new_session_id)
+    timings["verify_provenance"] = t.elapsed
+    counter_defined_by = (vars_meta.get("counter") or {}).get("defined_by")
+    df_defined_by = (vars_meta.get("df") or {}).get("defined_by")
+    prov_ok = counter_defined_by == "cell-state" and df_defined_by == "cell-state"
+    checks.append(("variable provenance (defined_by)", prov_ok))
+    log(f"  {'✓' if prov_ok else '❌'} Provenance: counter.defined_by={counter_defined_by!r}, df.defined_by={df_defined_by!r}")
+
     # Check local file
     with timed("Verify local file") as t:
         result = execute_code(new_session_id,
@@ -551,11 +624,36 @@ def main():
         output = result["output"].strip()
         pkg_ok = "tabulate_ok=True" in output
         checks.append(("installed package (tabulate)", pkg_ok))
-        status = "✓" if pkg_ok else "❌"
-        log(f"  {status} Package tabulate: {output}")
+        log(f"  {'✓' if pkg_ok else '❌'} Package tabulate: {output}")
+        # Version pinning: the restored version must EXACTLY match the version
+        # installed pre-checkpoint (pinned name==version persisted, not loosely
+        # re-resolved from PyPI on restore).
+        version_ok = f"version={installed_pkg_version}" in output
+        checks.append(("package version pinned on restore", version_ok))
+        log(f"  {'✓' if version_ok else '❌'} Version pinned: expected {installed_pkg_version}, got {output}")
     else:
         checks.append(("package tabulate", False))
+        checks.append(("package version pinned on restore", False))
         log(f"  ❌ Package check failed: {result.get('error')}")
+
+    # Uninstall tracking: the uninstalled package must NOT be reinstalled on restore.
+    with timed("Verify uninstalled package absent") as t:
+        result = execute_code(new_session_id,
+            "try:\n"
+            "    import humanize\n"
+            "    print('humanize_present=True')\n"
+            "except ImportError:\n"
+            "    print('humanize_present=False')"
+        )
+    timings["verify_uninstall"] = t.elapsed
+    if result.get("success"):
+        output = result["output"].strip()
+        uninstall_ok = "humanize_present=False" in output
+        checks.append(("uninstalled package not restored", uninstall_ok))
+        log(f"  {'✓' if uninstall_ok else '❌'} Uninstall tracked: {output}")
+    else:
+        checks.append(("uninstalled package not restored", False))
+        log(f"  ❌ Uninstall check failed: {result.get('error')}")
 
     # ================================================================
     # STEP 8: Verify matplotlib vars are NOT restored (expected)

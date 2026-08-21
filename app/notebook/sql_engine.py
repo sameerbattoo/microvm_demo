@@ -33,6 +33,8 @@ from dataclasses import dataclass
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
+from .executor import max_display_rows
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["sql-engine"])
@@ -263,6 +265,7 @@ async def execute_sql(request: Request):
     body = await request.json()
     sql = body.get("sql", "").strip()
     output_var = body.get("output_variable", "result")
+    cell_id = body.get("cell_id")  # frontend cell id, recorded as variable provenance
 
     if not sql:
         return JSONResponse(status_code=400, content={"error": "No SQL provided"})
@@ -364,10 +367,11 @@ async def execute_sql(request: Request):
         # --- Step 4: Store result and format output ---
         if output_var and output_var.isidentifier():
             executor._namespace[output_var] = result_df
+            executor.record_var_write(output_var, cell_id)
 
         row_count = len(result_df)
         col_count = len(result_df.columns)
-        max_rows = 50
+        max_rows = max_display_rows()
         if row_count > max_rows:
             html = result_df.head(max_rows).to_html(index=True, classes='dataframe', border=0)
             output = f"{row_count} rows × {col_count} columns (showing first {max_rows})"

@@ -36,13 +36,14 @@ async def execute_code(request: Request):
 
     body = await request.json()
     code = body.get("code", "")
+    cell_id = body.get("cell_id")  # frontend cell id, recorded as variable provenance
     if not code.strip():
         return JSONResponse(status_code=400, content={"error": "No code provided. Send {\"code\": \"...\"}"})
 
     logger.info(f"▶ Executing code (len={len(code)})")
     lock = _get_execute_lock(request)
     async with lock:
-        result = await asyncio.to_thread(executor.execute, code)
+        result = await asyncio.to_thread(executor.execute, code, cell_id)
 
     # Log outcome with context for CloudWatch observability
     # Find the first meaningful line (skip @param annotations and blank lines)

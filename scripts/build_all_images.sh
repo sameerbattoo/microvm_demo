@@ -177,16 +177,37 @@ if [ ${#NEEDS_WAIT[@]} -gt 0 ]; then
     echo "   $(date +%H:%M:%S)${status_line}"
   done
 
-  # Final check
+  # Final check — re-verify each tier reached CREATED. A single get-microvm-image
+  # right after creation can transiently return NOT_FOUND or fail (eventual
+  # consistency / API blip), so retry a few times before declaring failure. Also
+  # recover from a genuine CREATE_FAILED discovered here rather than aborting.
   for MEM in "${NEEDS_WAIT[@]}"; do
     TIER_NAME="${IMAGE_NAME}-${MEM}"
     TIER_ARN="arn:aws:lambda:${AWS_REGION}:${ACCOUNT_ID}:microvm-image:${TIER_NAME}"
-    STATE=$(aws_mvm get-microvm-image --image-identifier "$TIER_ARN" \
-      --query 'state' --output text 2>/dev/null || echo "NOT_FOUND")
+    STATE=""
+    verify_attempt=0
+    while [ $verify_attempt -lt 6 ]; do
+      STATE=$(aws_mvm get-microvm-image --image-identifier "$TIER_ARN" \
+        --query 'state' --output text 2>/dev/null || echo "QUERY_ERROR")
+      if [ "$STATE" = "CREATED" ]; then
+        break
+      fi
+      if [ "$STATE" = "CREATE_FAILED" ]; then
+        echo "   🔄 ${TIER_NAME} CREATE_FAILED at final check — rebuilding..."
+        delete_and_wait "$TIER_ARN"
+        create_image "$TIER_NAME" "$MEM" 2>/dev/null || true
+        STATE=$(wait_for_image "$TIER_ARN")
+        [ "$STATE" = "CREATED" ] && break
+      fi
+      verify_attempt=$((verify_attempt + 1))
+      echo "   ⏳ ${TIER_NAME} final-check state=${STATE} (attempt ${verify_attempt}/6) — retrying in 5s..."
+      sleep 5
+    done
     if [ "$STATE" != "CREATED" ]; then
-      echo "   ❌ ${TIER_NAME} not ready (state: $STATE)"
+      echo "   ❌ ${TIER_NAME} not ready after retries (state: $STATE)"
       exit 1
     fi
+    echo "   ✓ ${TIER_NAME} verified CREATED"
   done
 fi
 

@@ -63,18 +63,32 @@ def timed(label):
     return Timer()
 
 
-def execute_code(session_id, code, timeout=90):
-    """Execute code on the MicroVM via the proxy using session_id only."""
+def execute_code(session_id, code, timeout=90, cell_id=None):
+    """Execute code on the MicroVM via the proxy using session_id only.
+    Pass cell_id to record variable provenance (which cell created/modified vars)."""
+    body = {"code": code}
+    if cell_id is not None:
+        body["cell_id"] = cell_id
     resp = requests.post(
         f"{PROXY_URL}/proxy/execute",
         headers={
             "Content-Type": "application/json",
             "X-Session-Id": session_id,
         },
-        json={"code": code},
+        json=body,
         timeout=timeout,
     )
     return resp.json()
+
+
+def get_variables(session_id, timeout=30):
+    """Fetch the namespace variables (incl. provenance) via the proxy."""
+    resp = requests.get(
+        f"{PROXY_URL}/proxy/variables",
+        headers={"X-Session-Id": session_id},
+        timeout=timeout,
+    )
+    return resp.json().get("variables", {})
 
 
 def install_package(session_id, package, timeout=120):
@@ -91,15 +105,19 @@ def install_package(session_id, package, timeout=120):
     return resp.json()
 
 
-def execute_sql(session_id, sql, output_variable, timeout=30):
-    """Execute a SQL query on the MicroVM via the proxy using session_id only."""
+def execute_sql(session_id, sql, output_variable, timeout=30, cell_id=None):
+    """Execute a SQL query on the MicroVM via the proxy using session_id only.
+    Pass cell_id to record provenance for the result variable."""
+    body = {"sql": sql, "output_variable": output_variable}
+    if cell_id is not None:
+        body["cell_id"] = cell_id
     resp = requests.post(
         f"{PROXY_URL}/proxy/execute-sql",
         headers={
             "Content-Type": "application/json",
             "X-Session-Id": session_id,
         },
-        json={"sql": sql, "output_variable": output_variable},
+        json=body,
         timeout=timeout,
     )
     return resp.json()
@@ -253,7 +271,8 @@ def main():
             f"history = ['created_on_vm1']\n"
             f"config = {{'version': 1, 'mode': 'eternal', 'rotations': 0}}\n"
             "print(f'Variables: marker={marker}, counter={counter}, secret={secret}')\n"
-            "print(f'history={history}, config={config}')"
+            "print(f'history={history}, config={config}')",
+            cell_id="cell-r1-vars",
         )
     timings["r1_create_vars"] = t.elapsed
     output = check_result(result, "create variables")
@@ -270,7 +289,8 @@ def main():
             "    'score': np.random.uniform(0, 100, 500),\n"
             "})\n"
             "df_checksum = float(df['value'].sum() + df['score'].sum())\n"
-            "print(f'DataFrame: shape={df.shape}, checksum={df_checksum:.6f}')"
+            "print(f'DataFrame: shape={df.shape}, checksum={df_checksum:.6f}')",
+            cell_id="cell-r1-df",
         )
     timings["r1_create_df"] = t.elapsed
     output = check_result(result, "create DataFrame")
@@ -377,6 +397,15 @@ def main():
         log(f"  \u274c Data catalog check failed: {e}")
     log("")
 
+    # Verify variable provenance survived the rotation (defined_by preserved)
+    vars_meta = get_variables(session_id)
+    marker_defined = (vars_meta.get("marker") or {}).get("defined_by")
+    df_defined = (vars_meta.get("df") or {}).get("defined_by")
+    prov_ok = marker_defined == "cell-r1-vars" and df_defined == "cell-r1-df"
+    record_check("R1: Variable provenance survived rotation", prov_ok)
+    log(f"  {'✓' if prov_ok else '❌'} Provenance: marker.defined_by={marker_defined!r}, df.defined_by={df_defined!r}")
+    log("")
+
     # ================================================================
     # ROTATION 2 SETUP: Package install + SQL + mutations (VM2)
     # ================================================================
@@ -398,7 +427,8 @@ def main():
     with timed("SQL query") as t:
         sql_result = execute_sql(session_id,
             "SELECT category, COUNT(*) as cnt, AVG(score) as avg_score FROM df GROUP BY category ORDER BY cnt DESC",
-            "sql_result"
+            "sql_result",
+            cell_id="cell-r2-sql",
         )
     timings["r2_sql"] = t.elapsed
     if sql_result.get("success"):
@@ -414,7 +444,8 @@ def main():
             "history.append('mutated_on_vm2')\n"
             "vm2_data = 'exclusive_to_vm2_forward'\n"
             "print(f'Mutated: counter={counter}, config={config}')\n"
-            "print(f'history={history}')"
+            "print(f'history={history}')",
+            cell_id="cell-r2-mutate",
         )
     timings["r2_mutate"] = t.elapsed
     output = check_result(result, "mutate state")
@@ -531,6 +562,22 @@ def main():
                 parts = line.split(':')[1].split('/')
                 p, tot = int(parts[0]), int(parts[1])
                 record_check("R2: Package + SQL + mutations survived", p == tot)
+    log("")
+
+    # Verify provenance tracked the modification + SQL write across the rotation:
+    # counter was created in cell-r1-vars but last modified in cell-r2-mutate;
+    # sql_result was created by the SQL cell (cell-r2-sql).
+    vars_meta = get_variables(session_id)
+    counter_meta = vars_meta.get("counter") or {}
+    sql_meta = vars_meta.get("sql_result") or {}
+    prov_ok = (
+        counter_meta.get("defined_by") == "cell-r1-vars"
+        and counter_meta.get("last_cell") == "cell-r2-mutate"
+        and sql_meta.get("defined_by") == "cell-r2-sql"
+    )
+    record_check("R2: Provenance (created + modified + SQL) survived rotation", prov_ok)
+    log(f"  {'✓' if prov_ok else '❌'} Provenance: counter.defined_by={counter_meta.get('defined_by')!r}, "
+        f"counter.last_cell={counter_meta.get('last_cell')!r}, sql_result.defined_by={sql_meta.get('defined_by')!r}")
     log("")
 
     # ================================================================
