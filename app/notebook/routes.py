@@ -176,6 +176,16 @@ async def variable_detail(request: Request):
         module = getattr(type(obj), "__module__", "") or ""
         result = {"name": name, "type": type_name}
 
+        def _is_flat_scalar_seq(seq):
+            # True when no element is itself a container — i.e. a 1-D sequence of
+            # scalars that reads best as a single-column table. Bounded scan so a
+            # huge collection stays cheap to classify.
+            import itertools as _it
+            for v in _it.islice(seq, 2000):
+                if isinstance(v, (list, tuple, dict, set, frozenset)):
+                    return False
+            return True
+
         if "pandas" in module and type_name == "DataFrame":
             total_rows, total_cols = int(obj.shape[0]), int(obj.shape[1])
             result["total_rows"] = total_rows
@@ -307,7 +317,27 @@ async def variable_detail(request: Request):
             except Exception:
                 result["text"] = repr(obj)[:5000]
 
-        elif isinstance(obj, (dict, list, tuple)):
+        elif isinstance(obj, (set, frozenset, list, tuple)) and _is_flat_scalar_seq(obj):
+            # Flat sequence of scalars → single-column sortable table (much nicer
+            # than a wrapped brace/bracket repr). Sets are unordered, so sort them
+            # for readable, stable display.
+            import pandas as pd
+            is_set = isinstance(obj, (set, frozenset))
+            items = list(obj)
+            total = len(items)
+            if is_set:
+                try:
+                    items = sorted(items)
+                except TypeError:
+                    items = sorted(items, key=lambda v: str(v))  # mixed types
+                result["note"] = "Set is unordered — shown sorted."
+            result["total_rows"] = total
+            result["total_cols"] = 1
+            result["table_html"] = pd.DataFrame({"value": items[:max_rows]}).to_html(
+                classes="df-table", index=False, max_rows=max_rows)
+            result["truncated"] = total > max_rows
+
+        elif isinstance(obj, (dict, list, tuple, set, frozenset)):
             # Nested containers → a bounded, JSON-safe structure for a collapsible
             # tree view on the frontend. Depth/element/string caps keep it cheap.
             def _to_json_safe(value, depth=0):

@@ -50,6 +50,9 @@ export default function VariableDetailModal({ name, endpoint, sessionId, onClose
             : (!loading && !error && data?.text
                 ? <pre className="var-viewer-text">{data.text}</pre>
                 : null)}
+        {data?.note && (
+          <div className="var-viewer-note">{data.note}</div>
+        )}
         {data?.truncated && (
           <div className="var-viewer-note">Showing the first rows of a larger dataset.</div>
         )}
